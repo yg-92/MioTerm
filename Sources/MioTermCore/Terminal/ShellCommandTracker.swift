@@ -3,48 +3,140 @@ import Foundation
 /// 终端里“这一条命令做了什么”的还原器。
 ///
 /// App 看不到 shell 的 execve，只能看到用户按下的字节，所以命令意图必须从输入流复原；
-/// 目录的最终事实仍以 OSC 7 报上来的为准，这里的 cd 预测只在没配 OSC 7 钩子的 shell 里兜底。
+/// 目录的最终事实以终端自己报出来的为准（OSC 7 或提示符），这里的 cd 预测只是第三顺位的兜底。
+/// 一次回车。命令行未必还原得出来（Tab 补全会把文本换成 shell 写回的结果），
+/// 但「执行了一条命令」这件事依然成立——目录跟随就挂在这一下上，不能因为文本丢了就整个不触发。
+public struct ShellSubmission: Equatable {
+    public var command: String?
+    /// 命令行文本已不可信（Tab 补全、粘贴、输入法）：命令做了什么只能靠猜。
+    public var isTextUnreliable = false
+    /// 空行上的 Ctrl+D：当前这层 shell（可能正是容器里的那层）已结束。
+    public var endedShell = false
+    /// 文本不可信时仍然把用户按下的那一截留在手里：
+    /// Tab 补全只是把后半个词交给 shell 写回屏幕，前缀还能用来从回显里认出整条命令。
+    public var partialLine: String?
+
+    public init(command: String? = nil, isTextUnreliable: Bool = false,
+                endedShell: Bool = false, partialLine: String? = nil) {
+        self.command = command
+        self.isTextUnreliable = isTextUnreliable
+        self.endedShell = endedShell
+        self.partialLine = partialLine
+    }
+}
+
 public struct ShellCommandTracker {
+    public init() {}
+
     private var line: [UInt8] = []
-    /// 转义序列的剩余字节数：ESC 之后还要吃掉 `[` 与最终字节。
-    private var pendingEscape = 0
+    /// 转义序列不是命令文本，必须整段跳过。只按“ESC 后固定两个字节”吃是不够的：
+    /// shell 开了 2004 括号粘贴时，SwiftTerm 会在粘贴内容两侧发 `ESC[200~` / `ESC[201~`，
+    /// 少吃的结果是把 `00~`、`1~` 记进命令里。
+    private enum State {
+        case normal
+        /// 刚收到 ESC，下一个字节决定序列类型。
+        case afterEscape
+        /// `ESC [` 之后，参数与中间字节一直吃到最终字节。
+        case csi
+        /// SS3 之类：`ESC O` 后面只跟一个字节。
+        case skipOne
+        /// `ESC ]` 之后，直到 BEL 或 `ESC \`。
+        case osc
+        /// OSC 里又见到 ESC，等 `\` 收尾。
+        case oscEscape
+    }
+    private var state = State.normal
     /// 出现过 Tab 补全：补全后的文本由 shell 写回，本端记的行已经和真实命令行脱节。
     private var isUnreliable = false
 
-    /// 喂入一段将要发给远端的按键，返回被回车提交的整行命令；无法还原时返回 nil。
-    public mutating func consume(_ bytes: ArraySlice<UInt8>) -> String? {
-        var submitted: String?
+    /// 喂入一段将要发给远端的按键，返回被回车提交的那条命令；没有回车时返回 nil，
+    /// 有回车但文本还原不出来时 `command` 是 nil。
+    public mutating func consume(_ bytes: ArraySlice<UInt8>) -> ShellSubmission? {
+        var submitted: ShellSubmission?
         for byte in bytes {
-            if let text = step(byte) { submitted = text }
+            if let submission = step(byte) { submitted = submission }
         }
         return submitted
     }
 
-    public mutating func consume(_ bytes: [UInt8]) -> String? {
+    public mutating func consume(_ bytes: [UInt8]) -> ShellSubmission? {
         consume(bytes[...])
     }
 
+    /// 宿主看到一个改写命令行却还原不出内容的动作（粘贴、历史、输入法）时调用：
+    /// 下一次回车仍然算一次执行，只是命令文本不再采信。
+    public mutating func markLineUnreliable() {
+        isUnreliable = true
+    }
+
     @discardableResult
-    private mutating func step(_ byte: UInt8) -> String? {
-        if pendingEscape > 0 {
-            pendingEscape -= 1
+    private mutating func step(_ byte: UInt8) -> ShellSubmission? {
+        switch state {
+        case .afterEscape:
+            switch byte {
+            case 0x5B: state = .csi          // [
+            case 0x5D: state = .osc          // ]
+            default: state = .skipOne
+            }
             return nil
+        case .skipOne:
+            state = .normal
+            return nil
+        case .csi:
+            // 参数 0x30..0x3F、中间 0x20..0x2F 继续等，最终字节 0x40..0x7E 结束整段。
+            if (0x40...0x7E).contains(byte) {
+                state = .normal
+                return nil
+            }
+            guard byte >= 0x20 else {
+                // 控制字节混进序列里说明它已经断了，别把随后正常的键入也吃掉。
+                state = .normal
+                return step(byte)
+            }
+            return nil
+        case .osc:
+            if byte == 0x07 { state = .normal }
+            else if byte == 0x1B { state = .oscEscape }
+            return nil
+        case .oscEscape:
+            state = .normal
+            return byte == 0x5C ? nil : step(byte)
+        case .normal:
+            return stepNormal(byte)
         }
+    }
+
+    private mutating func stepNormal(_ byte: UInt8) -> ShellSubmission? {
         switch byte {
         case 0x0D, 0x0A:
             defer { line.removeAll(keepingCapacity: true); isUnreliable = false }
-            guard !isUnreliable else { return nil }
-            let text = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
+            let typed = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !isUnreliable else {
+                return ShellSubmission(isTextUnreliable: true,
+                                       partialLine: typed.isEmpty ? nil : typed)
+            }
+            return ShellSubmission(command: typed.isEmpty ? nil : typed)
         case 0x7F, 0x08:
             if !line.isEmpty { line.removeLast() }
             return nil
-        case 0x03, 0x0C, 0x15:
-            // Ctrl+C 打断、Ctrl+L 重绘、Ctrl+U 清行：都别留下半条命令。
+        case 0x04:
+            // Ctrl+D：空行上是 EOF，当前这层 shell 结束；行内有内容时是删字符，还原不出来。
+            guard line.isEmpty, !isUnreliable else {
+                isUnreliable = true
+                return nil
+            }
+            return ShellSubmission(endedShell: true)
+        case 0x03, 0x15:
+            // Ctrl+C 打断、Ctrl+U 清行：整行作废，"文本不可信"的标记也跟着失效。
+            line.removeAll(keepingCapacity: true)
+            isUnreliable = false
+            return nil
+        case 0x0C:
+            // Ctrl+L 只是重绘，屏幕上的行没变；别把它当成新的一行。
             line.removeAll(keepingCapacity: true)
             return nil
         case 0x1B:
-            pendingEscape = 2
+            state = .afterEscape
             return nil
         case 0x09:
             isUnreliable = true
@@ -72,13 +164,15 @@ public struct ShellCommandEffect: Equatable {
 }
 
 public enum ShellCommandClassifier {
-    /// 会改动目录内容的命令。编辑器不算：面板要的是增删改名，不是 mtime 变了。
+    /// 会改动目录内容的命令。编辑器也算：`vim new.txt` 会在退出时留下新文件。
+    /// 重读发生在编辑器退出、屏幕安静之后，不会打断正在编辑的画面。
     private static let fileMutating: Set<String> = [
         "rm", "mv", "cp", "rsync", "scp", "mkdir", "rmdir", "touch", "ln", "install",
         "chmod", "chown", "chgrp", "dd", "truncate", "tar", "zip", "unzip", "gzip",
         "gunzip", "bzip2", "xz", "git", "svn", "hg", "make", "cmake", "docker", "podman",
         "apt", "apt-get", "yum", "dnf", "apk", "brew", "pip", "pip3", "npm", "pnpm",
-        "yarn", "cargo", "gem", "tee", "ssh-keygen"
+        "yarn", "cargo", "gem", "tee", "ssh-keygen", "sed",
+        "vim", "vi", "nvim", "nano", "pico", "emacs", "micro", "code"
     ]
 
     /// 出现这些字符，命令行就不再是一条能静态推断的简单命令。
@@ -121,14 +215,27 @@ public enum ShellCommandClassifier {
 
 /// 终端当前对文件面板有意义的一组事实。
 public struct TerminalContext: Equatable {
-    /// OSC 7 报上来的当前目录（没配钩子的 shell 用 cd 预测兜底）。
+    /// OSC 7 报上来的当前目录（没配钩子的 shell 用 cd 预测或提示符兜底）。
     public var directory: String?
+    /// 提示符只显示主目录（`~`、`~/logs`）时的相对段：`""` 就是家目录本身。
+    /// 本端不知道远端家目录在哪，所以这截要交给文件通道去解析。
+    public var promptHomeHint: String?
     /// 每次“改动文件系统的命令执行完”加一；面板据此重读，而不必比较内容。
     public var filesystemRevision: Int
+    /// 终端是否还停在本机 shell 里。会话里再 ssh 到别处、或进入 Docker 等容器后，
+    /// 内层 shell 报的目录属于另一套文件系统，跟着走只会把树指向当前主机上不存在的路径。
+    public var followAllowed: Bool
+    /// 当前所处环境：普通 shell、Docker、其他容器或远程 shell。界面顶部据此显示模式。
+    public var mode: TerminalMode
 
-    public init(directory: String? = nil, filesystemRevision: Int = 0) {
+    public init(directory: String? = nil, promptHomeHint: String? = nil,
+                filesystemRevision: Int = 0, followAllowed: Bool = true,
+                mode: TerminalMode = .shell) {
         self.directory = directory
+        self.promptHomeHint = promptHomeHint
         self.filesystemRevision = filesystemRevision
+        self.followAllowed = followAllowed
+        self.mode = mode
     }
 }
 
@@ -144,5 +251,16 @@ public enum OSC7 {
         guard !raw.isEmpty else { return nil }
         // 带空格的路径常被编码成 %20，服务端要的是解码后的字面路径。
         return raw.removingPercentEncoding ?? raw
+    }
+
+    /// 载荷里的主机段，用来分辨这条 OSC 7 是本机 shell 报的还是嵌套 ssh 里另一台机器报的。
+    /// `file:///路径`（主机段为空）与裸路径都返回 nil，等于“没报主机”，不做区分。
+    public static func host(from payload: String?) -> String? {
+        guard let payload, payload.hasPrefix("file:") else { return nil }
+        guard let slashes = payload.range(of: "//") else { return nil }
+        guard let pathStart = payload.range(of: "/", range: slashes.upperBound..<payload.endIndex) else { return nil }
+        let raw = String(payload[slashes.upperBound..<pathStart.lowerBound])
+        guard let decoded = raw.removingPercentEncoding else { return raw.isEmpty ? nil : raw }
+        return decoded.isEmpty ? nil : decoded
     }
 }

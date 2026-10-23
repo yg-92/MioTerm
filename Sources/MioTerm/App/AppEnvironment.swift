@@ -12,6 +12,8 @@ final class AppEnvironment {
     let vault: KeychainVault
     let hostKeyGuard: HostKeyGuard
     let logger: FileLogger
+    /// 命令统计、收藏与忽略清单。终端每提交一条命令就写一次库，界面靠它的 onChange 刷新。
+    let commands: CommandLibraryStore
 
     /// 会话集中登记，退出应用时才能统一销毁 askpass 临时文件并回收子进程。
     private(set) var sessions: [UUID: TerminalController] = [:]
@@ -29,7 +31,9 @@ final class AppEnvironment {
         settings = SettingsStore()
         vault = KeychainVault()
         hostKeyGuard = HostKeyGuard()
+        commands = CommandLibraryStore()
         hosts.load()
+        commands.load()
         applyAppearance()
         settings.onChange = { [weak self] next in
             guard let self else { return }
@@ -37,11 +41,19 @@ final class AppEnvironment {
             for controller in self.sessions.values {
                 controller.apply(next)
             }
+            // 文件树的字号/图标只影响侧栏自己，不经过终端控制器；
+            // 用通知让已经打开的树就地重排，不必等切标签或重连。
+            NotificationCenter.default.post(name: .mioTermSettingsDidChange, object: next)
         }
     }
 
     func register(_ controller: TerminalController) {
         sessions[controller.sessionID] = controller
+        // 命令库挂在会话上：只有回车提交的那一行才入库，逐字节不进这里。
+        controller.onCommand = { [weak self, weak controller] line in
+            guard let self, let controller else { return }
+            self.commands.record(scope: controller.commandScope, command: line)
+        }
     }
 
     func unregister(_ controller: TerminalController) {
@@ -62,12 +74,16 @@ final class AppEnvironment {
         sftpSessions.removeValue(forKey: controller.sessionID)?.shutdown()
     }
 
-    /// 与 webterm 的外观设置等价：只切换界面主题，终端配色由远端程序自己决定。
+    /// 界面外观跟随设置；终端配色由远端程序决定，只有底色与 ANSI 调色板属于本机，
+    /// 所以要跟着深浅模式一起换掉。
     func applyAppearance() {
         switch settings.settings.appearance {
         case .system: NSApp.appearance = nil
         case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
         case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        }
+        for controller in sessions.values {
+            controller.applyTheme()
         }
     }
 
@@ -98,4 +114,8 @@ final class AppEnvironment {
         for session in sftpSessions.values { session.shutdown() }
         sftpSessions.removeAll()
     }
+}
+
+extension Notification.Name {
+    static let mioTermSettingsDidChange = Notification.Name("MioTermSettingsDidChange")
 }

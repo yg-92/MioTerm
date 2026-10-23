@@ -47,7 +47,14 @@ final class SFTPBrowserViewController: NSViewController {
     private var boundController: TerminalController?
     /// 只对当前标签的终端订阅上下文变化，切标签后旧标签的输出不能再惊动这棵树。
     private weak var contextController: TerminalController?
+    private var contextToken: UUID?
     private var lastContext = TerminalContext()
+    /// 这个标签是否已经按终端目录对齐过一次；没有的话第一次拿到目标就得动，
+    /// 不能因为「和上次记的上下文一样」而谁都不动。
+    private var hasAlignedWithTerminal = false
+    /// 提示符只写 `~` 时用来换成绝对路径的远端主目录，向 SFTP 服务端问一次。
+    private var remoteHome: String?
+    private var isResolvingHome = false
 
     private let outlineView = FileOutlineView()
     /// 树的第一层 = 这个目录的直接子项；不再套一层主机名节点。
@@ -57,6 +64,8 @@ final class SFTPBrowserViewController: NSViewController {
     /// 当前目录的位置导航：操作按钮下面一条可点的面包屑。
     private let pathScroll = NSScrollView()
     private let pathBar = NSStackView()
+    /// 面包屑每段代表的路径，按钮用 tag 索引它（NSButton 没有 representedObject）。
+    private var breadcrumbPaths: [String] = []
 
     private let refreshButton = NSButton()
     private let goToButton = NSButton()
@@ -64,6 +73,8 @@ final class SFTPBrowserViewController: NSViewController {
     private let uploadButton = NSButton()
     private let downloadButton = NSButton()
     private let hiddenToggle = NSButton()
+    /// 每个标签单独的跟随开关：全局设置管默认，临时不想被终端拽走时在这里关掉。
+    private let followToggle = NSButton(checkboxWithTitle: "跟随", target: nil, action: nil)
     private let retryButton = NSButton()
     private let statusLabel = NSTextField(labelWithString: "未选择 SSH 会话")
     private let transferTable = NSTableView()
@@ -73,14 +84,37 @@ final class SFTPBrowserViewController: NSViewController {
     private var transferOrder: [UUID] = []
     private var showHidden = false
     private var isBusy = false
+    /// 状态行当前显示的是不是“终端环境导致的暂停”，退出容器后要收回去。
+    private var isPausedByTerminal = false
+    /// 下一次要读的目录。读取中来了新请求就顶掉旧的，读完立刻换过去，
+    /// 这样跟随和手动浏览都不会因为“正忙”被整条丢掉。
+    private var listingTarget: String?
+    /// 上一次生效的“跟随终端目录”开关，用来认出用户刚在设置里把它打开。
+    private var lastFollowSetting = false
+    /// 按标签覆盖全局设置的选择；会话 ID 每次连接都是新的，所以只活在本次运行里，不必落盘。
+    private var followOverrides: [UUID: Bool] = [:]
     /// 上传落点记下来，传输结束后只重读这一层，不用整棵树回到根目录。
     private var lastUploadDirectory: String?
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     override func loadView() {
         configureChrome()
+        configurePathBar()
         configureTables()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(settingsDidChange),
+            name: .mioTermSettingsDidChange,
+            object: nil
+        )
+        applyTreeMetrics()
 
-        let actions = NSStackView(views: [refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle])
+        // 跟随开关放在顶部操作行：底部状态行在矮窗口里会被裁掉，
+        // 而“现在到底跟不跟随”是用户最需要一眼确认的信息。
+        let actions = NSStackView(views: [refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle, followToggle])
         actions.orientation = .horizontal
         actions.spacing = 4
         actions.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 2, right: 8)
@@ -108,7 +142,7 @@ final class SFTPBrowserViewController: NSViewController {
         transferScroll.drawsBackground = false
         transferScroll.isHidden = true
 
-        let body = NSStackView(views: [actions, treeScroll, statusRow, transferScroll])
+        let body = NSStackView(views: [actions, pathScroll, treeScroll, statusRow, transferScroll])
         body.orientation = .vertical
         body.alignment = .leading
         body.distribution = .fill
@@ -124,6 +158,8 @@ final class SFTPBrowserViewController: NSViewController {
             body.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             // 竖排栈按 leading 对齐时行宽只由内容决定，需要撑满的行要显式钉住。
             actions.widthAnchor.constraint(equalTo: body.widthAnchor),
+            pathScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
+            pathScroll.heightAnchor.constraint(equalToConstant: 22),
             statusRow.widthAnchor.constraint(equalTo: body.widthAnchor),
             treeScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
             transferScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
@@ -158,6 +194,13 @@ final class SFTPBrowserViewController: NSViewController {
         hiddenToggle.target = self
         hiddenToggle.action = #selector(toggleHidden)
 
+        followToggle.font = .systemFont(ofSize: 11)
+        followToggle.controlSize = .small
+        followToggle.setContentHuggingPriority(.required, for: .horizontal)
+        followToggle.target = self
+        followToggle.action = #selector(toggleFollow)
+        followToggle.toolTip = "目录树跟着终端的 cd 走；关掉后终端再换目录也不影响这里"
+
         retryButton.title = "重试"
         retryButton.bezelStyle = .recessed
         retryButton.controlSize = .mini
@@ -177,13 +220,108 @@ final class SFTPBrowserViewController: NSViewController {
         }
     }
 
+    /// 面包屑横放在侧栏里必然超宽，交给横向滚动，重建后滚到最右端露出当前目录。
+    private func configurePathBar() {
+        pathBar.orientation = .horizontal
+        pathBar.alignment = .centerY
+        pathBar.distribution = .fill
+        pathBar.spacing = 1
+        pathBar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        pathBar.translatesAutoresizingMaskIntoConstraints = false
+
+        pathScroll.documentView = pathBar
+        pathScroll.hasHorizontalScroller = true
+        pathScroll.hasVerticalScroller = false
+        pathScroll.autohidesScrollers = true
+        pathScroll.borderType = .noBorder
+        pathScroll.drawsBackground = false
+        pathScroll.scrollerStyle = .overlay
+        pathScroll.isHidden = true
+
+        NSLayoutConstraint.activate([
+            // 文档视图钉在可视区的左、上、下，宽度由栈的固有尺寸决定并钉死：
+            // 路径再长也只是滚出去，不会把每段按钮压成省略号。
+            pathBar.leadingAnchor.constraint(equalTo: pathScroll.contentView.leadingAnchor),
+            pathBar.topAnchor.constraint(equalTo: pathScroll.contentView.topAnchor),
+            pathBar.bottomAnchor.constraint(equalTo: pathScroll.contentView.bottomAnchor),
+        ])
+        pathBar.setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    /// `/usr/local/bin` → [`/`][`usr`][`local`][`bin`]，点前缀就回到那一层。
+    private func renderBreadcrumbs(_ directory: String?) {
+        for view in pathBar.arrangedSubviews {
+            pathBar.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        guard let directory else {
+            pathScroll.isHidden = true
+            return
+        }
+        pathScroll.isHidden = false
+        let ancestors = SFTPPath.ancestors(directory)
+        breadcrumbPaths = ancestors
+        for (index, path) in ancestors.enumerated() {
+            if index > 0 {
+                pathBar.addArrangedSubview(separator())
+            }
+            let button = NSButton(title: SFTPPath.lastComponent(path), target: self, action: #selector(selectBreadcrumb(_:)))
+            button.bezelStyle = .recessed
+            button.controlSize = .mini
+            button.font = .systemFont(ofSize: 11, weight: .medium)
+            // 能点的层级用强调色，当前目录用次要色：一眼看出导航条不是静态文字。
+            button.attributedTitle = NSAttributedString(
+                string: SFTPPath.lastComponent(path),
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                    .foregroundColor: path == directory ? Theme.textSecondary : Theme.accent,
+                ]
+            )
+            button.lineBreakMode = .byTruncatingMiddle
+            button.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            button.toolTip = path
+            // 每一级都能点，包括正在看的这一级：读取失败后点它就是一个就地重试。
+            button.tag = index
+            pathBar.addArrangedSubview(button)
+        }
+        DispatchQueue.main.async {
+            self.pathBar.layoutSubtreeIfNeeded()
+            let overflow = max(0, self.pathBar.bounds.width - self.pathScroll.contentView.bounds.width)
+            self.pathScroll.contentView.scroll(to: NSPoint(x: overflow, y: 0))
+            self.pathScroll.reflectScrolledClipView(self.pathScroll.contentView)
+        }
+    }
+
+    private func separator() -> NSTextField {
+        // 分隔符不用 “/”：根目录那一段本身就叫 “/”，两种斜杠混在一排读不出层次。
+        let mark = NSTextField(labelWithString: "›")
+        mark.font = .systemFont(ofSize: 11)
+        mark.textColor = .tertiaryLabelColor
+        return mark
+    }
+
+    @objc private func selectBreadcrumb(_ sender: NSButton) {
+        guard breadcrumbPaths.indices.contains(sender.tag) else { return }
+        let path = breadcrumbPaths[sender.tag]
+        Task {
+            guard let session else { return }
+            do {
+                let client = try await session.ensureClient()
+                requestListing(try await client.realpath(path))
+            } catch {
+                AlertPresenter.fail(title: "打开目录失败", message: error.localizedDescription, in: view.window)
+            }
+        }
+    }
+
     private func configureTables() {
         outlineView.headerView = nil
         outlineView.style = .sourceList
         outlineView.indentationPerLevel = 10
         outlineView.usesAlternatingRowBackgroundColors = false
         outlineView.allowsMultipleSelection = true
-        outlineView.rowSizeStyle = .small
+        // 行高由字号/图标尺寸算出来，必须用 custom，否则 small 会把内容压回系统行高。
+        outlineView.rowSizeStyle = .custom
         outlineView.autoresizesOutlineColumn = false
         outlineView.dataSource = self
         outlineView.delegate = self
@@ -222,6 +360,8 @@ final class SFTPBrowserViewController: NSViewController {
         menu.delegate = self
         menu.addItem(menuItem("展开/折叠", #selector(toggleExpansion)))
         menu.addItem(menuItem("下载", #selector(downloadSelected)))
+        menu.addItem(menuItem("复制路径", #selector(copyPaths)))
+        menu.addItem(menuItem("路径填入终端", #selector(insertPathsIntoTerminal)))
         menu.addItem(.separator())
         menu.addItem(menuItem("新建文件夹…", #selector(createDirectory)))
         menu.addItem(menuItem("重命名…", #selector(renameSelected)))
@@ -247,11 +387,29 @@ final class SFTPBrowserViewController: NSViewController {
         return item
     }
 
+    /// 字号与图标尺寸都是用户可调的，单元格每次重建都按当前设置取，
+    /// 改设置后只需要重载数据，不用重建整棵树。
+    private var treeFontSize: CGFloat { CGFloat(environment.settings.settings.fileTreeFontSize) }
+    private var treeIconSize: CGFloat { CGFloat(environment.settings.settings.fileTreeIconSize) }
+
+    private func applyTreeMetrics() {
+        outlineView.rowHeight = max(treeFontSize, treeIconSize) + 6
+        outlineView.reloadData()
+    }
+
+    @objc private func settingsDidChange() {
+        guard isViewLoaded else { return }
+        applyTreeMetrics()
+    }
+
     // MARK: - 绑定会话
 
     /// 跟随当前标签；传 nil 解绑并清空树。
     func bind(to controller: TerminalController?) {
+        // 先落 boundController：setContextSource 里要按这个标签读跟随开关，
+        // 晚一步就会拿上一个标签的覆盖值来初始化。
         boundController = controller
+        setContextSource(controller)
         guard controller != nil else {
             detach()
             roots = []
@@ -261,13 +419,190 @@ final class SFTPBrowserViewController: NSViewController {
             return
         }
         // 视图没进窗口就建通道等于白起一个 ssh 子进程，等 viewDidAppear 再连。
-        guard isViewLoaded, view.window != nil else { return }
+        guard isViewLoaded, view.window != nil else {
+            FileLogger.shared.info("文件面板未上屏，暂不建通道（跟随要等面板显示后补齐）")
+            return
+        }
         applyBinding()
+    }
+
+    /// 终端里的 cd 与增删改要立刻反映到树上，所以每个标签只订阅自己那个控制器。
+    /// 上下文回调是多播的：工作区也在同一条会话上挂了一个订阅用来更新标题。
+    private func setContextSource(_ controller: TerminalController?) {
+        guard controller !== contextController else { return }
+        contextController?.removeContextObserver(contextToken)
+        contextToken = nil
+        contextController = controller
+        remoteHome = nil
+        isResolvingHome = false
+        hasAlignedWithTerminal = false
+        lastContext = controller?.context ?? TerminalContext()
+        lastFollowSetting = followsTerminalDirectory
+        listingTarget = nil
+        refreshFollowToggle()
+        contextToken = controller?.addContextObserver { [weak self] context in
+            // 切走标签后旧标签还在输出，靠身份比对挡掉。
+            guard let self, self.contextController === controller else { return }
+            self.applyTerminalContext(context)
+        }
+        FileLogger.shared.info(controller == nil ? "文件面板：解绑会话上下文" : "文件面板：接上会话上下文")
+    }
+
+    /// 跟随开关：这个标签上临时改过就用标签的，否则跟全局设置。
+    private var followsTerminalDirectory: Bool {
+        guard let id = boundController?.sessionID, let override = followOverrides[id] else {
+            return environment.settings.settings.followTerminalDirectory
+        }
+        return override
+    }
+
+    /// 复选框显示的是当前标签实际生效的值；全局设置改了也要在这儿跟上。
+    private func refreshFollowToggle() {
+        followToggle.state = followsTerminalDirectory ? .on : .off
+    }
+
+    @objc private func toggleFollow() {
+        let enabled = followToggle.state == .on
+        if let id = boundController?.sessionID {
+            followOverrides[id] = enabled
+        }
+        lastFollowSetting = enabled
+        guard enabled, let context = contextController?.context, context.followAllowed,
+              let directory = terminalTarget(context) else { return }
+        // 刚打开就跟着终端此刻的目录走，不必等用户再敲一条 cd。
+        followTerminal(directory)
+    }
+
+    /// 决策结果写成一句人话，日志里看得懂树为什么没动。
+    private func describe(_ action: PanelFollowAction) -> String {
+        switch action {
+        case .jump(let directory): return "跳到 \(directory)"
+        case .reload: return "重读当前这一层"
+        case .resolveHome: return "先问远端主目录的绝对路径"
+        case .pause(let reason): return reason
+        case .explainMissingDirectory: return "拿不到目录，不动"
+        case .channelNotReady: return "文件通道还没就绪，这次不算跟上"
+        case .idle: return "没有变化，不动"
+        }
+    }
+
+    /// 终端上下文变了要不要动树，判断只看「这次和上次比有什么不同」：
+    /// 电平触发会让用户手动浏览到的别处，被终端随后的一条 `ls` 抢回当前目录。
+    /// 规则本身在 DirectoryFollowPlanner，这里只把动作做出来。
+    private func applyTerminalContext(_ context: TerminalContext) {
+        let follow = followsTerminalDirectory
+        let action = DirectoryFollowPlanner.decide(
+            PanelFollowFacts(
+                terminal: context,
+                followEnabled: follow,
+                justEnabled: follow && !lastFollowSetting,
+                channelReady: session != nil,
+                remoteHome: remoteHome,
+                targetBefore: terminalTarget(lastContext),
+                filesystemRevisionBefore: lastContext.filesystemRevision,
+                hasAligned: hasAlignedWithTerminal,
+                isBusy: isBusy
+            )
+        )
+        // 跟随不出结果时，用户能看到的只有「树不动」；把每次判断的原因留在日志里。
+        let subject = context.directory ?? context.promptHomeHint.map { "~" + ($0.isEmpty ? "" : "/\($0)") } ?? "未上报"
+        FileLogger.shared.info("文件面板：终端在 \(subject)，\(describe(action))")
+        // 这两种情况都别把上下文记成「已经跟上」：连接期间终端报上来的目录，
+        // 要等通道就绪、主目录问到之后再来一遍，否则跟随永远差那一步。
+        if case .channelNotReady = action { return }
+        if case .resolveHome = action {
+            resolveHomeThenReplay()
+            return
+        }
+        defer {
+            lastContext = context
+            lastFollowSetting = follow
+        }
+        switch action {
+        case .jump(let directory):
+            isPausedByTerminal = false
+            followTerminal(directory)
+        case .reload:
+            isPausedByTerminal = false
+            // 目录没变但终端动了文件：重读当前这一层，展开的子层会跟着重新点开。
+            requestReload()
+        case .pause(let reason):
+            isPausedByTerminal = true
+            statusLabel.stringValue = reason
+        case .explainMissingDirectory:
+            isPausedByTerminal = true
+            // 远端 shell 既不报 OSC 7、提示符里也没有路径时，跟随确实无从下手，
+            // 与其默默不动，不如把原因说出来。
+            statusLabel.stringValue = "终端未上报目录，暂时无法跟随"
+        case .idle:
+            // 从容器里 exit 回来时目录往往没变，但状态行还挂着“暂停跟随”，
+            // 必须换回普通状态，否则看起来像树卡住了。
+            if isPausedByTerminal, context.followAllowed {
+                isPausedByTerminal = false
+                statusLabel.stringValue = session?.state == .ready ? "已连接" : "未连接"
+            }
+        case .channelNotReady, .resolveHome:
+            break
+        }
+    }
+
+    /// 把树挪到终端此刻的目录。
+    ///
+    /// 第一次对齐不要求“目录变过”，否则用户刚切到文件面板时永远差那一步。
+    private func followTerminal(_ directory: String) {
+        hasAlignedWithTerminal = true
+        guard directory != currentDirectory else { return }
+        FileLogger.shared.info("跟随终端目录：\(currentDirectory ?? "—") → \(directory)")
+        requestListing(directory)
+    }
+
+    /// 终端说的“在哪”，翻译成文件通道能读的绝对路径；信息不够时是 nil。
+    private func terminalTarget(_ context: TerminalContext) -> String? {
+        DirectoryFollowPlanner.target(context, remoteHome: remoteHome)
+    }
+
+    private func resolveHomeThenReplay() {
+        guard !isResolvingHome else { return }
+        isResolvingHome = true
+        Task {
+            _ = await self.ensureRemoteHome()
+            self.isResolvingHome = false
+            guard let context = self.contextController?.context else { return }
+            self.applyTerminalContext(context)
+        }
+    }
+
+    /// SFTP 服务端的登录目录就是远端用户的主目录，问一次存下来。
+    ///
+    /// 老一些的 sftp-server 不接受相对路径的 realpath，所以 `.` 失败还要试 `~`；
+    /// 两个都问不出来时提示符里的 `~` 就翻译不成绝对路径，必须在日志里留下原因。
+    private func ensureRemoteHome() async -> String? {
+        if let remoteHome { return remoteHome }
+        guard let session else { return nil }
+        do {
+            let client = try await session.ensureClient()
+            for probe in [".", "~"] {
+                if let home = try? await client.realpath(probe), home.hasPrefix("/") {
+                    remoteHome = home
+                    FileLogger.shared.info("远端主目录：\(home)（realpath \(probe)）")
+                    return home
+                }
+            }
+            FileLogger.shared.warning("问不出远端主目录：realpath(. 和 ~) 都没有应答")
+        } catch {
+            FileLogger.shared.warning("问不出远端主目录：\(error.localizedDescription)")
+        }
+        return nil
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
         applyBinding()
+        refreshFollowToggle()
+        // 在设置里刚打开“跟随终端目录”时，终端未必再产生新事件，回来这一刻补一次对齐。
+        if let context = contextController?.context {
+            applyTerminalContext(context)
+        }
     }
 
     private func applyBinding() {
@@ -283,7 +618,7 @@ final class SFTPBrowserViewController: NSViewController {
         }
         guard next !== session else {
             if currentDirectory == nil, next.state == .ready {
-                Task { await self.reloadCurrentDirectory() }
+                requestReload()
             }
             updateControls()
             return
@@ -292,12 +627,13 @@ final class SFTPBrowserViewController: NSViewController {
         session = next
         lastUploadDirectory = nil
         currentDirectory = nil
+        listingTarget = nil
         next.onStateChange = { [weak self] state in self?.render(state: state) }
         next.onTransferUpdate = { [weak self] progress in self?.update(progress) }
         clearTransfers()
         render(state: next.state)
         switch next.state {
-        case .ready: Task { await self.reloadCurrentDirectory() }
+        case .ready: requestReload()
         case .connecting: break
         default: Task { await self.connectAndBrowse() }
         }
@@ -313,11 +649,13 @@ final class SFTPBrowserViewController: NSViewController {
         session?.onStateChange = nil
         session?.onTransferUpdate = nil
         session = nil
+        remoteHome = nil
     }
 
     private func resetContent(_ status: String) {
         outlineView.reloadData()
         clearTransfers()
+        renderBreadcrumbs(nil)
         statusLabel.stringValue = status
         retryButton.isHidden = true
         updateControls()
@@ -327,7 +665,15 @@ final class SFTPBrowserViewController: NSViewController {
         switch state {
         case .closed: statusLabel.stringValue = "未连接"
         case .connecting: statusLabel.stringValue = "正在打开文件通道…"
-        case .ready: statusLabel.stringValue = currentDirectory ?? "已连接"
+        case .ready:
+            statusLabel.stringValue = "已连接"
+            // 通道没建好之前攒下的请求（跟随、面包屑）这时补做；
+            // 队列空但树还没内容，说明连接期间没排上队，这里补一次。
+            if currentDirectory == nil, listingTarget == nil {
+                requestReload()
+            } else {
+                drainListing()
+            }
         case .failed(let reason): statusLabel.stringValue = "连接失败：\(reason)"
         }
         retryButton.isHidden = !state.isFailed
@@ -348,12 +694,12 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     @objc private func reloadTree() {
-        Task { await reloadCurrentDirectory() }
+        requestReload()
     }
 
     @objc private func toggleHidden() {
         showHidden = hiddenToggle.state == .on
-        Task { await reloadCurrentDirectory() }
+        requestReload()
     }
 
     /// 树只会向下展开，没有这个入口就出不了登录目录。
@@ -363,7 +709,7 @@ final class SFTPBrowserViewController: NSViewController {
         Task {
             do {
                 let client = try await session.ensureClient()
-                await open(directory: try await client.realpath(raw))
+                requestListing(try await client.realpath(raw))
             } catch {
                 AlertPresenter.fail(title: "打开目录失败", message: error.localizedDescription, in: view.window)
             }
@@ -374,54 +720,78 @@ final class SFTPBrowserViewController: NSViewController {
         do {
             guard let session else { return }
             let client = try await session.ensureClient()
-            await open(directory: try await client.realpath(startPath(for: session.host)))
+            requestListing(try await client.realpath(startPath(for: session.host)))
         } catch {
             AlertPresenter.fail(title: "打开文件面板失败", message: error.localizedDescription, in: view.window)
         }
     }
 
-    /// 起始目录：开了“跟随终端目录”就用 OSC 7 报上来的当前目录，
+    /// 起始目录：开了“跟随终端目录”就用终端此刻的目录，
     /// 其次主机配置的起始目录，最后服务端登录目录。
     private func startPath(for host: HostProfile) -> String {
-        if environment.settings.settings.followTerminalDirectory,
-           let cwd = Self.remoteDirectory(of: boundController?.workingDirectory) {
-            return SFTPPath.normalize(cwd)
+        if followsTerminalDirectory,
+           let context = boundController?.context,
+           let directory = terminalTarget(context) {
+            return SFTPPath.normalize(directory)
         }
         return SFTPPath.normalize(host.startupDirectory.isEmpty ? "." : host.startupDirectory)
     }
 
-    /// OSC 7 的载荷形如 file://主机/路径，SFTP 服务端只认路径部分。
-    private static func remoteDirectory(of osc7: String?) -> String? {
-        guard let osc7, !osc7.isEmpty else { return nil }
-        if osc7.hasPrefix("file://"), let path = URL(string: osc7)?.path, !path.isEmpty { return path }
-        return osc7.hasPrefix("/") ? osc7 : nil
+    /// 重读当前这一层；已经展开的子层跟着重新点开。
+    private func requestReload() {
+        guard let host = session?.host else { return }
+        requestListing(currentDirectory ?? startPath(for: host))
     }
 
-    /// 重读当前这一层；已经展开的子层跟着重新点开。
-    private func reloadCurrentDirectory() async {
-        guard session?.client != nil, let host = session?.host else { return }
-        await open(directory: currentDirectory ?? startPath(for: host))
+    /// 把树切到 `directory`：请求先入队，真正的读取由 drainListing 串行发起。
+    private func requestListing(_ directory: String) {
+        listingTarget = directory
+        drainListing()
+    }
+
+    /// 一次只读一层。置位必须在交给 Task 之前：Task 体要等下一个主循环才跑，
+    /// 到那时才检查忙闲，同一批里的两个请求会挤进同一个空档，后一个静默丢失。
+    private func drainListing() {
+        guard !isBusy, let directory = listingTarget else { return }
+        guard session?.client != nil else {
+            FileLogger.shared.info("文件面板：通道未就绪，\(directory) 排队等待")
+            return
+        }
+        listingTarget = nil
+        isBusy = true
+        updateControls()
+        Task { await self.read(directory) }
     }
 
     /// 把 `directory` 的直接子项铺成树的第一层，不再套主机名节点。
-    private func open(directory: String) async {
-        guard !isBusy, let client = session?.client else { return }
-        isBusy = true
-        updateControls()
+    private func read(_ directory: String) async {
+        guard let client = session?.client else {
+            isBusy = false
+            updateControls()
+            return
+        }
         defer {
             isBusy = false
             updateControls()
+            // 读取期间攒下的最新请求，读完立刻跟上。
+            drainListing()
         }
         let expanded = expandedPaths()
-        var failure = ""
+        var failure: String?
         do {
             roots = try await client.list(directory, showHidden: showHidden).map { Node($0) }
         } catch {
             roots = []
-            failure = "：\(error.localizedDescription)"
+            failure = "读取 \(directory) 失败：\(error.localizedDescription)"
         }
         currentDirectory = directory
-        statusLabel.stringValue = directory + failure
+        renderBreadcrumbs(directory)
+        statusLabel.stringValue = failure ?? "已连接"
+        if let failure {
+            FileLogger.shared.warning("文件面板：\(failure)")
+        } else {
+            FileLogger.shared.info("文件面板：读取 \(directory) 完成，\(roots.count) 项")
+        }
         outlineView.reloadData()
         restoreExpansion(expanded)
     }
@@ -504,7 +874,8 @@ final class SFTPBrowserViewController: NSViewController {
     @objc private func handleDoubleClick() {
         guard let node = targetNode else { return }
         if node.entry.isDirectory {
-            toggleExpansion()
+            // 双击是“走进去”，把这一层换成它的内容；展开留给左侧三角或右键。
+            requestListing(node.entry.path)
         } else {
             downloadSelected()
         }
@@ -517,6 +888,29 @@ final class SFTPBrowserViewController: NSViewController {
         } else {
             outlineView.expandItem(node)
         }
+    }
+
+    // MARK: - 路径搬运
+
+    /// 远端路径手敲容易错，也能直接给别的程序用，所以给的是原文而不是带引号的版本。
+    @objc private func copyPaths() {
+        let paths = selectedNodes.map { $0.entry.path }
+        guard !paths.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(paths.joined(separator: "\n"), forType: .string)
+    }
+
+    /// 对应 webterm 的“把树里的路径拖进终端”：填进当前会话但不回车，
+    /// 带空格的路径自动补引号，用户可以接着敲命令。
+    @objc private func insertPathsIntoTerminal() {
+        let paths = selectedNodes.map { $0.entry.path }
+        guard !paths.isEmpty else { return }
+        guard let controller = boundController, controller.state.isAlive else {
+            AlertPresenter.notify(title: "没有可用的终端", message: "当前会话已断开，先重新连接再填路径。", in: view.window)
+            return
+        }
+        controller.injectInput(paths.map(ShellQuoting.quoteIfNeeded).joined(separator: " "))
     }
 
     // MARK: - 目录操作
@@ -582,11 +976,11 @@ final class SFTPBrowserViewController: NSViewController {
     private func reread(_ path: String) async {
         guard session?.client != nil else { return }
         guard path != currentDirectory else {
-            await open(directory: path)
+            requestListing(path)
             return
         }
         guard let node = findNode(path: path) else {
-            await reloadCurrentDirectory()
+            requestReload()
             return
         }
         node.loaded = false
@@ -775,37 +1169,58 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
             symbol = outlineView.isItemExpanded(node) ? "folder" : "folder.fill"
         }
         let title = node.entry.name + (node.failed != nil ? " · 读取失败" : "")
-        return iconCell(text: title, symbol: symbol, tint: node.entry.isDirectory ? .controlAccentColor : .secondaryLabelColor)
+        return iconCell(
+            text: title,
+            fullName: node.entry.name,
+            symbol: symbol,
+            tint: node.entry.isDirectory ? .controlAccentColor : .secondaryLabelColor,
+            hidden: node.entry.isHidden
+        )
     }
 
     private func textCell(_ text: String, secondary: Bool = false, align: NSTextAlignment = .left) -> NSTextField {
+        // 大小列比名称列小一号，和字号设置一起缩放。
+        let size = secondary ? max(10, treeFontSize - 1) : treeFontSize
         let cell = NSTextField(labelWithString: text)
-        cell.font = secondary ? .systemFont(ofSize: 11) : .systemFont(ofSize: 12)
-        cell.lineBreakMode = .byTruncatingMiddle
+        cell.font = .systemFont(ofSize: size)
+        // 宽度够时完整显示，不够才在末尾省略；中间截断会先把扩展名吃掉。
+        cell.lineBreakMode = .byTruncatingTail
+        cell.usesSingleLineMode = true
+        cell.maximumNumberOfLines = 1
         cell.alignment = align
         cell.textColor = secondary ? .secondaryLabelColor : .labelColor
         return cell
     }
 
     /// NSTextField 没有 image 属性，名称列的图标只能自己拼。
-    private func iconCell(text: String, symbol: String, tint: NSColor) -> NSView {
+    private func iconCell(text: String, fullName: String, symbol: String, tint: NSColor, hidden: Bool) -> NSView {
         let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        let configuration = NSImage.SymbolConfiguration(pointSize: treeIconSize, weight: .regular)
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        icon.imageScaling = .scaleProportionallyUpOrDown
         icon.contentTintColor = tint
+        // 隐藏项（点文件）把图标压暗：仍看得出类型，又能和普通项一眼区分。
+        icon.alphaValue = hidden ? 0.35 : 1
         icon.translatesAutoresizingMaskIntoConstraints = false
         let label = textCell(text)
+        // 名称被截断时，悬停整行都能看到完整名字。
+        label.toolTip = fullName
+        label.setContentCompressionResistancePriority(.init(250), for: .horizontal)
         label.translatesAutoresizingMaskIntoConstraints = false
         let cell = NSTableCellView()
+        cell.toolTip = fullName
         cell.textField = label
         cell.addSubview(icon)
         cell.addSubview(label)
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
             icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 13),
-            icon.heightAnchor.constraint(equalToConstant: 13),
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 4),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -2),
+            icon.widthAnchor.constraint(equalToConstant: treeIconSize),
+            icon.heightAnchor.constraint(equalToConstant: treeIconSize),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
+            // 必须用等号：宽度不足时由 label 自己打省略号，而不是顶出单元格被硬裁。
+            label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
             label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
@@ -886,6 +1301,10 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
             return targetNode?.entry.isDirectory == true
         case #selector(downloadSelected):
             return !selectedNodes.filter { !$0.entry.isDirectory }.isEmpty
+        case #selector(copyPaths):
+            return !selectedNodes.isEmpty
+        case #selector(insertPathsIntoTerminal):
+            return !selectedNodes.isEmpty && boundController?.state.isAlive == true
         case #selector(renameSelected):
             return targetNode != nil
         case #selector(deleteSelected):

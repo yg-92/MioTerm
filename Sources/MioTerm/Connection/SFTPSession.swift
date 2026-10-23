@@ -43,7 +43,18 @@ final class SFTPSession {
     private let environment: AppEnvironment
 
     private(set) var state: State = .closed {
-        didSet { onStateChange?(state) }
+        didSet {
+            guard state != oldValue else { return }
+            // 文件面板的一切动作都以这条通道为前提：它没就绪，跟随就不可能动。
+            // 状态变化不写日志，出问题时就只剩「面板一声不吭」这一种现象。
+            switch state {
+            case .failed(let reason):
+                environment.logger.warning("SFTP 通道 \(host.displayName) 失败：\(reason)")
+            default:
+                environment.logger.info("SFTP 通道 \(host.displayName)：\(state.label)")
+            }
+            onStateChange?(state)
+        }
     }
     private(set) var client: SFTPClient?
     private(set) var transfers: SFTPTransferCoordinator?

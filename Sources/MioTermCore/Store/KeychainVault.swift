@@ -47,6 +47,20 @@ public struct KeychainVault {
         }
     }
 
+    /// 只问“有没有保存过”，不取内容。查属性不会触发钥匙串授权弹窗，
+    /// 而打开主机表单时只需要决定占位文字，没必要把口令读出来。
+    public func hasSecret(hostID: String, kind: CredentialKind) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: account(hostID: hostID, kind: kind),
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
+    }
+
     /// 传 nil 或空串表示清除；避免 “保存空密码” 与 “不保存密码” 混在一起。
     public func setSecret(_ value: String?, hostID: String, kind: CredentialKind) throws {
         let account = account(hostID: hostID, kind: kind)

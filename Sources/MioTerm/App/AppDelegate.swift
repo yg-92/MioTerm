@@ -15,6 +15,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             presentLaunchFailure(error)
         }
+        // 外观由设置决定（跟随系统 / 深色 / 浅色），AppEnvironment 初始化时已经套用。
         MenuBuilder.install()
         let controller = MainWindowController()
         mainWindow = controller
@@ -22,21 +23,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-
-    /// 退出前确认还有活动会话；这里的阻塞式弹窗是有意的，
-    /// 终止流程不能再依赖异步续体，否则子进程来不及回收。
-    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let mainWindow, mainWindow.sessionsAreActive else { return .terminateNow }
-        guard AppEnvironment.shared.settings.settings.confirmBeforeClose else { return .terminateNow }
-        let alert = NSAlert()
-        alert.messageText = "仍有会话在运行"
-        alert.informativeText = "退出 MioTerm 会断开全部 SSH 连接并删除一次性口令文件。"
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "退出")
-        alert.addButton(withTitle: "取消")
-        alert.buttons.last?.keyEquivalent = "\u{1b}"
-        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
-    }
 
     public func applicationWillTerminate(_ notification: Notification) {
         mainWindow?.closeSessions()

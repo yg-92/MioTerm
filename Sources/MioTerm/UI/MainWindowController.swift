@@ -3,32 +3,68 @@ import MioTermCore
 
 /// 主窗口：工具栏 + 工作区。窗口关闭只断开当前会话，不影响其它窗口，
 /// 因此这里不主动 terminate 应用。
+/// 工具栏跟着右侧内容换：看终端时是“主页 / 文件树”，
+/// 回到主页时才是“连接 / 新增主机”，避免在会话里点不到有用的动作。
 @MainActor
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let workspace = WorkspaceViewController()
     private static let newTab = NSToolbarItem.Identifier("mio.newTab")
+    private static let home = NSToolbarItem.Identifier("mio.home")
     private static let connect = NSToolbarItem.Identifier("mio.connect")
     private static let newHost = NSToolbarItem.Identifier("mio.newHost")
     private static let preferences = NSToolbarItem.Identifier("mio.preferences")
     private static let toggleSidebar = NSToolbarItem.Identifier("mio.toggleSidebar")
     private static let filePanel = NSToolbarItem.Identifier("mio.filePanel")
+    private var showingSession = false
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.tabbingMode = .disallowed
-        window.minSize = NSSize(width: 760, height: 420)
+        window.minSize = NSSize(width: 780, height: 460)
         window.setFrameAutosaveName("MioTermMainWindow")
+        window.backgroundColor = Theme.background
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
         self.init(window: window)
         window.contentViewController = workspace
+        // 赋 contentViewController 时窗口会缩到工作区的 fitting size，
+        // 首次启动想要的是设计稿尺寸，已保存的窗口帧在后面恢复。
+        window.setContentSize(NSSize(width: 1240, height: 780))
         window.title = "MioTerm"
-        window.titleVisibility = .visible
+        workspace.onPresentationChange = { [weak self] controller in
+            self?.setSessionActive(controller != nil)
+        }
         installToolbar()
-        window.center()
+        // 首次启动按设计尺寸来，但屏幕装不下时先缩到 visibleFrame 内，
+        // 否则窗口底部（文件面板的跟随开关/状态行）会被屏幕边缘裁掉。
+        if !window.setFrameUsingName("MioTermMainWindow") {
+            let fitted = Self.fittedFrame(window.frame)
+            if fitted != window.frame {
+                window.setFrame(fitted, display: false)
+            }
+            window.center()
+        } else {
+            let fitted = Self.fittedFrame(window.frame)
+            if fitted != window.frame {
+                window.setFrame(fitted, display: false)
+            }
+        }
+    }
+
+    /// 把窗口框限制在这块屏幕的可视区域内，尺寸不够时整体缩小而不是露到屏幕外。
+    private static func fittedFrame(_ frame: NSRect) -> NSRect {
+        guard let visible = NSScreen.main?.visibleFrame else { return frame }
+        var fitted = frame
+        fitted.size.width = min(frame.width, visible.width)
+        fitted.size.height = min(frame.height, visible.height)
+        fitted.origin.x = min(max(frame.minX, visible.minX), visible.maxX - fitted.width)
+        fitted.origin.y = min(max(frame.minY, visible.minY), visible.maxY - fitted.height)
+        return fitted
     }
 
     private func installToolbar() {
@@ -36,9 +72,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         let toolbar = NSToolbar(identifier: "MioTermMainToolbar")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = true
-        toolbar.selectedItemIdentifier = Self.newTab
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+        toolbar.showsBaselineSeparator = false
         window.toolbar = toolbar
+        applyToolbarItems(showSession: false)
     }
 
     func show() {
@@ -47,9 +85,27 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    var sessionsAreActive: Bool { workspace.hasActiveSessions }
-
     func closeSessions() { workspace.prepareForClose() }
+
+    private func setSessionActive(_ active: Bool) {
+        guard active != showingSession else { return }
+        showingSession = active
+        applyToolbarItems(showSession: active)
+    }
+
+    /// `NSToolbarItem` 没有“隐藏”，只能按当前上下文重建条目。
+    private func applyToolbarItems(showSession: Bool) {
+        guard let toolbar = window?.toolbar else { return }
+        while !toolbar.items.isEmpty {
+            toolbar.removeItem(at: 0)
+        }
+        let identifiers: [NSToolbarItem.Identifier] = showSession
+            ? [Self.toggleSidebar, Self.home, Self.filePanel, .flexibleSpace, Self.newTab, Self.preferences]
+            : [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences]
+        for (index, identifier) in identifiers.enumerated() {
+            toolbar.insertItem(withItemIdentifier: identifier, at: index)
+        }
+    }
 
     // MARK: - NSToolbarDelegate
 
@@ -57,14 +113,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         switch itemIdentifier {
         case Self.newTab:
             return button(itemIdentifier, symbol: "plus", label: "新建标签", action: #selector(WorkspaceViewController.newLocalTerminal(_:)))
+        case Self.home:
+            return button(itemIdentifier, symbol: "house", label: "主页", action: #selector(WorkspaceViewController.showHome(_:)))
         case Self.connect:
             return button(itemIdentifier, symbol: "bolt", label: "连接所选主机", action: #selector(WorkspaceViewController.connectSelectedHost(_:)))
         case Self.newHost:
-            return button(itemIdentifier, symbol: "smallcircle.filled.circle", label: "新增主机", action: #selector(WorkspaceViewController.newHost(_:)))
+            return button(itemIdentifier, symbol: "plus.circle", label: "新增主机", action: #selector(WorkspaceViewController.newHost(_:)))
         case Self.preferences:
             return button(itemIdentifier, symbol: "gearshape", label: "设置", action: #selector(WorkspaceViewController.showPreferences(_:)))
         case Self.toggleSidebar:
-            return button(itemIdentifier, symbol: "sidebar.left", label: "显示/隐藏侧栏", action: #selector(NSSplitViewController.toggleSidebar(_:)))
+            let item = paletteItem(itemIdentifier, symbol: "sidebar.left", label: "显示/隐藏侧栏")
+            item.action = #selector(NSSplitViewController.toggleSidebar(_:))
+            return item
         case Self.filePanel:
             return button(itemIdentifier, symbol: "folder", label: "文件树", action: #selector(WorkspaceViewController.showFilePanel(_:)))
         default:
@@ -73,13 +133,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     private func button(_ identifier: NSToolbarItem.Identifier, symbol: String, label: String, action: Selector) -> NSToolbarItem {
+        let item = paletteItem(identifier, symbol: symbol, label: label)
+        item.target = workspace
+        item.action = action
+        return item
+    }
+
+    private func paletteItem(_ identifier: NSToolbarItem.Identifier, symbol: String, label: String) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
-        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: label) ?? NSImage(),
-                             target: workspace,
-                             action: action)
-        button.bezelStyle = .texturedRounded
-        button.setButtonType(.momentaryPushIn)
-        item.view = button
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         item.label = label
         item.paletteLabel = label
         item.toolTip = label
@@ -87,10 +149,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.filePanel, .flexibleSpace, Self.newTab, Self.connect, Self.newHost, Self.preferences]
+        [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.filePanel, Self.newTab, Self.connect, Self.newHost, Self.preferences, .space, .flexibleSpace]
+        [Self.toggleSidebar, Self.home, Self.filePanel, Self.newTab, Self.connect, Self.newHost, Self.preferences, .space, .flexibleSpace]
     }
 }

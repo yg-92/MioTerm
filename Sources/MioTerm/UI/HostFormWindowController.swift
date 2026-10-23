@@ -26,11 +26,47 @@ final class HostFormWindowController: NSWindowController {
     private let favoriteCheckbox = NSButton(checkboxWithTitle: "收藏", target: nil, action: nil)
     private let notesView = NSTextView()
     private let fingerprintLabel = NSTextField(labelWithString: "")
+
+    // 串口参数：整块面板作为一行插进主表单，非串口协议时整行隐藏。
+    private let devicePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
+    private let baudField = NSTextField()
+    private let dataBitsPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
+    private let parityPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 110, height: 24))
+    private let stopBitsPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
+    private let lineEndingPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
+    private let echoCheckbox = NSButton(checkboxWithTitle: "本地回显", target: nil, action: nil)
+    private let dtrCheckbox = NSButton(checkboxWithTitle: "拉高 DTR", target: nil, action: nil)
+    private let rtsCheckbox = NSButton(checkboxWithTitle: "拉高 RTS", target: nil, action: nil)
+    private let serialHintLabel = NSTextField(wrappingLabelWithString: "")
+    private var serialPanel = NSGridView()
+    private let identityStack = NSStackView()
+
+    /// 下拉框选项顺序即对应枚举/常量的顺序，读取时按索引反查。
+    private static let formDataBits = SerialConfig.supportedDataBits
+    private static let formStopBits = SerialConfig.supportedStopBits
+
     private var grid = NSGridView()
 
     private var selectedMethod: AuthMethod {
         AuthMethod.allCases[min(max(authPopup.indexOfSelectedItem, 0), AuthMethod.allCases.count - 1)]
     }
+
+    /// 下拉框的顺序就是 ConnectionProtocol.allCases 的顺序。
+    /// 协议下拉框的选项顺序，与 buildContents 里的填充顺序一致。
+    private static let formProtocols: [ConnectionProtocol] = ConnectionProtocol.allCases
+
+    private var selectedProtocol: ConnectionProtocol {
+        Self.formProtocols[min(max(protocolPopup.indexOfSelectedItem, 0), Self.formProtocols.count - 1)]
+    }
+
+    private func selected<T>(_ popup: NSPopUpButton, _ values: [T]) -> T {
+        values[min(max(popup.indexOfSelectedItem, 0), values.count - 1)]
+    }
+
+    private var selectedDataBits: Int { selected(dataBitsPopup, Self.formDataBits) }
+    private var selectedStopBits: String { selected(stopBitsPopup, Self.formStopBits) }
+    private var selectedParity: Parity { selected(parityPopup, Parity.allCases) }
+    private var selectedLineEnding: LineEnding { selected(lineEndingPopup, LineEnding.allCases) }
 
     init(host: HostProfile, environment: AppEnvironment) {
         self.original = host
@@ -53,9 +89,9 @@ final class HostFormWindowController: NSWindowController {
     private func buildContents() {
         guard let window else { return }
 
-        protocolPopup.addItem(withTitle: ConnectionProtocol.ssh.displayName)
-        protocolPopup.selectItem(at: 0)
-        protocolPopup.isEnabled = false
+        protocolPopup.addItems(withTitles: Self.formProtocols.map { $0.displayName })
+        protocolPopup.target = self
+        protocolPopup.action = #selector(protocolChanged(_:))
 
         authPopup.addItems(withTitles: AuthMethod.allCases.map { $0.displayName })
         authPopup.target = self
@@ -76,7 +112,8 @@ final class HostFormWindowController: NSWindowController {
 
         let pickButton = NSButton(title: "选择…", target: self, action: #selector(pickIdentity(_:)))
         pickButton.bezelStyle = .rounded
-        let identityStack = NSStackView(views: [identityField, pickButton])
+        identityStack.addArrangedSubview(identityField)
+        identityStack.addArrangedSubview(pickButton)
         identityStack.orientation = .horizontal
         identityStack.spacing = 6
 
@@ -100,11 +137,14 @@ final class HostFormWindowController: NSWindowController {
         buttons.orientation = .horizontal
         buttons.spacing = 10
 
+        serialPanel = buildSerialPanel()
+
         grid = NSGridView(views: [
             [label("名称"), nameField],
             [label("分组"), groupField],
             [label("标签"), tagsField],
             [label("协议"), protocolPopup],
+            [NSView(), serialPanel],
             [label("地址"), addressField],
             [label("端口"), portField],
             [label("用户名"), usernameField],
@@ -147,10 +187,83 @@ final class HostFormWindowController: NSWindowController {
         return field
     }
 
+    /// 串口参数只在协议为串口时显示，整块塞进一行便于统一隐藏。
+    private func buildSerialPanel() -> NSGridView {
+        let refreshButton = NSButton(title: "刷新", target: self, action: #selector(refreshSerialDevices(_:)))
+        refreshButton.bezelStyle = .rounded
+        let deviceStack = NSStackView(views: [devicePopup, refreshButton])
+        deviceStack.orientation = .horizontal
+        deviceStack.spacing = 6
+
+        dataBitsPopup.addItems(withTitles: Self.formDataBits.map(String.init))
+        parityPopup.addItems(withTitles: Parity.allCases.map { $0.displayName })
+        stopBitsPopup.addItems(withTitles: Self.formStopBits)
+        lineEndingPopup.addItems(withTitles: LineEnding.allCases.map { $0.rawValue })
+        devicePopup.widthAnchor.constraint(equalToConstant: 250).isActive = true
+
+        baudField.placeholderString = "115200"
+        baudField.alignment = .right
+        baudField.widthAnchor.constraint(equalToConstant: 76).isActive = true
+
+        // 帧格式三个下拉并排：拆成三行会让面板比主表单还长。
+        // 下拉框不写死宽度，让它们按最长条目自撑——校验位带中文说明，压窄了会截断。
+        let frameStack = NSStackView(views: [
+            label("数据"), dataBitsPopup, label("校验"), parityPopup, label("停止"), stopBitsPopup,
+        ])
+        frameStack.orientation = .horizontal
+        frameStack.spacing = 4
+
+        let inputStack = NSStackView(views: [lineEndingPopup, echoCheckbox])
+        inputStack.orientation = .horizontal
+        inputStack.spacing = 10
+        let modemStack = NSStackView(views: [dtrCheckbox, rtsCheckbox])
+        modemStack.orientation = .horizontal
+        modemStack.spacing = 10
+
+        serialHintLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        serialHintLabel.textColor = .secondaryLabelColor
+        serialHintLabel.widthAnchor.constraint(equalToConstant: 380).isActive = true
+
+        let panel = NSGridView(views: [
+            [label("设备"), deviceStack],
+            [label("波特率"), baudField],
+            [label("帧格式"), frameStack],
+            [label("回车发送"), inputStack],
+            [label("控制线"), modemStack],
+            [NSView(), serialHintLabel],
+        ])
+        panel.rowSpacing = 6
+        panel.columnSpacing = 8
+        panel.column(at: 0).xPlacement = .trailing
+        return panel
+    }
+
+    private static let serialHintNormal =
+        "设备要插在这台 Mac 上。流控不启用；Mac 驱动不支持 Mark/Space 校验和 1.5 停止位。部分开发板会在 DTR/RTS 跳变时复位，不确定就别勾选。"
+    private static let serialHintEmpty = "没有找到串口设备：请确认 USB 转串口线已插好、驱动已安装，然后点“刷新”。"
+
+    /// 刷新设备列表。编辑既有主机时把已保存的设备也留在列表里：
+    /// 适配器临时不在（比如换了 USB 口）也不能悄悄改掉用户的配置。
+    private func reloadSerialDevices(keeping current: String) {
+        let found = SerialDevices.discover()
+        var devices = found
+        if !current.isEmpty, !devices.contains(current) { devices.append(current) }
+        devicePopup.removeAllItems()
+        devicePopup.addItems(withTitles: devices)
+        if !current.isEmpty { devicePopup.selectItem(withTitle: current) }
+        serialHintLabel.stringValue = found.isEmpty ? Self.serialHintEmpty : Self.serialHintNormal
+        serialHintLabel.textColor = found.isEmpty ? .systemRed : .secondaryLabelColor
+    }
+
+    @objc private func refreshSerialDevices(_ sender: NSButton) {
+        reloadSerialDevices(keeping: devicePopup.titleOfSelectedItem ?? "")
+    }
+
     private func load(from host: HostProfile) {
         nameField.stringValue = host.name
         groupField.stringValue = host.group
         tagsField.stringValue = host.tags.joined(separator: ", ")
+        protocolPopup.selectItem(at: Self.formProtocols.firstIndex(of: host.protocolKind) ?? 0)
         addressField.stringValue = host.address
         portField.stringValue = "\(host.port)"
         usernameField.stringValue = host.username
@@ -165,6 +278,15 @@ final class HostFormWindowController: NSWindowController {
         fingerprintLabel.stringValue = host.hostKeyFingerprint.isEmpty
             ? "尚未确认，首次连接时会提示"
             : "\(host.hostKeyAlgorithm) · \(host.hostKeyFingerprint)"
+        dataBitsPopup.selectItem(at: Self.formDataBits.firstIndex(of: host.serial.dataBits) ?? 0)
+        stopBitsPopup.selectItem(at: Self.formStopBits.firstIndex(of: host.serial.stopBits) ?? 0)
+        parityPopup.selectItem(at: Parity.allCases.firstIndex(of: host.serial.parity) ?? 0)
+        lineEndingPopup.selectItem(at: LineEnding.allCases.firstIndex(of: host.serial.lineEnding) ?? 0)
+        baudField.stringValue = "\(host.serial.baudRate)"
+        echoCheckbox.state = host.serial.localEcho ? .on : .off
+        dtrCheckbox.state = host.serial.dtr ? .on : .off
+        rtsCheckbox.state = host.serial.rts ? .on : .off
+        reloadSerialDevices(keeping: host.serial.device)
         if secretExists(host) {
             secretField.placeholderString = "已保存，留空表示不修改"
         }
@@ -173,7 +295,7 @@ final class HostFormWindowController: NSWindowController {
 
     private func secretExists(_ host: HostProfile) -> Bool {
         guard let kind = credentialKind(for: host.authMethod) else { return false }
-        return (try? environment.vault.secret(hostID: host.id, kind: kind))?.isEmpty == false
+        return environment.vault.hasSecret(hostID: host.id, kind: kind)
     }
 
     /// 自动模式交给 ssh 自己处理，没有需要托管的口令字段。
@@ -187,30 +309,50 @@ final class HostFormWindowController: NSWindowController {
 
     @objc private func authChanged(_ sender: NSPopUpButton) { updateRowVisibility() }
 
+    @objc private func protocolChanged(_ sender: NSPopUpButton) {
+        // 端口默认值跟着协议走：留着 22 去连 Telnet 一定失败，用户不必自己想到。
+        let entered = Int(portField.stringValue) ?? 0
+        if entered == 22 || entered == 23 { portField.stringValue = selectedProtocol.defaultPort.map(String.init) ?? "" }
+        updateRowVisibility()
+    }
+
     @objc private func clearSecretChanged(_ sender: NSButton) {
         secretField.isEnabled = sender.state != .on
         if sender.state == .on { secretField.stringValue = "" }
     }
 
-    // 表单行的顺序在 buildContents 里固定，按索引隐藏比按视图查找更稳。
-    private static let identityRow = 8
-    private static let secretRow = 9
-    private static let clearSecretRow = 10
-
+    // 行按视图查，不按索引：串口面板插进主表单后，硬编码的行号一错就是整片。
     private func updateRowVisibility() {
+        let isSerial = selectedProtocol == .serial
+        // Telnet 的登录发生在会话里（设备提示 login:），既没有可托管的凭据，
+        // 也没有保活、启动目录和宿主指纹这些概念。
+        let isSSH = selectedProtocol == .ssh
+
+        setRowHidden(serialPanel, hidden: !isSerial)
+        setRowHidden(addressField, hidden: isSerial)
+        setRowHidden(portField, hidden: isSerial)
+        setRowHidden(timeoutField, hidden: isSerial)
+        setRowHidden(terminalTypeField, hidden: isSerial)
+        setRowHidden(usernameField, hidden: !isSSH)
+        setRowHidden(authPopup, hidden: !isSSH)
+        setRowHidden(keepaliveField, hidden: !isSSH)
+        setRowHidden(startupDirectoryField, hidden: !isSSH)
+        setRowHidden(fingerprintLabel, hidden: !isSSH)
+
         let method = selectedMethod
-        setRowHidden(Self.identityRow, hidden: method == .password)
-        let showsSecret = method != .automatic
-        setRowHidden(Self.secretRow, hidden: !showsSecret)
-        setRowHidden(Self.clearSecretRow, hidden: !showsSecret)
+        setRowHidden(identityStack, hidden: !isSSH || method == .password)
+        let showsSecret = isSSH && method != .automatic
+        setRowHidden(secretField, hidden: !showsSecret)
+        setRowHidden(clearSecretCheckbox, hidden: !showsSecret)
         clearSecretCheckbox.isEnabled = showsSecret
         if method == .automatic { clearSecretCheckbox.state = .off }
         secretField.isEnabled = clearSecretCheckbox.state != .on
+        portField.placeholderString = isSSH ? "22" : "23"
     }
 
-    private func setRowHidden(_ index: Int, hidden: Bool) {
-        guard index < grid.numberOfRows else { return }
-        grid.row(at: index).isHidden = hidden
+    private func setRowHidden(_ view: NSView, hidden: Bool) {
+        guard let row = grid.cell(for: view)?.row else { return }
+        row.isHidden = hidden
     }
 
     @objc private func pickIdentity(_ sender: NSButton) {
@@ -232,11 +374,9 @@ final class HostFormWindowController: NSWindowController {
         host.tags = tagsField.stringValue
             .split(whereSeparator: { $0 == "," || $0 == "\n" })
             .map { $0.trimmingCharacters(in: .whitespaces) }
-        // 协议字段暂时锁死在 SSH：串口与 Telnet 传输层在阶段 2 提供，
-        // 提前建好的配置会指向不存在的实现。
-        host.protocolKind = .ssh
+        host.protocolKind = selectedProtocol
         host.address = addressField.stringValue
-        host.port = Int(portField.stringValue) ?? 22
+        host.port = Int(portField.stringValue) ?? (selectedProtocol.defaultPort ?? 22)
         host.username = usernameField.stringValue
         host.authMethod = selectedMethod
         host.identityFile = identityField.stringValue
@@ -246,6 +386,21 @@ final class HostFormWindowController: NSWindowController {
         host.terminalType = terminalTypeField.stringValue.isEmpty ? "xterm-256color" : terminalTypeField.stringValue
         host.favorite = favoriteCheckbox.state == .on
         host.notes = notesView.string
+        if selectedProtocol == .serial {
+            host.serial = SerialConfig(
+                device: devicePopup.titleOfSelectedItem ?? "",
+                baudRate: Int(baudField.stringValue) ?? 115_200,
+                dataBits: selectedDataBits,
+                stopBits: selectedStopBits,
+                parity: selectedParity,
+                lineEnding: selectedLineEnding,
+                localEcho: echoCheckbox.state == .on,
+                dtr: dtrCheckbox.state == .on,
+                rts: rtsCheckbox.state == .on
+            )
+            // 串口没有地址/端口，留空免得列表副标题混进无意义的 22。
+            host.address = ""
+        }
 
         do {
             let saved = try environment.hosts.save(host)

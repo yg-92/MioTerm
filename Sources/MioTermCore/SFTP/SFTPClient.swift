@@ -36,6 +36,9 @@ public struct SFTPFileEntry: Equatable, Identifiable, Sendable {
         isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
     }
 
+    /// 点文件/点目录：只有打开“显示隐藏文件”时才会进列表，界面据此弱化图标。
+    public var isHidden: Bool { name.hasPrefix(".") }
+
     public var modifiedText: String {
         guard let modifiedAt else { return "" }
         return Self.formatter.string(from: modifiedAt)

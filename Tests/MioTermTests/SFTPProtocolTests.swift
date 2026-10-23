@@ -177,6 +177,26 @@ struct SFTPProtocolTests {
         #expect(entries[0].modificationTime == Date(timeIntervalSince1970: 1_700_000_000))
     }
 
+    /// 目录里有一个非 UTF-8 的历史文件名时，不能连累整层目录都读不出来。
+    @Test func nameEntryWithNonUTF8BytesStillParses() throws {
+        var attributes = SFTPFileAttributes()
+        attributes.flags = [.size]
+        attributes.size = 1
+
+        var body = SFTPWriter()
+        body.uint32(1)
+        body.bytes(Data([0x62, 0x61, 0x64, 0xFF]))
+        body.string("bad?")
+        attributes.encode(into: &body)
+
+        let packet = SFTPPacket(type: .name, id: 0, payload: body.data)
+        let reply = try SFTPReply(packet: packet)
+        guard case .name(let entries) = reply else { Issue.record("应为 name 应答"); return }
+        #expect(entries.count == 1)
+        #expect(entries[0].shortName.hasPrefix("bad"))
+        #expect(entries[0].size == 1)
+    }
+
     @Test func replyTurnsNonOKStatusIntoError() throws {
         var body = SFTPWriter()
         body.uint32(SFTPStatusCode.permissionDenied.rawValue)
@@ -198,5 +218,15 @@ struct SFTPProtocolTests {
         #expect(SFTPDirectoryFilter.entries(entries, showHidden: false).map(\.shortName) == ["logs"])
         // 显示点文件也不该把 . 与 .. 当条目列出来
         #expect(SFTPDirectoryFilter.entries(entries, showHidden: true).map(\.shortName) == [".ssh", "logs"])
+    }
+
+    @Test func dotEntriesAreMarkedHiddenForDimming() {
+        func file(_ name: String) -> SFTPFileEntry {
+            SFTPFileEntry(path: "/home/user/\(name)", name: name, isDirectory: false, size: 0, modifiedAt: nil)
+        }
+        #expect(file(".bashrc").isHidden)
+        #expect(file(".config").isHidden)
+        #expect(!file("README.md").isHidden)
+        #expect(!file("logs").isHidden)
     }
 }

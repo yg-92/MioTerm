@@ -8,7 +8,6 @@ import MioTermCore
 final class WorkspaceViewController: NSSplitViewController {
     private let environment = AppEnvironment.shared
     private let sessions = SessionTabViewController()
-    private let welcome = WelcomeViewController()
     private let mainArea = ContainerViewController()
     private let sidePanel = SidePanelViewController()
     private lazy var coordinator = ConnectionCoordinator(environment: environment)
@@ -20,11 +19,22 @@ final class WorkspaceViewController: NSSplitViewController {
     private var preferences: PreferencesWindowController?
     /// 连接是异步的，同一主机连点两次会开出两个会话，用这个集合去重。
     private var pendingConnects: Set<String> = []
+    /// 当前是否停在某个终端上：工具栏据此在“主机动作”和“主页”之间切换。
+    var onPresentationChange: ((TerminalController?) -> Void)?
+
+    /// 侧栏折叠态与分栏宽度都要跨启动保留，对齐 webterm 记住面板布局的行为。
+    private static let splitAutosaveName = "MioTermWorkspaceSplit"
+    private static let sidebarCollapsedDefault = "MioTerm.sidebarCollapsed"
+    private var panelItem: NSSplitViewItem?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         splitView.isVertical = true
         splitView.dividerStyle = .thin
+        // NSSplitView 只认带 identifier 的子视图存宽度，缺了就每次回到默认比例。
+        sidePanel.view.identifier = NSUserInterfaceItemIdentifier("mio.sidebar")
+        mainArea.view.identifier = NSUserInterfaceItemIdentifier("mio.main")
+        splitView.autosaveName = Self.splitAutosaveName
 
         let panelItem = NSSplitViewItem(sidebarWithViewController: sidePanel)
         panelItem.canCollapse = true
@@ -32,6 +42,8 @@ final class WorkspaceViewController: NSSplitViewController {
         panelItem.maximumThickness = 420
         panelItem.preferredThicknessFraction = 0.24
         addSplitViewItem(panelItem)
+        self.panelItem = panelItem
+        panelItem.isCollapsed = UserDefaults.standard.bool(forKey: Self.sidebarCollapsedDefault)
 
         let mainItem = NSSplitViewItem(viewController: mainArea)
         mainItem.minimumThickness = 480
@@ -41,19 +53,81 @@ final class WorkspaceViewController: NSSplitViewController {
         sessions.onSessionsChange = { [weak self] controller in
             self?.apply(selected: controller)
         }
-        // 启动停在欢迎页 + 主机列表，用户自己决定开终端还是连主机。
-        mainArea.show(welcome)
+        // 标签栏与主页都归会话控制器管：没有选中会话时它自己显示欢迎页。
+        mainArea.show(sessions)
+    }
+
+    /// viewDidLoad 时视图还没进窗口，折叠态只能等 appear 以后再挂关闭钩子。
+    /// ⌘Q 不一定走窗口 close，所以退出通知也听一份。
+    private var collapseObserverInstalled = false
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard !collapseObserverInstalled, let window = view.window else { return }
+        collapseObserverInstalled = true
+        // 选择器形式的观察者会在本控制器释放时自动摘掉，不会把窗口吊在通知中心上。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(noteSidebarCollapse),
+            name: NSWindow.willCloseNotification, object: window
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(noteSidebarCollapse),
+            name: NSApplication.willTerminateNotification, object: nil
+        )
+    }
+
+    @objc private func noteSidebarCollapse() {
+        guard let panelItem else { return }
+        UserDefaults.standard.set(panelItem.isCollapsed, forKey: Self.sidebarCollapsedDefault)
     }
 
     /// 会话增删与选中变化统一走这里，保证左右两侧的状态一次到位。
     private func apply(selected controller: TerminalController?) {
+        mainArea.show(sessions)
         if let controller {
-            mainArea.show(sessions)
             sidePanel.bind(to: controller)
         } else {
             sidePanel.bind(to: nil)
-            mainArea.show(welcome)
+            // 主页就是“欢迎页 + 主机列表”，不再把主机藏在分段控件后面。
+            sidePanel.showHosts()
         }
+        observeContext(of: controller)
+        onPresentationChange?(controller)
+    }
+
+    // MARK: - 标题栏
+
+    private var contextController: TerminalController?
+    private var contextToken: UUID?
+
+    /// 只订阅当前标签：其余标签还在输出，不能拿来改标题。
+    private func observeContext(of controller: TerminalController?) {
+        guard controller !== contextController else {
+            updateTitlebar(for: controller)
+            return
+        }
+        contextController?.removeContextObserver(contextToken)
+        contextToken = nil
+        contextController = controller
+        contextToken = controller?.addContextObserver { [weak self] _ in
+            guard let self, self.contextController === controller else { return }
+            self.updateTitlebar(for: controller)
+        }
+        updateTitlebar(for: controller)
+    }
+
+    /// 标签页自己已经带了主机名与状态点，标题栏补的是“此刻在哪个目录”。
+    private func updateTitlebar(for controller: TerminalController?) {
+        guard let window = view.window else { return }
+        guard let controller else {
+            window.title = "MioTerm"
+            window.subtitle = "主页 · 主机列表"
+            return
+        }
+        window.title = controller.title
+        window.subtitle = controller.context.directory
+            ?? controller.workingDirectory
+            ?? controller.state.label
     }
 
     @objc func showFilePanel(_ sender: Any?) {
@@ -68,6 +142,18 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc func showHostList(_ sender: Any?) {
         sidePanel.showHosts()
+    }
+
+    /// 主页：欢迎页 + 主机列表。后台会话不关闭，标签栏里点回来即可。
+    @objc func showHome(_ sender: Any?) {
+        sessions.showHome()
+        sidePanel.showHosts()
+    }
+
+    /// 命令库跟着当前标签走：没有会话时面板自己显示占位说明。
+    @objc func showCommandLibrary(_ sender: Any?) {
+        mainArea.show(sessions)
+        sidePanel.select(.commands)
     }
 
     /// 关闭整个工作区前回收所有子进程，避免残留 ssh 与 askpass 临时文件。
@@ -85,6 +171,11 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc func selectPreviousTerminalTab(_ sender: Any?) {
         sessions.selectPreviousTab()
+    }
+
+    /// 菜单项的 tag 从 1 开始，对应标签栏里的第 1…9 个会话。
+    @objc func selectTerminalTab(_ sender: NSMenuItem) {
+        sessions.selectTab(at: sender.tag - 1)
     }
 
     @objc func testSelectedHost(_ sender: Any?) {
@@ -131,17 +222,12 @@ final class WorkspaceViewController: NSSplitViewController {
         connect(host: host)
     }
 
+    /// 串口控制台的 BREAK：交换机与老设备靠它唤出提示符。
+    @objc func sendSerialBreak(_ sender: Any?) {
+        sessions.selectedController?.sendBreak()
+    }
+
     @objc func closeTerminalTab(_ sender: Any?) {
-        guard let controller = sessions.selectedController else { return }
-        if environment.settings.settings.confirmBeforeClose, controller.state.isAlive {
-            let alert = NSAlert()
-            alert.messageText = "关闭 “\(controller.title)”？"
-            alert.informativeText = "会话仍在进行中，关闭标签会终止连接。"
-            alert.addButton(withTitle: "关闭")
-            alert.addButton(withTitle: "取消")
-            alert.buttons.last?.keyEquivalent = "\u{1b}"
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
         sessions.closeSelectedTab()
     }
 
@@ -251,6 +337,8 @@ final class WorkspaceViewController: NSSplitViewController {
         do {
             try environment.hosts.delete(id: host.id)
             environment.vault.removeSecrets(hostID: host.id)
+            // 主机没了，它的命令统计与本机忽略规则就成了孤儿数据。
+            environment.commands.prune(validScopes: Set(environment.hosts.hosts.map(\.id)))
             sidebar.reload()
         } catch {
             AlertPresenter.fail(title: "删除失败", message: error.localizedDescription, in: view.window)
@@ -319,8 +407,15 @@ extension WorkspaceViewController: NSMenuItemValidation {
              #selector(duplicateSelectedHost(_:)), #selector(deleteSelectedHost(_:)),
              #selector(testSelectedHost(_:)), #selector(refreshFingerprintSelectedHost(_:)):
             return sidebar.selectedHost != nil
-        case #selector(reconnectTerminal(_:)), #selector(closeTerminalTab(_:)),
-             #selector(selectNextTerminalTab(_:)), #selector(selectPreviousTerminalTab(_:)):
+        case #selector(reconnectTerminal(_:)), #selector(closeTerminalTab(_:)):
+            return sessions.selectedController != nil
+        case #selector(selectNextTerminalTab(_:)), #selector(selectPreviousTerminalTab(_:)):
+            return !sessions.isEmpty
+        case #selector(selectTerminalTab(_:)):
+            return sessions.controllers.count >= menuItem.tag
+        case #selector(sendSerialBreak(_:)):
+            return sessions.selectedController?.supportsBreak == true
+        case #selector(showCommandLibrary(_:)):
             return !sessions.isEmpty
         default:
             return true

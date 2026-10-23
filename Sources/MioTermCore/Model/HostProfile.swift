@@ -16,6 +16,15 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Sendable {
     /// 只有 SSH 走 SFTP 文件面板与指纹确认。
     public var supportsSFTP: Bool { self == .ssh }
     public var usesHostKey: Bool { self == .ssh }
+
+    /// 公认端口，用于表单默认值；串口没有端口概念。
+    public var defaultPort: Int? {
+        switch self {
+        case .ssh: return 22
+        case .telnet: return 23
+        case .serial: return nil
+        }
+    }
 }
 
 public enum AuthMethod: String, Codable, CaseIterable, Sendable {
@@ -53,6 +62,18 @@ public enum Parity: String, Codable, CaseIterable, Sendable {
     case none = "None"
     case even = "Even"
     case odd = "Odd"
+    case mark = "Mark"
+    case space = "Space"
+
+    public var displayName: String {
+        switch self {
+        case .none: return "无"
+        case .even: return "偶校验"
+        case .odd: return "奇校验"
+        case .mark: return "Mark（校验位恒 1）"
+        case .space: return "Space（校验位恒 0）"
+        }
+    }
 }
 
 public struct SerialConfig: Codable, Equatable, Sendable {
@@ -63,6 +84,10 @@ public struct SerialConfig: Codable, Equatable, Sendable {
     public var parity: Parity
     public var lineEnding: LineEnding
     public var localEcho: Bool
+    /// 打开设备时是否拉高 DTR/RTS。部分开发板在这两条线跳变时复位，
+    /// 所以默认不动它们，由用户按板子手册显式勾选。
+    public var dtr: Bool
+    public var rts: Bool
 
     public init(
         device: String = "",
@@ -71,7 +96,9 @@ public struct SerialConfig: Codable, Equatable, Sendable {
         stopBits: String = "1",
         parity: Parity = .none,
         lineEnding: LineEnding = .cr,
-        localEcho: Bool = false
+        localEcho: Bool = false,
+        dtr: Bool = false,
+        rts: Bool = false
     ) {
         self.device = device
         self.baudRate = baudRate
@@ -80,9 +107,37 @@ public struct SerialConfig: Codable, Equatable, Sendable {
         self.parity = parity
         self.lineEnding = lineEnding
         self.localEcho = localEcho
+        self.dtr = dtr
+        self.rts = rts
     }
 
     public static let `default` = SerialConfig()
+
+    public static let supportedStopBits = ["1", "1.5", "2"]
+    public static let supportedDataBits = [5, 6, 7, 8]
+    public static let minimumBaudRate = 50
+    public static let maximumBaudRate = 4_000_000
+
+    /// 逐字段容错解码。串口参数是后加的，旧配置里没有 dtr/rts 这些键，
+    /// 而合成的解码器把缺失键当成损坏——那会让整份主机列表被判废。
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        device = try container.decodeIfPresent(String.self, forKey: .device) ?? ""
+        baudRate = try container.decodeIfPresent(Int.self, forKey: .baudRate) ?? 115_200
+        dataBits = try container.decodeIfPresent(Int.self, forKey: .dataBits) ?? 8
+        stopBits = try container.decodeIfPresent(String.self, forKey: .stopBits) ?? "1"
+        parity = try container.decodeIfPresent(Parity.self, forKey: .parity) ?? .none
+        lineEnding = try container.decodeIfPresent(LineEnding.self, forKey: .lineEnding) ?? .cr
+        localEcho = try container.decodeIfPresent(Bool.self, forKey: .localEcho) ?? false
+        dtr = try container.decodeIfPresent(Bool.self, forKey: .dtr) ?? false
+        rts = try container.decodeIfPresent(Bool.self, forKey: .rts) ?? false
+    }
+
+    /// 键入的换行按设备要求改写：先把三种换行统一成 LF，再展开成配置里的那一种。
+    /// 这样粘贴进来的 CRLF 不会变成两个 CR。
+    public func encodeInput(_ data: Data) -> Data {
+        data.normalizingLineEndingsToLF().expandingLineFeeds(to: lineEnding.data)
+    }
 }
 
 public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
@@ -161,12 +216,12 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         return host
     }
 
-    /// 侧栏展示用的 “地址:端口” 或串口号。
+    /// 侧栏展示用的 “地址:端口”、串口设备与速率。
     public var subtitle: String {
         switch protocolKind {
         case .ssh: return "\(address):\(port)"
         case .telnet: return "\(address):\(port)"
-        case .serial: return serial.device
+        case .serial: return serial.device.isEmpty ? "未选串口" : "\(serial.device) · \(serial.baudRate) baud"
         }
     }
 
@@ -187,8 +242,9 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         copy.identityFile = (identityFile as NSString).expandingTildeInPath
         copy.startupDirectory = (startupDirectory as NSString).expandingTildeInPath
         copy.tags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        copy.serial.device = serial.device.trimmingCharacters(in: .whitespacesAndNewlines)
         if copy.port == 22, copy.protocolKind == .telnet { copy.port = 23 }
-        if copy.port <= 0 || copy.port > 65535 { copy.port = copy.protocolKind == .telnet ? 23 : 22 }
+        if copy.port <= 0 || copy.port > 65535 { copy.port = copy.protocolKind.defaultPort ?? 22 }
         copy.connectTimeout = max(1, min(300, copy.connectTimeout))
         copy.keepaliveInterval = max(0, min(600, copy.keepaliveInterval))
         copy.updatedAt = Date()
@@ -199,12 +255,20 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         case nameRequired
         case addressRequired
         case serialDeviceRequired
+        case serialDevicePathInvalid
+        case serialBaudOutOfRange
+        case serialDataBitsOutOfRange
+        case serialStopBitsInvalid
 
         public var errorDescription: String? {
             switch self {
             case .nameRequired: return "请填写显示名称"
             case .addressRequired: return "请填写主机地址"
             case .serialDeviceRequired: return "请选择串口设备"
+            case .serialDevicePathInvalid: return "串口必须是 /dev/ 下的设备路径"
+            case .serialBaudOutOfRange: return "波特率范围为 \(SerialConfig.minimumBaudRate)–\(SerialConfig.maximumBaudRate)"
+            case .serialDataBitsOutOfRange: return "数据位范围为 5–8"
+            case .serialStopBitsInvalid: return "停止位只能是 1、1.5 或 2"
             }
         }
     }
@@ -216,6 +280,12 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
             if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.addressRequired }
         case .serial:
             if serial.device.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.serialDeviceRequired }
+            // 形状先于范围：配置里的字符串最终会进 open()，放过穿越路径就等于
+            // 把普通文件当终端读写。
+            if !SerialDevices.isAcceptablePath(serial.device) { throw ValidationError.serialDevicePathInvalid }
+            if !(SerialConfig.minimumBaudRate...SerialConfig.maximumBaudRate).contains(serial.baudRate) { throw ValidationError.serialBaudOutOfRange }
+            if !SerialConfig.supportedDataBits.contains(serial.dataBits) { throw ValidationError.serialDataBitsOutOfRange }
+            if !SerialConfig.supportedStopBits.contains(serial.stopBits) { throw ValidationError.serialStopBitsInvalid }
         }
     }
 }

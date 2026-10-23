@@ -39,6 +39,9 @@ enum MenuBuilder {
     private static func sessionMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "会话")
+        let home = menu.addItem(withTitle: "主页", action: Selector(("showHome:")), keyEquivalent: "h")
+        home.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
         menu.addItem(withTitle: "新建本地终端标签", action: Selector(("newLocalTerminal:")), keyEquivalent: "t")
         // 名字刻意避开 selectNextTab:：那是 NSWindow 的“窗口标签”动作，
         // 落到它身上会去切换窗口而不是本窗内的标签。
@@ -46,6 +49,19 @@ enum MenuBuilder {
         next.keyEquivalentModifierMask = [.command]
         let previous = menu.addItem(withTitle: "上一个标签", action: Selector(("selectPreviousTerminalTab:")), keyEquivalent: "[")
         previous.keyEquivalentModifierMask = [.command]
+        // 系统 NSTabViewController 自带的 ⌘1…9 已随自绘标签栏一起消失，这里补回来。
+        let tabsItem = NSMenuItem(title: "切换到标签", action: nil, keyEquivalent: "")
+        let tabsMenu = NSMenu(title: "切换到标签")
+        for number in 1...9 {
+            let tab = tabsMenu.addItem(
+                withTitle: "标签 \(number)",
+                action: Selector(("selectTerminalTab:")),
+                keyEquivalent: "\(number)"
+            )
+            tab.tag = number
+        }
+        tabsItem.submenu = tabsMenu
+        menu.addItem(tabsItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "连接所选主机", action: Selector(("connectSelectedHost:")), keyEquivalent: "")
         menu.addItem(withTitle: "重新连接", action: Selector(("reconnectTerminal:")), keyEquivalent: "r")
@@ -53,8 +69,13 @@ enum MenuBuilder {
         menu.addItem(.separator())
         menu.addItem(withTitle: "远端文件树", action: Selector(("showFilePanel:")), keyEquivalent: "f")
             .keyEquivalentModifierMask = [.command, .option]
+        // 只在串口会话下亮起：交换机与开发板控制台靠 BREAK 唤出提示符，
+        // SSH 与 Telnet 没有这个信号。
+        menu.addItem(withTitle: "发送串口中断 (BREAK)", action: Selector(("sendSerialBreak:")), keyEquivalent: "")
         menu.addItem(withTitle: "主机列表", action: Selector(("showHostList:")), keyEquivalent: "h")
             .keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(withTitle: "命令库", action: Selector(("showCommandLibrary:")), keyEquivalent: "k")
+            .keyEquivalentModifierMask = [.command]
         menu.addItem(withTitle: "显示/隐藏侧栏", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
             .keyEquivalentModifierMask = [.command, .control]
         item.submenu = menu

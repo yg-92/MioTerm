@@ -59,6 +59,16 @@ public struct SFTPReader {
         guard let text = String(data: payload, encoding: .utf8) else { throw DecodeError.invalidUTF8 }
         return text
     }
+
+    /// 文件名按“尽力而为”解码。历史文件、备份或非 UTF-8 locale 下创建的条目
+    /// 可能带着原始字节；不能为了一个名字让整层目录都读不出来。
+    public mutating func stringLenient(field: String) throws -> String {
+        let payload = try bytes()
+        if let text = String(data: payload, encoding: .utf8) { return text }
+        let hex = payload.map { String(format: "%02x", $0) }.joined(separator: " ")
+        FileLogger.shared.warning("SFTP：\(field)不是合法 UTF-8（\(payload.count) 字节）：\(hex)")
+        return String(decoding: payload, as: UTF8.self)
+    }
 }
 
 public struct SFTPWriter {

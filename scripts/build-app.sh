@@ -36,20 +36,42 @@ if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
   cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 fi
 
-# 有自建签名身份时用固定身份，避免每次重建都因 ad-hoc 签名变化而重新弹出
-# Keychain 授权；没有则退回 ad-hoc 签名。
-IDENTITY="${MIOTERM_SIGNING_IDENTITY:-}"
-if [[ -z "$IDENTITY" ]]; then
-  if security find-identity -v -p codesigning 2>/dev/null | grep -q "MioTerm Code Signing"; then
-    IDENTITY="MioTerm Code Signing"
-  fi
+# 用固定的自签名身份打包，避免每次重建都因 ad-hoc 签名的 cdhash 变化
+# 而让 macOS 重新弹出“输入钥匙串密码”的授权框。
+SIGN_KEYCHAIN="${MIOTERM_SIGNING_KEYCHAIN:-$HOME/Library/Keychains/mioterm-signing.keychain-db}"
+SIGN_PASSWORD_FILE="$HOME/Library/Application Support/MioTerm/signing/keychain-password"
+IDENTITY="${MIOTERM_SIGNING_IDENTITY:-MioTerm Code Signing}"
+
+if [[ ! -f "$SIGN_KEYCHAIN" ]]; then
+  "$ROOT/scripts/create-signing-identity.sh" >/dev/null
 fi
 
-if [[ -n "$IDENTITY" ]]; then
-  codesign --force --sign "$IDENTITY" --timestamp=none \
-    --entitlements "$ROOT/Resources/MioTerm.entitlements" "$APP" 2>/dev/null \
-    || codesign --force --sign "$IDENTITY" "$APP"
-else
+SIGNED=0
+if [[ -f "$SIGN_KEYCHAIN" && -f "$SIGN_PASSWORD_FILE" ]]; then
+  security unlock-keychain -p "$(cat "$SIGN_PASSWORD_FILE")" "$SIGN_KEYCHAIN" >/dev/null 2>&1 || true
+  # codesign 只会去钥匙串搜索列表里找身份：临时加上，签完立刻还原，
+  # 不给其他程序留下一个会弹解锁框的钥匙串。
+  ORIGINAL_KEYCHAINS=()
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line#\"}"
+    line="${line%\"}"
+    ORIGINAL_KEYCHAINS+=("$line")
+  done < <(security list-keychains -d user)
+  restore_keychains() {
+    security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" >/dev/null
+  }
+  trap restore_keychains EXIT
+  security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" "$SIGN_KEYCHAIN"
+  if codesign --force --sign "$IDENTITY" --keychain "$SIGN_KEYCHAIN" --timestamp=none "$APP" 2>/dev/null \
+    || codesign --force --sign "$IDENTITY" --keychain "$SIGN_KEYCHAIN" "$APP"; then
+    SIGNED=1
+  fi
+  restore_keychains
+  trap - EXIT
+fi
+
+if [[ "$SIGNED" -eq 0 ]]; then
   codesign --force --deep --sign - "$APP"
 fi
 

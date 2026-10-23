@@ -13,6 +13,7 @@ public enum AppPaths {
 
     public static var knownHostsFile: URL { supportDirectory.appendingPathComponent("known_hosts") }
     public static var hostsFile: URL { supportDirectory.appendingPathComponent("hosts.json") }
+    public static var commandsFile: URL { supportDirectory.appendingPathComponent("commands.json") }
     public static var settingsFile: URL { supportDirectory.appendingPathComponent("settings.json") }
     public static var logDirectory: URL { supportDirectory.appendingPathComponent("logs", isDirectory: true) }
     public static var askpassDirectory: URL { supportDirectory.appendingPathComponent("askpass", isDirectory: true) }

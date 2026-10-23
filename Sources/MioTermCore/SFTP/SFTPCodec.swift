@@ -122,8 +122,8 @@ extension SFTPReply {
             for _ in 0..<count {
                 // 顺序是硬规定：先文件名，再 ls -l 风格的长名，最后属性。
                 // 读反了会把整行属性串当文件名，拼出来的路径全都不存在。
-                let fileName = try reader.string()
-                let longName = try reader.string()
+                let fileName = try reader.stringLenient(field: "文件名")
+                let longName = try reader.stringLenient(field: "长名")
                 let attributes = try SFTPFileAttributes.decoding(&reader)
                 entries.append(SFTPDirectoryEntry(longName: longName, shortName: fileName, attributes: attributes))
             }

@@ -6,17 +6,6 @@ import MioTermCore
 /// 而侧栏、标签页、菜单三处都可能发起连接，逻辑不该重复三遍。
 @MainActor
 final class ConnectionCoordinator {
-    enum CoordinatorError: LocalizedError {
-        case transportUnimplemented(ConnectionProtocol)
-
-        var errorDescription: String? {
-            switch self {
-            case .transportUnimplemented(let kind):
-                return "\(kind.displayName) 连接将在后续阶段提供，当前版本只支持 SSH 与本地终端。"
-            }
-        }
-    }
-
     private let environment: AppEnvironment
     private let runner = ProcessRunner()
 
@@ -28,12 +17,7 @@ final class ConnectionCoordinator {
     /// 返回已启动的会话控制器；返回 nil 表示用户取消或出错，错误已经弹给用户。
     func open(host rawHost: HostProfile, in window: NSWindow?) async -> TerminalController? {
         let host = environment.hosts.host(id: rawHost.id) ?? rawHost
-        guard host.protocolKind.usesHostKey else {
-            AlertPresenter.fail(title: "暂不支持的连接类型",
-                                message: CoordinatorError.transportUnimplemented(host.protocolKind).localizedDescription,
-                                in: window)
-            return nil
-        }
+        guard host.protocolKind.usesHostKey else { return openByteStream(for: host, in: window) }
         do {
             guard try await ensureHostKeyTrusted(host: host, in: window) else { return nil }
             let launch = try SSHLaunchPlanner.terminalLaunch(
@@ -42,12 +26,7 @@ final class ConnectionCoordinator {
                 context: .live()
             )
             let controller = TerminalController(host: host, settings: environment.settings.settings)
-            controller.onStateChange = { [weak self] state in
-                if case .failed(let reason) = state {
-                    AlertPresenter.fail(title: "无法启动 \(host.displayName)", message: reason, in: window)
-                }
-                self?.environment.logger.info("会话 \(host.displayName) 状态：\(state.label)")
-            }
+            observe(controller, host: host, in: window)
             environment.register(controller)
             controller.start(launch)
             return controller
@@ -57,8 +36,48 @@ final class ConnectionCoordinator {
         }
     }
 
-    /// 只做认证与握手，不开 shell，对应 webterm 的“测试连接”。
+    /// 没有子进程可依托的连接：Telnet 走 TCP，串口走 termios，失败原因由会话打印在终端里。
+    private func openByteStream(for host: HostProfile, in window: NSWindow?) -> TerminalController? {
+        let stream: any TerminalStream
+        switch host.protocolKind {
+        case .telnet:
+            stream = TelnetStream(host: host.address,
+                                  port: host.port,
+                                  terminalType: host.terminalType,
+                                  connectTimeout: TimeInterval(max(1, host.connectTimeout)))
+        case .serial:
+            stream = SerialStream(configuration: host.serial)
+        case .ssh:
+            // SSH 有 OpenSSH 子进程可托管，不该走到这里。
+            AlertPresenter.fail(title: "连接 \(host.displayName) 失败",
+                                message: "SSH 会话应通过子进程启动，这里是内部错误。",
+                                in: window)
+            return nil
+        }
+        let controller = TerminalController(host: host, settings: environment.settings.settings)
+        observe(controller, host: host, in: window)
+        environment.register(controller)
+        controller.start(stream)
+        return controller
+    }
+
+    /// 会话状态统一登记：失败要弹窗，其余只记日志。
+    private func observe(_ controller: TerminalController, host: HostProfile, in window: NSWindow?) {
+        controller.onStateChange = { [weak self] state in
+            if case .failed(let reason) = state {
+                AlertPresenter.fail(title: "无法连接 \(host.displayName)", message: reason, in: window)
+            }
+            self?.environment.logger.info("会话 \(host.displayName) 状态：\(state.label)")
+        }
+    }
+
+    /// 只做认证与握手，对应 webterm 的“测试连接”。
+    /// Telnet 与串口没有认证可言，退化成连通性检查。
     func test(host: HostProfile, in window: NSWindow?) async {
+        guard host.protocolKind.usesHostKey else {
+            testTransport(host: host, in: window)
+            return
+        }
         do {
             let launch = try SSHLaunchPlanner.probeLaunch(
                 host: host,
@@ -83,6 +102,51 @@ final class ConnectionCoordinator {
             }
         } catch {
             AlertPresenter.fail(title: "测试连接失败", message: error.localizedDescription, in: window)
+        }
+    }
+
+    /// 不建会话的连通性检查：Telnet 探端口，串口只看设备在不在。
+    private func testTransport(host: HostProfile, in window: NSWindow?) {
+        switch host.protocolKind {
+        case .ssh:
+            break
+        case .serial:
+            let device = host.serial.device
+            Task {
+                // 只枚举、不打开：很多开发板在 DTR/RTS 跳变时复位，测试连接不该有副作用。
+                let present = await Task.detached(priority: .userInitiated) { SerialDevices.isAvailable(device) }.value
+                if present {
+                    AlertPresenter.notify(title: "\(host.displayName) 设备就绪",
+                                          message: "\(device) 已被系统识别。打开终端即可，测试不会占用设备。",
+                                          in: window)
+                } else {
+                    AlertPresenter.fail(title: "\(host.displayName) 找不到设备",
+                                        message: "\(device) 不在系统串口列表里，请检查连线与驱动后在表单里刷新设备列表。",
+                                        in: window)
+                }
+            }
+        case .telnet:
+            let address = host.address
+            let port = host.port
+            let timeout = TimeInterval(max(1, host.connectTimeout))
+            Task {
+                // 端口探测是阻塞调用，必须离开主线程；界面引用留在主线程。
+                let outcome = await Task.detached(priority: .userInitiated) { () -> String? in
+                    do {
+                        try TCPSocket.probe(host: address, port: port, timeout: timeout)
+                        return nil
+                    } catch {
+                        return error.localizedDescription
+                    }
+                }.value
+                if let outcome {
+                    AlertPresenter.fail(title: "\(host.displayName) 不可达", message: outcome, in: window)
+                } else {
+                    AlertPresenter.notify(title: "\(host.displayName) 端口可达",
+                                          message: "\(address):\(port) 能建立 TCP 连接。登录请在终端里完成。",
+                                          in: window)
+                }
+            }
         }
     }
 
