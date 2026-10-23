@@ -52,7 +52,8 @@ final class HostSidebarViewController: NSViewController {
     private let emptyLabel = NSTextField(labelWithString: "")
     private var rows: [Row] = []
     private var collapsedGroups: Set<String> = []
-    private var isRestoringExpansion = false
+    /// 搜索时分组默认全部展开，收起动作单独记一份，退出搜索后恢复原状态。
+    private var searchCollapsedGroups: Set<String> = []
 
     init(repository: HostRepository) {
         self.repository = repository
@@ -78,6 +79,7 @@ final class HostSidebarViewController: NSViewController {
         outlineView.doubleAction = #selector(doubleClicked(_:))
         outlineView.menu = buildMenu()
         outlineView.isGroupRow = { item in (item as? Row)?.groupName != nil }
+        outlineView.onToggleGroup = { [weak self] item in self?.toggleGroup(item) }
 
         let column = NSTableColumn(identifier: hostIdentifier)
         column.title = "主机"
@@ -94,8 +96,8 @@ final class HostSidebarViewController: NSViewController {
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
         searchField.sendsSearchStringImmediately = true
-        searchField.controlSize = .small
-        searchField.font = .systemFont(ofSize: 12)
+        searchField.controlSize = .large
+        searchField.font = .systemFont(ofSize: 13)
 
         bottomBar.orientation = .horizontal
         bottomBar.spacing = 6
@@ -116,11 +118,11 @@ final class HostSidebarViewController: NSViewController {
         NSLayoutConstraint.activate([
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             searchField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 11),
 
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 9),
             scrollView.bottomAnchor.constraint(equalTo: footerDivider.topAnchor),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
@@ -180,19 +182,57 @@ final class HostSidebarViewController: NSViewController {
 
     func reload() {
         let selectedID = selectedHost?.id
-        let query = searchField.stringValue
-        rows = repository.groups(matching: query).map { .group(name: $0.name, hosts: $0.hosts) }
-        outlineView.reloadData()
-        restoreExpansionState(forceExpand: !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        rebuildRows()
         restoreSelection(id: selectedID)
+    }
 
-        let hosts = rows.reduce(0) { partial, row in
-            if case .group(_, let hosts) = row { return partial + hosts.count }
-            return partial
+    /// 展开状态完全由自己管：分组收起时干脆不把它的主机放进列表。
+    /// 交给 NSOutlineView 的 expand/collapse 不行——隐藏了系统箭头后
+    /// （shouldShowOutlineCellForItem 返回 false），collapseItem 会静默失效。
+    private func rebuildRows() {
+        let query = searchField.stringValue
+        let groups = repository.groups(matching: query)
+        var visible: [Row] = []
+        for group in groups {
+            visible.append(.group(name: group.name, hosts: group.hosts))
+            if isExpanded(group.name) {
+                visible.append(contentsOf: group.hosts.map { Row.host($0) })
+            }
         }
+        rows = visible
+        outlineView.reloadData()
+
+        let hosts = groups.reduce(0) { $0 + $1.hosts.count }
         countLabel.stringValue = "\(hosts) 台主机"
         emptyLabel.isHidden = hosts > 0
         emptyLabel.stringValue = query.isEmpty ? "还没有主机\n点左下角 + 添加一台" : "没有匹配的主机"
+    }
+
+    private var isSearching: Bool {
+        !searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func isExpanded(_ name: String) -> Bool {
+        if isSearching { return !searchCollapsedGroups.contains(name) }
+        return !collapsedGroups.contains(name)
+    }
+
+    private func toggleGroup(_ item: Any) {
+        guard let name = (item as? Row)?.groupName else { return }
+        let selectedID = selectedHost?.id
+        if isSearching {
+            if searchCollapsedGroups.contains(name) {
+                searchCollapsedGroups.remove(name)
+            } else {
+                searchCollapsedGroups.insert(name)
+            }
+        } else if collapsedGroups.contains(name) {
+            collapsedGroups.remove(name)
+        } else {
+            collapsedGroups.insert(name)
+        }
+        rebuildRows()
+        restoreSelection(id: selectedID)
     }
 
     /// 行内标记的底色是图层色，切换深浅外观后要重配一遍。
@@ -205,23 +245,6 @@ final class HostSidebarViewController: NSViewController {
         (outlineView.item(atRow: outlineView.selectedRow) as? Row)?.host
     }
 
-    private func restoreExpansionState(forceExpand: Bool) {
-        isRestoringExpansion = true
-        defer { isRestoringExpansion = false }
-        var groupItems: [(Any, String)] = []
-        for row in 0..<outlineView.numberOfRows {
-            guard let item = outlineView.item(atRow: row), let name = (item as? Row)?.groupName else { continue }
-            groupItems.append((item, name))
-        }
-        for (item, name) in groupItems {
-            if forceExpand || !collapsedGroups.contains(name) {
-                outlineView.expandItem(item)
-            } else {
-                outlineView.collapseItem(item)
-            }
-        }
-    }
-
     private func restoreSelection(id: String?) {
         guard let id else { return }
         for row in 0..<outlineView.numberOfRows {
@@ -231,20 +254,12 @@ final class HostSidebarViewController: NSViewController {
         }
     }
 
-    /// 展开/收起后记下来：重新载入主机列表时保持用户当前的浏览状态。
-    private func captureExpansionState() {
-        guard !isRestoringExpansion else { return }
-        for row in 0..<outlineView.numberOfRows {
-            guard let item = outlineView.item(atRow: row), let name = (item as? Row)?.groupName else { continue }
-            if outlineView.isItemExpanded(item) {
-                collapsedGroups.remove(name)
-            } else {
-                collapsedGroups.insert(name)
-            }
-        }
+    @objc private func searchChanged(_ sender: NSSearchField) {
+        let selectedID = selectedHost?.id
+        searchCollapsedGroups.removeAll()
+        rebuildRows()
+        restoreSelection(id: selectedID)
     }
-
-    @objc private func searchChanged(_ sender: NSSearchField) { reload() }
 
     @objc private func doubleClicked(_ sender: NSOutlineView) {
         guard let host = selectedHost else { return }
@@ -325,10 +340,9 @@ final class HostSidebarViewController: NSViewController {
 // MARK: - NSOutlineViewDataSource / Delegate
 
 extension HostSidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate {
+    /// 列表是扁平的：分组与它的主机都作为顶层行出现，展开与否由 rebuildRows 决定。
     private func children(of item: Any?) -> [Row] {
-        guard let row = item as? Row else { return rows }
-        if case .group(_, let hosts) = row { return hosts.map { Row.host($0) } }
-        return []
+        item == nil ? rows : []
     }
 
     private func isGroup(_ item: Any?) -> Bool {
@@ -344,7 +358,7 @@ extension HostSidebarViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        isGroup(item)
+        false
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
@@ -364,30 +378,6 @@ extension HostSidebarViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
         SidebarRowView()
     }
 
-    func outlineViewItemDidExpand(_ notification: Notification) {
-        captureExpansionState()
-        refreshGroupChevron(notification)
-        outlineView.window?.invalidateCursorRects(for: outlineView)
-    }
-
-    func outlineViewItemDidCollapse(_ notification: Notification) {
-        captureExpansionState()
-        refreshGroupChevron(notification)
-        outlineView.window?.invalidateCursorRects(for: outlineView)
-    }
-
-    /// 展开状态变了只重画那一行，让箭头跟着转向；
-    /// 直接 reloadItem 在收起时会干扰 outline view 自己的状态机。
-    private func refreshGroupChevron(_ notification: Notification) {
-        guard let item = notification.userInfo?["NSObject"] else { return }
-        let row = outlineView.row(forItem: item)
-        guard row >= 0 else { return }
-        outlineView.reloadData(
-            forRowIndexes: IndexSet(integer: row),
-            columnIndexes: IndexSet(integersIn: 0..<max(1, outlineView.numberOfColumns))
-        )
-    }
-
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let row = item as? Row else { return nil }
         switch row {
@@ -396,7 +386,7 @@ extension HostSidebarViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
             cell.configure(
                 name: name,
                 count: hosts.count,
-                expanded: outlineView.isItemExpanded(item)
+                expanded: isExpanded(name)
             )
             return cell
         case .host(let host):
@@ -425,18 +415,17 @@ extension HostSidebarViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
 @MainActor
 final class HostOutlineView: NSOutlineView {
     var isGroupRow: ((Any) -> Bool)?
+    /// 分组行不交给 NSOutlineView 展开：收起系统箭头后它的状态机就不可用了，
+    /// 改由控制器重建可见行。
+    var onToggleGroup: ((Any) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let clicked = row(at: point)
         if clicked >= 0, let item = item(atRow: clicked), isGroupRow?(item) == true {
-            // 只认第一下：双击的第二下如果交给 super，系统会再把分组展开回去。
+            // 只认第一下：双击的第二下不再重复切换。
             if event.clickCount == 1 {
-                if isItemExpanded(item) {
-                    collapseItem(item)
-                } else {
-                    expandItem(item)
-                }
+                onToggleGroup?(item)
                 window?.invalidateCursorRects(for: self)
             }
             return
