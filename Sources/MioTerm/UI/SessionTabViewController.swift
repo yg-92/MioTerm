@@ -23,9 +23,6 @@ final class SessionTabViewController: NSViewController {
 
     private var contentTopToBar: NSLayoutConstraint!
     private var contentTopToRoot: NSLayoutConstraint!
-    private var contentBottomToBar: NSLayoutConstraint!
-    private var contentBottomToRoot: NSLayoutConstraint!
-    private var isStatusBarVisible = false
 
     var selectedController: TerminalController? {
         guard let selectedIndex, order.indices.contains(selectedIndex) else { return nil }
@@ -54,8 +51,6 @@ final class SessionTabViewController: NSViewController {
 
         contentTopToBar = contentView.topAnchor.constraint(equalTo: tabBar.bottomAnchor)
         contentTopToRoot = contentView.topAnchor.constraint(equalTo: root.topAnchor)
-        contentBottomToBar = contentView.bottomAnchor.constraint(equalTo: statusBar.topAnchor)
-        contentBottomToRoot = contentView.bottomAnchor.constraint(equalTo: root.bottomAnchor)
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: root.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -63,6 +58,7 @@ final class SessionTabViewController: NSViewController {
             tabBar.heightAnchor.constraint(equalToConstant: SessionTabBarView.height),
             contentView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             contentView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            contentView.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
             statusBar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -70,9 +66,6 @@ final class SessionTabViewController: NSViewController {
         ])
         contentTopToBar.isActive = false
         contentTopToRoot.isActive = true
-        contentBottomToBar.isActive = false
-        contentBottomToRoot.isActive = true
-        statusBar.isHidden = true
 
         tabBar.onSelect = { [weak self] index in self?.select(index) }
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
@@ -215,17 +208,9 @@ final class SessionTabViewController: NSViewController {
         updateStatusBar()
     }
 
-    /// 脚部状态条只在选中会话时出现；回到主页就收起，让欢迎页保持完整。
+    /// 脚部常驻，主页上只留右下角的版本号；选中会话后补上连接状态、主机与目录。
     private func updateStatusBar() {
-        let controller = selectedController
-        let visible = controller != nil
-        if visible != isStatusBarVisible {
-            isStatusBarVisible = visible
-            statusBar.isHidden = !visible
-            contentBottomToBar.isActive = visible
-            contentBottomToRoot.isActive = !visible
-        }
-        statusBar.update(controller)
+        statusBar.update(selectedController)
     }
 
     private func newLocalTerminal() {
@@ -333,7 +318,11 @@ final class SessionTabBarView: NSView {
         }
 
         leftStack.orientation = .horizontal
+        leftStack.alignment = .centerY
+        leftStack.spacing = 4
         leftStack.translatesAutoresizingMaskIntoConstraints = false
+        // 主页固定在标签栏最左侧：标签再多、滚得再远，回主页的入口始终在第一格。
+        leftStack.addArrangedSubview(homeChip)
         leftStack.addArrangedSubview(leftScrollButton)
         addSubview(leftStack)
 
@@ -349,7 +338,6 @@ final class SessionTabBarView: NSView {
         documentView.addSubview(stack)
 
         homeChip.onSelect = { [weak self] in self?.onSelect?(nil) }
-        stack.addArrangedSubview(homeChip)
 
         plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "新建本地终端")
         plusButton.isBordered = false
@@ -375,12 +363,12 @@ final class SessionTabBarView: NSView {
         addSubview(separator)
 
         NSLayoutConstraint.activate([
-            leftStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            leftStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             leftStack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
             leftScrollButton.widthAnchor.constraint(equalToConstant: 22),
             leftScrollButton.heightAnchor.constraint(equalToConstant: 26),
 
-            scrollView.leadingAnchor.constraint(equalTo: leftStack.trailingAnchor, constant: 2),
+            scrollView.leadingAnchor.constraint(equalTo: leftStack.trailingAnchor, constant: 4),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollView.trailingAnchor.constraint(equalTo: rightStack.leadingAnchor, constant: -6),
@@ -402,7 +390,7 @@ final class SessionTabBarView: NSView {
             documentView.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor),
             documentView.heightAnchor.constraint(equalTo: scrollView.contentView.heightAnchor),
 
-            stack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 8),
+            stack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 4),
             stack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 7),
             stack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -7),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: documentView.trailingAnchor, constant: -8),
@@ -423,15 +411,27 @@ final class SessionTabBarView: NSView {
     }
 
     /// 只在溢出时露出两端箭头；不溢出就把宽度还给标签。
+    /// 判定用“箭头收起后”的宽度：否则箭头一旦出现，可视区变窄，刚够放下的标签
+    /// 也会一直判成溢出，箭头再也收不回去。
     private func updateScrollButtons() {
         let visible = scrollView.contentView.bounds.width
         let needed = stack.fittingSize.width + 16
-        let scrollable = needed > visible + 0.5
+        let arrowRoom: CGFloat = 22 + 4 + 22 + 6
+        let room = visible + (leftScrollButton.isHidden ? 0 : arrowRoom)
+        let scrollable = needed > room + 0.5
         if leftScrollButton.isHidden == scrollable {
             leftScrollButton.isHidden = !scrollable
             rightScrollButton.isHidden = !scrollable
         }
-        guard scrollable else { return }
+        guard scrollable else {
+            // 关掉标签后可能不再溢出，滚过头的位移要收回，否则会剩一片空白。
+            let clip = scrollView.contentView
+            if clip.bounds.origin.x != 0 {
+                clip.scroll(to: .zero)
+                scrollView.reflectScrolledClipView(clip)
+            }
+            return
+        }
         let maxX = max(0, (scrollView.documentView?.frame.width ?? 0) - visible)
         let x = scrollView.contentView.bounds.origin.x
         leftScrollButton.isEnabled = x > 0.5
@@ -458,7 +458,7 @@ final class SessionTabBarView: NSView {
             context.allowsImplicitAnimation = true
             clip.animator().setBoundsOrigin(NSPoint(x: target, y: 0))
         } completionHandler: { [weak self] in
-            self?.updateScrollButtons()
+            MainActor.assumeIsolated { self?.updateScrollButtons() }
         }
     }
 
@@ -778,7 +778,7 @@ final class TerminalModeBadge: NSView {
     }
 }
 
-/// 终端脚部状态条：连接状态、主机身份与当前目录。
+/// 终端脚部状态条：连接状态、主机身份与当前目录，右下角固定显示版本号。
 /// 顺带给终端内容与窗口底边之间留出一条分界，命令不再直接顶到边上。
 @MainActor
 final class TerminalStatusBarView: NSView {
@@ -790,6 +790,9 @@ final class TerminalStatusBarView: NSView {
     private let identityLabel = NSTextField(labelWithString: "")
     private let pathIcon = NSImageView()
     private let pathLabel = NSTextField(labelWithString: "")
+    private let versionLabel = NSTextField(labelWithString: "")
+    private var pathTrailingToVersion: NSLayoutConstraint!
+    private var pathTrailingToEdge: NSLayoutConstraint!
     private var stateColor: NSColor = Theme.textTertiary
     private var hasDirectory = false
 
@@ -831,6 +834,17 @@ final class TerminalStatusBarView: NSView {
         pathLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(pathLabel)
 
+        versionLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
+        versionLabel.setContentHuggingPriority(.required, for: .horizontal)
+        versionLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        versionLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(versionLabel)
+
+        pathTrailingToVersion = pathLabel.trailingAnchor.constraint(
+            equalTo: versionLabel.leadingAnchor, constant: -14
+        )
+        pathTrailingToEdge = pathLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
+
         NSLayoutConstraint.activate([
             topBorder.topAnchor.constraint(equalTo: topAnchor),
             topBorder.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -853,17 +867,44 @@ final class TerminalStatusBarView: NSView {
             pathIcon.widthAnchor.constraint(equalToConstant: 11),
             pathIcon.heightAnchor.constraint(equalToConstant: 11),
 
-            pathLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             pathLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             pathLabel.leadingAnchor.constraint(greaterThanOrEqualTo: identityLabel.trailingAnchor, constant: 16),
+
+            versionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            versionLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        configureVersion()
+        update(nil)
         refreshAppearance()
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
 
+    /// 版本号取自 app bundle；直接跑裸可执行文件时没有 Info.plist，就把这一格收起来。
+    private func configureVersion() {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? ""
+        let build = info?["CFBundleVersion"] as? String ?? ""
+        let hasVersion = !short.isEmpty
+        versionLabel.isHidden = !hasVersion
+        versionLabel.stringValue = hasVersion ? "v\(short)" : ""
+        versionLabel.toolTip = hasVersion
+            ? (build.isEmpty ? "MioTerm \(short)" : "MioTerm \(short)（build \(build)）")
+            : nil
+        pathTrailingToVersion.isActive = hasVersion
+        pathTrailingToEdge.isActive = !hasVersion
+    }
+
     func update(_ controller: TerminalController?) {
-        guard let controller else { return }
+        let hasSession = controller != nil
+        for view in [dot, stateLabel, identityLabel, pathIcon, pathLabel] {
+            view.isHidden = !hasSession
+        }
+        guard let controller else {
+            toolTip = nil
+            applyColors()
+            return
+        }
         stateColor = Theme.color(for: controller.state)
         stateLabel.stringValue = controller.state.label
 
@@ -888,6 +929,7 @@ final class TerminalStatusBarView: NSView {
         identityLabel.textColor = Theme.textSecondary
         pathIcon.contentTintColor = Theme.textTertiary
         pathLabel.textColor = hasDirectory ? Theme.textSecondary : Theme.textTertiary
+        versionLabel.textColor = Theme.textTertiary
     }
 
     func refreshAppearance() {
