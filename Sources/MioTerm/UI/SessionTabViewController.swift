@@ -245,6 +245,24 @@ final class SessionTabViewController: NSViewController {
 
 // MARK: - 标签栏
 
+/// 标签栏只能横向滚动，而普通鼠标滚轮只产生纵向增量，NSScrollView 会直接忽略，
+/// 标签一多后半排就永远够不着。这里把主导轴的增量换成横向位移。
+@MainActor
+private final class TabBarScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        let clip = contentView
+        let maxX = max(0, (documentView?.frame.width ?? 0) - clip.bounds.width)
+        guard maxX > 0 else { return super.scrollWheel(with: event) }
+        let delta = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY)
+            ? event.scrollingDeltaX
+            : event.scrollingDeltaY
+        guard delta != 0 else { return super.scrollWheel(with: event) }
+        let x = min(max(clip.bounds.origin.x - delta, 0), maxX)
+        clip.scroll(to: NSPoint(x: x, y: 0))
+        reflectScrolledClipView(clip)
+    }
+}
+
 /// 顶部标签栏：主页 + 会话标签 + 新建按钮。标签多时可以横向滚动。
 @MainActor
 final class SessionTabBarView: NSView {
@@ -260,7 +278,7 @@ final class SessionTabBarView: NSView {
     var onClose: ((Int) -> Void)?
     var onNew: (() -> Void)?
 
-    private let scrollView = NSScrollView()
+    private let scrollView = TabBarScrollView()
     private let documentView = NSView()
     private let stack = NSStackView()
     private let plusButton = NSButton()
@@ -285,7 +303,9 @@ final class SessionTabBarView: NSView {
 
     private func build() {
         scrollView.drawsBackground = false
-        scrollView.hasHorizontalScroller = false
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
         scrollView.hasVerticalScroller = false
         scrollView.horizontalScrollElasticity = .allowed
         scrollView.verticalScrollElasticity = .none
