@@ -115,6 +115,19 @@ struct CommandLibraryStoreTests {
         #expect(store.ignoredCommands(scope: "h2").isEmpty)
     }
 
+    @Test("忽略命中但没有历史可清时，不重复落盘也不刷新面板")
+    func ignoredCommandWithoutHistoryDoesNotRewrite() throws {
+        let (store, url, _) = makeStore(name: "ignore-idle")
+        store.addIgnore("passwd", scope: "h1")
+        var changes = 0
+        store.onChange = { changes += 1 }
+        let before = try Data(contentsOf: url)
+
+        #expect(!store.record(scope: "h1", command: "passwd"))
+        #expect(changes == 0)
+        #expect(try Data(contentsOf: url) == before)
+    }
+
     @Test("全局忽略挡住所有作用域")
     func globalIgnoreAppliesEverywhere() {
         let (store, _, _) = makeStore(name: "global-ignore")

@@ -139,9 +139,11 @@ public final class CommandLibraryStore {
     public func record(scope: String, command raw: String, at date: Date = Date()) -> Bool {
         guard let command = Self.normalize(raw) else { return false }
         if isIgnored(command, scope: scope) {
-            dropHistory(for: command)
-            persist()
-            onChange?()
+            // 忽略命中是常态（例如反复敲 `ls`），没有历史可清时不要每次都重写文件、刷新面板。
+            if dropHistory(for: command) {
+                persist()
+                onChange?()
+            }
             return false
         }
         var byCommand = entries[scope] ?? [:]
@@ -303,11 +305,15 @@ public final class CommandLibraryStore {
     }
 
     /// 命中忽略就把它在所有作用域里的历史清掉：留着会变成一条再也更新不了的僵尸记录。
-    private func dropHistory(for command: String) {
+    /// 返回是否真的删掉了东西，调用方据此决定要不要落盘。
+    @discardableResult
+    private func dropHistory(for command: String) -> Bool {
+        var changed = false
         for scope in Array(entries.keys) {
-            entries[scope]?.removeValue(forKey: command)
+            if entries[scope]?.removeValue(forKey: command) != nil { changed = true }
             if entries[scope]?.isEmpty == true { entries.removeValue(forKey: scope) }
         }
+        return changed
     }
 
     // MARK: - 规范化与落盘
