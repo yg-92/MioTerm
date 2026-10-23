@@ -77,6 +77,10 @@ final class SFTPBrowserViewController: NSViewController {
     private let followToggle = NSButton(checkboxWithTitle: "跟随", target: nil, action: nil)
     private let retryButton = NSButton()
     private let statusLabel = NSTextField(labelWithString: "未选择 SSH 会话")
+    /// 远端拒绝 SFTP 子系统时，在树的位置给出说明；这种情况不该弹错误框。
+    private let noticeStack = NSStackView()
+    private let noticeTitle = NSTextField(labelWithString: "服务器未启用 SFTP 文件服务")
+    private let noticeDetail = NSTextField(wrappingLabelWithString: "")
     private let transferTable = NSTableView()
     private let transferScroll = NSScrollView()
 
@@ -104,6 +108,7 @@ final class SFTPBrowserViewController: NSViewController {
         configureChrome()
         configurePathBar()
         configureTables()
+        configureNotice()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(settingsDidChange),
@@ -167,6 +172,13 @@ final class SFTPBrowserViewController: NSViewController {
             transferScroll.heightAnchor.constraint(equalToConstant: 128),
         ])
         treeScroll.setContentHuggingPriority(.init(1), for: .vertical)
+        root.addSubview(noticeStack)
+        NSLayoutConstraint.activate([
+            noticeStack.centerXAnchor.constraint(equalTo: treeScroll.centerXAnchor),
+            noticeStack.centerYAnchor.constraint(equalTo: treeScroll.centerYAnchor, constant: -6),
+            noticeStack.leadingAnchor.constraint(greaterThanOrEqualTo: treeScroll.leadingAnchor, constant: 16),
+            noticeStack.trailingAnchor.constraint(lessThanOrEqualTo: treeScroll.trailingAnchor, constant: -16),
+        ])
         view = root
     }
 
@@ -207,6 +219,51 @@ final class SFTPBrowserViewController: NSViewController {
         retryButton.target = self
         retryButton.action = #selector(reconnectChannel)
         retryButton.isHidden = true
+    }
+
+    private func configureNotice() {
+        noticeStack.orientation = .vertical
+        noticeStack.alignment = .centerX
+        noticeStack.spacing = 8
+        noticeStack.isHidden = true
+        noticeStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: "externaldrive.badge.questionmark", accessibilityDescription: nil)
+        icon.contentTintColor = Theme.textTertiary
+        icon.imageScaling = .scaleProportionallyDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        noticeTitle.font = .systemFont(ofSize: 12, weight: .semibold)
+        noticeTitle.textColor = Theme.textPrimary
+        noticeTitle.alignment = .center
+
+        noticeDetail.stringValue = """
+        当前服务器拒绝了 SFTP 子系统请求，文件树无法读取。
+        你仍可以在右侧终端里直接操作文件。
+
+        若需要文件面板，请在服务器上启用 sftp-server
+        （OpenSSH 通常自带，配置 Subsystem sftp 即可），
+        然后点状态行的「重试」。
+        """
+        noticeDetail.font = .systemFont(ofSize: 11)
+        noticeDetail.textColor = Theme.textSecondary
+        noticeDetail.alignment = .center
+        noticeDetail.maximumNumberOfLines = 0
+        noticeDetail.translatesAutoresizingMaskIntoConstraints = false
+
+        noticeStack.addArrangedSubview(icon)
+        noticeStack.addArrangedSubview(noticeTitle)
+        noticeStack.addArrangedSubview(noticeDetail)
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 28),
+            icon.heightAnchor.constraint(equalToConstant: 28),
+            noticeDetail.widthAnchor.constraint(lessThanOrEqualToConstant: 250),
+        ])
+    }
+
+    private func setNoticeVisible(_ visible: Bool) {
+        noticeStack.isHidden = !visible
     }
 
     private func tooltip(for button: NSButton) -> String {
@@ -635,6 +692,7 @@ final class SFTPBrowserViewController: NSViewController {
         switch next.state {
         case .ready: requestReload()
         case .connecting: break
+        case .unsupported: break
         default: Task { await self.connectAndBrowse() }
         }
     }
@@ -658,10 +716,12 @@ final class SFTPBrowserViewController: NSViewController {
         renderBreadcrumbs(nil)
         statusLabel.stringValue = status
         retryButton.isHidden = true
+        setNoticeVisible(false)
         updateControls()
     }
 
     private func render(state: SFTPSession.State) {
+        setNoticeVisible(false)
         switch state {
         case .closed: statusLabel.stringValue = "未连接"
         case .connecting: statusLabel.stringValue = "正在打开文件通道…"
@@ -674,6 +734,17 @@ final class SFTPBrowserViewController: NSViewController {
             } else {
                 drainListing()
             }
+        case .unsupported:
+            // 服务器拒绝 SFTP 不是异常：清掉可能残留的旧树，原地给出说明，
+            // 不弹错误框，也不把目标路径和传输队列留在半成品状态。
+            roots = []
+            currentDirectory = nil
+            listingTarget = nil
+            outlineView.reloadData()
+            renderBreadcrumbs(nil)
+            clearTransfers()
+            statusLabel.stringValue = "文件通道不可用"
+            setNoticeVisible(true)
         case .failed(let reason): statusLabel.stringValue = "连接失败：\(reason)"
         }
         retryButton.isHidden = !state.isFailed
@@ -711,6 +782,7 @@ final class SFTPBrowserViewController: NSViewController {
                 let client = try await session.ensureClient()
                 requestListing(try await client.realpath(raw))
             } catch {
+                guard session.state != .unsupported else { return }
                 AlertPresenter.fail(title: "打开目录失败", message: error.localizedDescription, in: view.window)
             }
         }
@@ -722,6 +794,8 @@ final class SFTPBrowserViewController: NSViewController {
             let client = try await session.ensureClient()
             requestListing(try await client.realpath(startPath(for: session.host)))
         } catch {
+            // “服务器没开 SFTP”已经在树的位置说明了，不必再弹一个错误框。
+            guard session?.state != .unsupported else { return }
             AlertPresenter.fail(title: "打开文件面板失败", message: error.localizedDescription, in: view.window)
         }
     }

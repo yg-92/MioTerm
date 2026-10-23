@@ -59,6 +59,31 @@ public actor SFTPConnection {
         /// 握手超时要和“连不上”区别对待：前者多半是远端没起 sftp-server。
         public var isHandshakeTimeout: Bool { self == .handshakeTimeout }
 
+        /// 远端明确拒绝子系统时，面板应该提示“未启用 SFTP”，
+        /// 而不是把 ssh 的原始 stderr 当异常弹出来。
+        public var indicatesMissingSubsystem: Bool {
+            guard case .closed(let reason) = self else { return false }
+            return Self.looksLikeMissingSubsystem(reason)
+        }
+
+        /// ssh 拒绝 `-s sftp` 的几种说法：服务器没配 Subsystem，或 sftp-server 不存在。
+        public static func looksLikeMissingSubsystem(_ reason: String) -> Bool {
+            let text = reason.lowercased()
+            let direct = [
+                "subsystem request failed",
+                "administratively prohibited",
+                "exec request failed",
+                "unknown subsystem",
+                "subsystem not found",
+                "subsystem 'sftp' not found",
+                "sftp-server: not found",
+                "sftp-server: no such file",
+            ]
+            if direct.contains(where: { text.contains($0) }) { return true }
+            return text.contains("sftp-server")
+                && (text.contains("not found") || text.contains("no such file"))
+        }
+
         public var errorDescription: String? {
             switch self {
             case .closed(let reason): return reason.isEmpty ? "SFTP 连接已关闭" : "SFTP 连接已关闭：\(reason)"

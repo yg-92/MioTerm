@@ -11,6 +11,9 @@ final class SFTPSession {
         case closed
         case connecting
         case ready
+        /// 远端没有可用的 SFTP 子系统。这是配置问题，不是网络故障，
+        /// 面板应当提示原因而不是当异常处理。
+        case unsupported
         case failed(String)
 
         var label: String {
@@ -18,14 +21,17 @@ final class SFTPSession {
             case .closed: return "未连接"
             case .connecting: return "连接中"
             case .ready: return "已连接"
+            case .unsupported: return "服务器未启用 SFTP"
             case .failed: return "连接失败"
             }
         }
 
         /// 带关联值的失败态没法直接 == 比较，面板靠它决定要不要给“重试”。
         var isFailed: Bool {
-            if case .failed = self { return true }
-            return false
+            switch self {
+            case .failed, .unsupported: return true
+            default: return false
+            }
         }
     }
 
@@ -86,9 +92,24 @@ final class SFTPSession {
             return client
         } catch {
             attempt = nil
-            state = .failed(error.localizedDescription)
+            if Self.indicatesMissingSubsystem(error) {
+                environment.logger.warning("SFTP 通道 \(host.displayName) 未启用子系统：\(error.localizedDescription)")
+                state = .unsupported
+            } else {
+                state = .failed(error.localizedDescription)
+            }
             throw error
         }
+    }
+
+    private static func indicatesMissingSubsystem(_ error: Error) -> Bool {
+        if let connection = error as? SFTPConnection.ConnectionError {
+            return connection.indicatesMissingSubsystem
+        }
+        if let session = error as? SessionError, case .notSupported = session {
+            return true
+        }
+        return false
     }
 
     private func makeTransfers(_ client: SFTPClient) -> SFTPTransferCoordinator {
