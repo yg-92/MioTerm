@@ -3,7 +3,7 @@ import MioTermCore
 
 /// 主窗口：工具栏 + 工作区。窗口关闭只断开当前会话，不影响其它窗口，
 /// 因此这里不主动 terminate 应用。
-/// 工具栏跟着右侧内容换：看终端时是“主页 / 文件树”，
+/// 工具栏跟着右侧内容换：看终端时是“主页”，
 /// 回到主页时才是“连接 / 新增主机”，避免在会话里点不到有用的动作。
 @MainActor
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
@@ -14,7 +14,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private static let newHost = NSToolbarItem.Identifier("mio.newHost")
     private static let preferences = NSToolbarItem.Identifier("mio.preferences")
     private static let toggleSidebar = NSToolbarItem.Identifier("mio.toggleSidebar")
-    private static let filePanel = NSToolbarItem.Identifier("mio.filePanel")
+    private static let appIcon = NSToolbarItem.Identifier("mio.appIcon")
     private var showingSession = false
 
     convenience init() {
@@ -100,8 +100,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             toolbar.removeItem(at: 0)
         }
         let identifiers: [NSToolbarItem.Identifier] = showSession
-            ? [Self.toggleSidebar, Self.home, Self.filePanel, .flexibleSpace, Self.newTab, Self.preferences]
-            : [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences]
+            ? [Self.toggleSidebar, Self.home, .flexibleSpace, Self.newTab, Self.preferences, Self.appIcon]
+            : [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences, Self.appIcon]
         for (index, identifier) in identifiers.enumerated() {
             toolbar.insertItem(withItemIdentifier: identifier, at: index)
         }
@@ -125,11 +125,30 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             let item = paletteItem(itemIdentifier, symbol: "sidebar.left", label: "显示/隐藏侧栏")
             item.action = #selector(NSSplitViewController.toggleSidebar(_:))
             return item
-        case Self.filePanel:
-            return button(itemIdentifier, symbol: "folder", label: "文件树", action: #selector(WorkspaceViewController.showFilePanel(_:)))
+        case Self.appIcon:
+            return brandItem(itemIdentifier)
         default:
             return nil
         }
+    }
+
+    /// 右上角的品牌图标只作标识，不参与点击与键盘导航。
+    private func brandItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        // 复制一份再改尺寸：applicationIconImage 是全局对象，直接改会连带影响 Dock 与关于面板。
+        let icon = NSApp.applicationIconImage?.copy() as? NSImage
+        icon?.size = NSSize(width: 20, height: 20)
+        let imageView = NSImageView()
+        imageView.image = icon
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.setFrameSize(NSSize(width: 20, height: 20))
+        item.view = imageView
+        item.label = "MioTerm"
+        item.paletteLabel = "MioTerm"
+        item.toolTip = "MioTerm"
+        item.isEnabled = false
+        item.autovalidates = false
+        return item
     }
 
     private func button(_ identifier: NSToolbarItem.Identifier, symbol: String, label: String, action: Selector) -> NSToolbarItem {
@@ -149,10 +168,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences]
+        [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences, Self.appIcon]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.home, Self.filePanel, Self.newTab, Self.connect, Self.newHost, Self.preferences, .space, .flexibleSpace]
+        [Self.toggleSidebar, Self.home, Self.newTab, Self.connect, Self.newHost, Self.preferences, Self.appIcon, .space, .flexibleSpace]
     }
 }

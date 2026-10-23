@@ -15,7 +15,6 @@ final class SidePanelViewController: NSViewController {
     let commands = CommandLibraryViewController()
 
     private let switcher = CapsuleSegmentedView(titles: ["主机", "文件", "命令"])
-    private let brand = NSTextField(labelWithString: "MIOTERM")
     private let content = ContainerViewController()
     private let divider = NSView()
     private var autoSwitchedFor: UUID?
@@ -32,11 +31,6 @@ final class SidePanelViewController: NSViewController {
         switcher.setEnabled(false, at: Mode.files.rawValue)
         switcher.translatesAutoresizingMaskIntoConstraints = false
 
-        brand.font = .systemFont(ofSize: 10, weight: .semibold)
-        brand.textColor = Theme.textTertiary
-        applyBrandStyle()
-        brand.translatesAutoresizingMaskIntoConstraints = false
-
         divider.wantsLayer = true
         divider.layer?.backgroundColor = Theme.layerColor(Theme.border, for: divider)
         divider.translatesAutoresizingMaskIntoConstraints = false
@@ -45,16 +39,11 @@ final class SidePanelViewController: NSViewController {
         let contentRoot = content.view
         contentRoot.translatesAutoresizingMaskIntoConstraints = false
 
-        root.addSubview(brand)
         root.addSubview(switcher)
         root.addSubview(contentRoot)
         root.addSubview(divider)
         NSLayoutConstraint.activate([
-            brand.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
-            brand.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            brand.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -14),
-
-            switcher.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 9),
+            switcher.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
             switcher.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             // 自绘控件没有 intrinsicContentSize，必须把宽度钉死；
             // 只用 lessThanOrEqual 时宽度是二义的，布局偶尔会把整条切换器压成 0。
@@ -128,19 +117,6 @@ final class SidePanelViewController: NSViewController {
 
     private func refreshAppearance() {
         divider.layer?.backgroundColor = Theme.layerColor(Theme.border, for: divider)
-        applyBrandStyle()
-    }
-
-    /// 富文本里的颜色在创建时固化，外观切换后要按当前主题重建。
-    private func applyBrandStyle() {
-        brand.attributedStringValue = NSAttributedString(
-            string: "MIOTERM",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-                .foregroundColor: Theme.textTertiary,
-                .kern: 1.8,
-            ]
-        )
     }
 }
 
