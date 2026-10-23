@@ -249,6 +249,8 @@ final class SessionTabViewController: NSViewController {
 /// 标签一多后半排就永远够不着。这里把主导轴的增量换成横向位移。
 @MainActor
 private final class TabBarScrollView: NSScrollView {
+    var onScroll: (() -> Void)?
+
     override func scrollWheel(with event: NSEvent) {
         let clip = contentView
         let maxX = max(0, (documentView?.frame.width ?? 0) - clip.bounds.width)
@@ -260,6 +262,7 @@ private final class TabBarScrollView: NSScrollView {
         let x = min(max(clip.bounds.origin.x - delta, 0), maxX)
         clip.scroll(to: NSPoint(x: x, y: 0))
         reflectScrolledClipView(clip)
+        onScroll?()
     }
 }
 
@@ -284,6 +287,9 @@ final class SessionTabBarView: NSView {
     private let plusButton = NSButton()
     private let modeBadge = TerminalModeBadge()
     private let rightStack = NSStackView()
+    private let leftStack = NSStackView()
+    private let leftScrollButton = NSButton()
+    private let rightScrollButton = NSButton()
     private let separator = NSView()
     private var documentWidth: NSLayoutConstraint!
     private lazy var homeChip = SessionTabChip(
@@ -303,14 +309,33 @@ final class SessionTabBarView: NSView {
 
     private func build() {
         scrollView.drawsBackground = false
-        scrollView.hasHorizontalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
+        scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
         scrollView.horizontalScrollElasticity = .allowed
         scrollView.verticalScrollElasticity = .none
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.onScroll = { [weak self] in self?.updateScrollButtons() }
         addSubview(scrollView)
+
+        for (button, symbol, tip, action) in [
+            (leftScrollButton, "chevron.left", "向左滚动标签", #selector(scrollTabsLeft(_:))),
+            (rightScrollButton, "chevron.right", "向右滚动标签", #selector(scrollTabsRight(_:))),
+        ] {
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
+            button.isBordered = false
+            button.imageScaling = .scaleProportionallyDown
+            button.contentTintColor = Theme.textSecondary
+            button.toolTip = tip
+            button.target = self
+            button.action = action
+            button.isHidden = true
+            button.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        leftStack.orientation = .horizontal
+        leftStack.translatesAutoresizingMaskIntoConstraints = false
+        leftStack.addArrangedSubview(leftScrollButton)
+        addSubview(leftStack)
 
         documentView.translatesAutoresizingMaskIntoConstraints = false
         documentView.wantsLayer = true
@@ -339,6 +364,7 @@ final class SessionTabBarView: NSView {
         rightStack.alignment = .centerY
         rightStack.spacing = 6
         rightStack.translatesAutoresizingMaskIntoConstraints = false
+        rightStack.addArrangedSubview(rightScrollButton)
         rightStack.addArrangedSubview(modeBadge)
         rightStack.addArrangedSubview(plusButton)
         addSubview(rightStack)
@@ -349,13 +375,20 @@ final class SessionTabBarView: NSView {
         addSubview(separator)
 
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            leftStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            leftStack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
+            leftScrollButton.widthAnchor.constraint(equalToConstant: 22),
+            leftScrollButton.heightAnchor.constraint(equalToConstant: 26),
+
+            scrollView.leadingAnchor.constraint(equalTo: leftStack.trailingAnchor, constant: 2),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollView.trailingAnchor.constraint(equalTo: rightStack.leadingAnchor, constant: -6),
 
             rightStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             rightStack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
+            rightScrollButton.widthAnchor.constraint(equalToConstant: 22),
+            rightScrollButton.heightAnchor.constraint(equalToConstant: 26),
             plusButton.widthAnchor.constraint(equalToConstant: 24),
             plusButton.heightAnchor.constraint(equalToConstant: 24),
 
@@ -386,6 +419,47 @@ final class SessionTabBarView: NSView {
         if abs(documentWidth.constant - target) > 0.5 {
             documentWidth.constant = target
         }
+        updateScrollButtons()
+    }
+
+    /// 只在溢出时露出两端箭头；不溢出就把宽度还给标签。
+    private func updateScrollButtons() {
+        let visible = scrollView.contentView.bounds.width
+        let needed = stack.fittingSize.width + 16
+        let scrollable = needed > visible + 0.5
+        if leftScrollButton.isHidden == scrollable {
+            leftScrollButton.isHidden = !scrollable
+            rightScrollButton.isHidden = !scrollable
+        }
+        guard scrollable else { return }
+        let maxX = max(0, (scrollView.documentView?.frame.width ?? 0) - visible)
+        let x = scrollView.contentView.bounds.origin.x
+        leftScrollButton.isEnabled = x > 0.5
+        rightScrollButton.isEnabled = x < maxX - 0.5
+    }
+
+    @objc private func scrollTabsLeft(_ sender: Any?) {
+        scrollTabs(by: -1)
+    }
+
+    @objc private func scrollTabsRight(_ sender: Any?) {
+        scrollTabs(by: 1)
+    }
+
+    /// 一次翻过大约一屏，保留一点重叠，用户不会瞬间失去当前位置。
+    private func scrollTabs(by direction: CGFloat) {
+        let clip = scrollView.contentView
+        let maxX = max(0, (scrollView.documentView?.frame.width ?? 0) - clip.bounds.width)
+        guard maxX > 0 else { return }
+        let step = max(160, clip.bounds.width * 0.72)
+        let target = min(max(clip.bounds.origin.x + direction * step, 0), maxX)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.allowsImplicitAnimation = true
+            clip.animator().setBoundsOrigin(NSPoint(x: target, y: 0))
+        } completionHandler: { [weak self] in
+            self?.updateScrollButtons()
+        }
     }
 
     func update(tabs: [Tab], selected: Int?) {
@@ -407,11 +481,13 @@ final class SessionTabBarView: NSView {
         }
         homeChip.setSelected(selected == nil)
 
-        guard let selected, chips.indices.contains(selected) else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.chips.indices.contains(selected) else { return }
-            let chip = self.chips[selected]
-            chip.scrollToVisible(chip.bounds)
+            guard let self else { return }
+            if let selected, self.chips.indices.contains(selected) {
+                let chip = self.chips[selected]
+                chip.scrollToVisible(chip.bounds)
+            }
+            self.updateScrollButtons()
         }
     }
 
@@ -428,6 +504,8 @@ final class SessionTabBarView: NSView {
         layer?.backgroundColor = Theme.layerColor(Theme.tabBar, for: self)
         separator.layer?.backgroundColor = Theme.layerColor(Theme.border, for: self)
         plusButton.contentTintColor = Theme.textSecondary
+        leftScrollButton.contentTintColor = Theme.textSecondary
+        rightScrollButton.contentTintColor = Theme.textSecondary
         homeChip.refreshAppearance()
         for chip in chips {
             chip.refreshAppearance()
