@@ -137,16 +137,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         let item = NSToolbarItem(itemIdentifier: identifier)
         // 复制一份再改尺寸：applicationIconImage 是全局对象，直接改会连带影响 Dock 与关于面板。
         let icon = NSApp.applicationIconImage?.copy() as? NSImage
-        icon?.size = NSSize(width: 20, height: 20)
+        icon?.size = NSSize(width: 26, height: 26)
         let imageView = NSImageView()
         imageView.image = icon
         imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.setFrameSize(NSSize(width: 20, height: 20))
+        imageView.setFrameSize(NSSize(width: 26, height: 26))
         item.view = imageView
         item.label = "MioTerm"
         item.paletteLabel = "MioTerm"
         item.toolTip = "MioTerm"
-        item.isEnabled = false
+        // 不设 isEnabled = false：禁用态会把图标压暗，反而显得灰扑扑的。
         item.autovalidates = false
         return item
     }

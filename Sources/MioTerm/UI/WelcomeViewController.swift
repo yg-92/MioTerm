@@ -110,16 +110,6 @@ private final class WelcomeBackgroundView: NSView {
         if let gradient = NSGradient(colors: [Theme.glow, Theme.background]) {
             gradient.draw(in: bounds, angle: -90)
         }
-        let glow = NSRect(
-            x: bounds.midX - 300,
-            y: bounds.midY - 220,
-            width: 600,
-            height: 440
-        )
-        let path = NSBezierPath(ovalIn: glow)
-        NSGradient(
-            colors: [Theme.accent.withAlphaComponent(0.13), Theme.accent.withAlphaComponent(0)]
-        )?.draw(in: path, relativeCenterPosition: .zero)
     }
 
     override func viewDidChangeEffectiveAppearance() {

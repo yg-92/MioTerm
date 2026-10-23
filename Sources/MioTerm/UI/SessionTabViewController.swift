@@ -14,6 +14,7 @@ final class SessionTabViewController: NSViewController {
     var onSessionsChange: ((TerminalController?) -> Void)?
     private let tabBar = SessionTabBarView()
     private let content = ContainerViewController()
+    private let statusBar = TerminalStatusBarView()
     private let welcome = WelcomeViewController()
     private var order: [TerminalController] = []
     private var tabControllers: [UUID: TerminalTabViewController] = [:]
@@ -22,6 +23,9 @@ final class SessionTabViewController: NSViewController {
 
     private var contentTopToBar: NSLayoutConstraint!
     private var contentTopToRoot: NSLayoutConstraint!
+    private var contentBottomToBar: NSLayoutConstraint!
+    private var contentBottomToRoot: NSLayoutConstraint!
+    private var isStatusBarVisible = false
 
     var selectedController: TerminalController? {
         guard let selectedIndex, order.indices.contains(selectedIndex) else { return nil }
@@ -43,11 +47,15 @@ final class SessionTabViewController: NSViewController {
         let contentView = content.view
         contentView.translatesAutoresizingMaskIntoConstraints = false
         tabBar.translatesAutoresizingMaskIntoConstraints = false
+        statusBar.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(contentView)
         root.addSubview(tabBar)
+        root.addSubview(statusBar)
 
         contentTopToBar = contentView.topAnchor.constraint(equalTo: tabBar.bottomAnchor)
         contentTopToRoot = contentView.topAnchor.constraint(equalTo: root.topAnchor)
+        contentBottomToBar = contentView.bottomAnchor.constraint(equalTo: statusBar.topAnchor)
+        contentBottomToRoot = contentView.bottomAnchor.constraint(equalTo: root.bottomAnchor)
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: root.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -55,10 +63,16 @@ final class SessionTabViewController: NSViewController {
             tabBar.heightAnchor.constraint(equalToConstant: SessionTabBarView.height),
             contentView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             contentView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            contentView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            statusBar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            statusBar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            statusBar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            statusBar.heightAnchor.constraint(equalToConstant: TerminalStatusBarView.height),
         ])
         contentTopToBar.isActive = false
         contentTopToRoot.isActive = true
+        contentBottomToBar.isActive = false
+        contentBottomToRoot.isActive = true
+        statusBar.isHidden = true
 
         tabBar.onSelect = { [weak self] index in self?.select(index) }
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
@@ -76,6 +90,7 @@ final class SessionTabViewController: NSViewController {
         modeTokens[controller.sessionID] = controller.addContextObserver { [weak self, weak controller] context in
             guard let self, let controller, self.selectedController === controller else { return }
             self.tabBar.update(mode: context.mode)
+            self.updateStatusBar()
         }
         select(order.count - 1)
     }
@@ -197,6 +212,20 @@ final class SessionTabViewController: NSViewController {
         tabBar.isHidden = !hasTabs
         contentTopToBar.isActive = hasTabs
         contentTopToRoot.isActive = !hasTabs
+        updateStatusBar()
+    }
+
+    /// 脚部状态条只在选中会话时出现；回到主页就收起，让欢迎页保持完整。
+    private func updateStatusBar() {
+        let controller = selectedController
+        let visible = controller != nil
+        if visible != isStatusBarVisible {
+            isStatusBarVisible = visible
+            statusBar.isHidden = !visible
+            contentBottomToBar.isActive = visible
+            contentBottomToRoot.isActive = !visible
+        }
+        statusBar.update(controller)
     }
 
     private func newLocalTerminal() {
@@ -210,6 +239,7 @@ final class SessionTabViewController: NSViewController {
     private func refreshAppearance() {
         view.layer?.backgroundColor = Theme.layerColor(Theme.background, for: view)
         tabBar.refreshAppearance()
+        statusBar.refreshAppearance()
     }
 }
 
@@ -642,6 +672,130 @@ final class TerminalModeBadge: NSView {
         dot.layer?.backgroundColor = Theme.layerColor(tint, for: self)
         layer?.backgroundColor = Theme.layerColor(fill, for: self)
         layer?.borderColor = Theme.layerColor(Theme.border, for: self)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+}
+
+/// 终端脚部状态条：连接状态、主机身份与当前目录。
+/// 顺带给终端内容与窗口底边之间留出一条分界，命令不再直接顶到边上。
+@MainActor
+final class TerminalStatusBarView: NSView {
+    static let height: CGFloat = 26
+
+    private let topBorder = NSView()
+    private let dot = NSView()
+    private let stateLabel = NSTextField(labelWithString: "")
+    private let identityLabel = NSTextField(labelWithString: "")
+    private let pathIcon = NSImageView()
+    private let pathLabel = NSTextField(labelWithString: "")
+    private var stateColor: NSColor = Theme.textTertiary
+    private var hasDirectory = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+
+        topBorder.wantsLayer = true
+        topBorder.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(topBorder)
+
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 3.5
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dot)
+
+        stateLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        stateLabel.setContentHuggingPriority(.required, for: .horizontal)
+        stateLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        stateLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stateLabel)
+
+        identityLabel.font = .systemFont(ofSize: 11)
+        identityLabel.textColor = Theme.textSecondary
+        identityLabel.lineBreakMode = .byTruncatingTail
+        identityLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        identityLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(identityLabel)
+
+        pathIcon.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+        pathIcon.contentTintColor = Theme.textTertiary
+        pathIcon.imageScaling = .scaleProportionallyDown
+        pathIcon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(pathIcon)
+
+        pathLabel.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        pathLabel.lineBreakMode = .byTruncatingHead
+        pathLabel.textColor = Theme.textSecondary
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(pathLabel)
+
+        NSLayoutConstraint.activate([
+            topBorder.topAnchor.constraint(equalTo: topAnchor),
+            topBorder.leadingAnchor.constraint(equalTo: leadingAnchor),
+            topBorder.trailingAnchor.constraint(equalTo: trailingAnchor),
+            topBorder.heightAnchor.constraint(equalToConstant: 1),
+
+            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 7),
+            dot.heightAnchor.constraint(equalToConstant: 7),
+
+            stateLabel.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6),
+            stateLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            identityLabel.leadingAnchor.constraint(equalTo: stateLabel.trailingAnchor, constant: 10),
+            identityLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            pathIcon.trailingAnchor.constraint(equalTo: pathLabel.leadingAnchor, constant: -5),
+            pathIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            pathIcon.widthAnchor.constraint(equalToConstant: 11),
+            pathIcon.heightAnchor.constraint(equalToConstant: 11),
+
+            pathLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            pathLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            pathLabel.leadingAnchor.constraint(greaterThanOrEqualTo: identityLabel.trailingAnchor, constant: 16),
+        ])
+        refreshAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    func update(_ controller: TerminalController?) {
+        guard let controller else { return }
+        stateColor = Theme.color(for: controller.state)
+        stateLabel.stringValue = controller.state.label
+
+        if let host = controller.host {
+            identityLabel.stringValue = "\(host.displayName) · \(host.protocolKind.displayName) · \(host.subtitle)"
+        } else {
+            identityLabel.stringValue = "本地终端"
+        }
+
+        let directory = controller.context.directory ?? controller.workingDirectory
+        hasDirectory = directory != nil
+        pathLabel.stringValue = directory ?? "目录未知"
+        pathLabel.toolTip = directory
+        pathIcon.isHidden = directory == nil
+        toolTip = controller.tooltip
+        applyColors()
+    }
+
+    private func applyColors() {
+        dot.layer?.backgroundColor = Theme.layerColor(stateColor, for: self)
+        stateLabel.textColor = stateColor
+        identityLabel.textColor = Theme.textSecondary
+        pathIcon.contentTintColor = Theme.textTertiary
+        pathLabel.textColor = hasDirectory ? Theme.textSecondary : Theme.textTertiary
+    }
+
+    func refreshAppearance() {
+        layer?.backgroundColor = Theme.layerColor(Theme.tabBar, for: self)
+        topBorder.layer?.backgroundColor = Theme.layerColor(Theme.border, for: self)
+        applyColors()
     }
 
     override func viewDidChangeEffectiveAppearance() {

@@ -366,12 +366,26 @@ extension HostSidebarViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
 
     func outlineViewItemDidExpand(_ notification: Notification) {
         captureExpansionState()
+        refreshGroupChevron(notification)
         outlineView.window?.invalidateCursorRects(for: outlineView)
     }
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
         captureExpansionState()
+        refreshGroupChevron(notification)
         outlineView.window?.invalidateCursorRects(for: outlineView)
+    }
+
+    /// 展开状态变了只重画那一行，让箭头跟着转向；
+    /// 直接 reloadItem 在收起时会干扰 outline view 自己的状态机。
+    private func refreshGroupChevron(_ notification: Notification) {
+        guard let item = notification.userInfo?["NSObject"] else { return }
+        let row = outlineView.row(forItem: item)
+        guard row >= 0 else { return }
+        outlineView.reloadData(
+            forRowIndexes: IndexSet(integer: row),
+            columnIndexes: IndexSet(integersIn: 0..<max(1, outlineView.numberOfColumns))
+        )
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -415,15 +429,16 @@ final class HostOutlineView: NSOutlineView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let clicked = row(at: point)
-        if event.clickCount == 1, clicked >= 0,
-           let item = item(atRow: clicked), isGroupRow?(item) == true {
-            if isItemExpanded(item) {
-                collapseItem(item)
-            } else {
-                expandItem(item)
+        if clicked >= 0, let item = item(atRow: clicked), isGroupRow?(item) == true {
+            // 只认第一下：双击的第二下如果交给 super，系统会再把分组展开回去。
+            if event.clickCount == 1 {
+                if isItemExpanded(item) {
+                    collapseItem(item)
+                } else {
+                    expandItem(item)
+                }
+                window?.invalidateCursorRects(for: self)
             }
-            reloadItem(item)
-            window?.invalidateCursorRects(for: self)
             return
         }
         super.mouseDown(with: event)
