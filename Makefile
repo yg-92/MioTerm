@@ -1,14 +1,17 @@
 APP := MioTerm
 
-.PHONY: all build app test run resolve clean
+.PHONY: all build app dist test run resolve clean
 
 all: app
 
 build:
-	swift build -c release --arch arm64
+	swift build -c release
 
 app:
 	./scripts/build-app.sh
+
+dist:
+	./scripts/package-app.sh
 
 test:
 	swift test --filter MioTermTests

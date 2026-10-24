@@ -1,0 +1,23 @@
+MioTerm 首次打开说明
+
+系统要求
+  · Apple Silicon（M1/M2/M3/M4…）Mac
+  · macOS 14 Sonoma 或更高版本
+
+安装
+  1. 把 MioTerm.app 拖进“应用程序”文件夹。
+  2. 双击打开。
+
+如果系统提示“无法验证开发者”或“Apple 无法验证 MioTerm 是否包含恶意软件”
+  这是未经过 Apple 公证的本地构建包。任选一种方式放行，只需做一次：
+
+  方式一：打开“系统设置 → 隐私与安全性”，在“安全性”区域点“仍要打开”。
+  方式二：在“应用程序”里右键 MioTerm，选择“打开”，再确认“打开”。
+  方式三：打开“终端”，执行：
+      xattr -dr com.apple.quarantine /Applications/MioTerm.app
+
+说明
+  · 当前发行包使用临时签名，没有 Apple 开发者证书和公证。
+  · SSH 使用系统自带的 /usr/bin/ssh，不需要额外安装 OpenSSH。
+  · 主机配置、命令库与日志保存在 ~/Library/Application Support/MioTerm。
+  · 登录密码等凭据保存在本机“登录钥匙串”，不会写进配置文件。
