@@ -118,4 +118,15 @@ struct TerminalContextTrackerTests {
         #expect(tracker.context.directory == "/etc/ssh")
         #expect(tracker.context.filesystemRevision == 0)
     }
+
+    /// 底栏显示的是“此刻在哪”。远端只给了 `~` 时也得说清是在家目录，不能落到未知。
+    @Test func displayDirectoryRendersHomePrompts() {
+        #expect(trackerAfterTyping(nil, promptLine: "[root@134 ~]#").displayDirectory == "~")
+        #expect(trackerAfterTyping(nil, promptLine: "root@134:~/code$").displayDirectory == "~/code")
+    }
+
+    @Test func displayDirectoryPrefersTheAbsolutePath() {
+        #expect(trackerAfterTyping(nil, promptLine: "[root@134 /var/log]#").displayDirectory == "/var/log")
+        #expect(TerminalContext().displayDirectory == nil)
+    }
 }

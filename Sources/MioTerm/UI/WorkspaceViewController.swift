@@ -125,7 +125,7 @@ final class WorkspaceViewController: NSSplitViewController {
             return
         }
         window.title = controller.title
-        window.subtitle = controller.context.directory
+        window.subtitle = controller.context.displayDirectory
             ?? controller.workingDirectory
             ?? controller.state.label
     }

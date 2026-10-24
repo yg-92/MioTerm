@@ -914,7 +914,7 @@ final class TerminalStatusBarView: NSView {
             identityLabel.stringValue = "本地终端"
         }
 
-        let directory = controller.context.directory ?? controller.workingDirectory
+        let directory = controller.context.displayDirectory ?? controller.workingDirectory
         hasDirectory = directory != nil
         pathLabel.stringValue = directory ?? "目录未知"
         pathLabel.toolTip = directory

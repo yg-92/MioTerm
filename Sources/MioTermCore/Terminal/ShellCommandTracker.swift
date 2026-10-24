@@ -237,6 +237,14 @@ public struct TerminalContext: Equatable {
         self.followAllowed = followAllowed
         self.mode = mode
     }
+
+    /// 界面上展示“此刻在哪”。绝对路径最准；只有提示符写了 `~` / `~/子目录` 时，
+    /// 远端家目录的位置本端还不知道，但至少要把提示符原文还原出来，不能显示成未知。
+    public var displayDirectory: String? {
+        if let directory { return directory }
+        guard let promptHomeHint else { return nil }
+        return promptHomeHint.isEmpty ? "~" : "~/\(promptHomeHint)"
+    }
 }
 
 /// OSC 7 的载荷形如 `file://主机/路径`，SFTP 服务端只认路径部分。

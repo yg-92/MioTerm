@@ -562,7 +562,7 @@ final class SFTPBrowserViewController: NSViewController {
             )
         )
         // 跟随不出结果时，用户能看到的只有「树不动」；把每次判断的原因留在日志里。
-        let subject = context.directory ?? context.promptHomeHint.map { "~" + ($0.isEmpty ? "" : "/\($0)") } ?? "未上报"
+        let subject = context.displayDirectory ?? "未上报"
         FileLogger.shared.info("文件面板：终端在 \(subject)，\(describe(action))")
         // 这两种情况都别把上下文记成「已经跟上」：连接期间终端报上来的目录，
         // 要等通道就绪、主目录问到之后再来一遍，否则跟随永远差那一步。
