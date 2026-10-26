@@ -180,6 +180,25 @@ struct SFTPTransferTests {
         await client.close()
     }
 
+    @Test func dismissDropsAFinishedRecordButKeepsTheRemoteFile() async throws {
+        let directory = try makeScratchDirectory("dismiss")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = FakeSFTPServer()
+        let client = try await SFTPClient.connect(transport: server)
+        let local = try writeFile(Data("done".utf8), named: "done.txt", in: directory)
+        let coordinator = SFTPTransferCoordinator(client: client, bufferBytes: 65_536, maxConcurrent: 1, onUpdate: { _ in })
+
+        await coordinator.enqueueUploads([local], to: Self.remoteDirectory)
+        let finished = await wait(coordinator, expecting: 1)
+        let id = try #require(finished.first?.id)
+        await coordinator.dismiss(id)
+
+        #expect(await coordinator.snapshot().isEmpty)
+        // 移除的只是列表记录，已落地的文件不受影响。
+        #expect(server.contents(of: "/home/user/done.txt") == Data("done".utf8))
+        await client.close()
+    }
+
     // MARK: - 辅助
 
     private func wait(_ coordinator: SFTPTransferCoordinator, expecting count: Int, timeout: TimeInterval = 5) async -> [SFTPTransferProgress] {

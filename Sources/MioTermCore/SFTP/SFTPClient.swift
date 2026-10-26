@@ -185,6 +185,41 @@ public actor SFTPClient {
         }
     }
 
+    /// 递归删除。SFTP v3 的 RMDIR 只接受空目录，非空目录只能由客户端先清空。
+    /// 软链接按 LSTAT 判定，删的是链接本身，不会顺着链接删掉指向的远端内容。
+    /// 路径已经不存在时视为成功：调用方要的结果就是“它不在了”。
+    public func removeTree(_ path: String) async throws {
+        let attributes: SFTPFileAttributes
+        do {
+            attributes = try await self.attributes(of: path)
+        } catch let error as SFTPStatusError where error.code == .NoSuchFile {
+            return
+        }
+        guard attributes.isDirectory else {
+            try await removeFile(path)
+            return
+        }
+        // 隐藏项也要一起清掉，否则目录看起来空了却仍然删不掉。
+        for child in try await list(path, showHidden: true) {
+            do {
+                if try await isDirectoryEntry(child) {
+                    try await removeTree(child.path)
+                } else {
+                    try await removeFile(child.path)
+                }
+            } catch let error as SFTPStatusError where error.code == .NoSuchFile {
+                // 枚举到删除之间被别的进程清掉了，接着删剩下的。
+            }
+        }
+        try await removeDirectory(path)
+    }
+
+    /// readdir 有时不带权限位，此时目录与文件只能靠一次 LSTAT 分开。
+    private func isDirectoryEntry(_ entry: SFTPFileEntry) async throws -> Bool {
+        guard entry.permissions == 0 else { return entry.isDirectory }
+        return try await attributes(of: entry.path).isDirectory
+    }
+
     /// sftp v3 只有 rename；同名目标会被服务端拒绝，UI 需要自己先删除再改名。
     public func move(from source: String, to destination: String) async throws {
         try await connection.status(.rename) { writer in

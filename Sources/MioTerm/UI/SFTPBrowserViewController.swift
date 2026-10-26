@@ -922,9 +922,13 @@ final class SFTPBrowserViewController: NSViewController {
     @objc private func deleteSelected() {
         let targets = selectedEntries
         guard !targets.isEmpty else { return }
+        let hasDirectory = targets.contains(where: \.isDirectory)
         let alert = NSAlert()
         alert.messageText = "删除 \(targets.count) 项？"
         alert.informativeText = targets.map(\.name).joined(separator: "、")
+            + (hasDirectory
+                ? "\n\n目录会连同其中的所有内容一起删除，且无法恢复。"
+                : "\n\n删除后无法恢复。")
         alert.alertStyle = .warning
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
@@ -934,7 +938,7 @@ final class SFTPBrowserViewController: NSViewController {
             for entry in targets {
                 do {
                     if entry.isDirectory {
-                        try await session?.client?.removeDirectory(entry.path)
+                        try await session?.client?.removeTree(entry.path)
                     } else {
                         try await session?.client?.removeFile(entry.path)
                     }
@@ -1051,14 +1055,24 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     @objc private func clearFinishedTransfers() {
-        let finished = transferOrder.filter { transfers[$0]?.isFinished == true }
-        for id in finished {
-            transfers.removeValue(forKey: id)
-            transferOrder.removeAll { $0 == id }
+        for id in transferOrder where transfers[id]?.isFinished == true {
+            removeTransferRow(id)
         }
+        Task { await session?.transfers?.clearFinished() }
+    }
+
+    /// 行尾的移除按钮：只抹掉列表里的这条记录，远端文件和本地文件都不动。
+    @objc private func dismissTransfer(_ sender: TransferDismissButton) {
+        guard let id = sender.transferID else { return }
+        removeTransferRow(id)
+        Task { await session?.transfers?.dismiss(id) }
+    }
+
+    private func removeTransferRow(_ id: UUID) {
+        transfers.removeValue(forKey: id)
+        transferOrder.removeAll { $0 == id }
         transferScroll.isHidden = transferOrder.isEmpty
         transferTable.reloadData()
-        Task { await session?.transfers?.clearFinished() }
     }
 
     private var targetedTransfer: SFTPTransferProgress? {
@@ -1194,13 +1208,42 @@ extension SFTPBrowserViewController: NSTableViewDataSource, NSTableViewDelegate,
         bar.controlSize = .mini
         bar.translatesAutoresizingMaskIntoConstraints = false
 
+        // 行尾：完成时给一个绿色对号，结束的记录再给一个移除按钮。
+        // 还在传的行不留按钮，取消走右键菜单，避免误点。
+        let actions = NSStackView()
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 2
+        actions.translatesAutoresizingMaskIntoConstraints = false
+
+        let status = NSImageView()
+        status.imageScaling = .scaleProportionallyDown
+        status.translatesAutoresizingMaskIntoConstraints = false
+        if progress.state == .completed {
+            status.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "传输完成")?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
+            status.contentTintColor = Theme.success
+            status.toolTip = "传输完成"
+        } else {
+            status.isHidden = true
+        }
+        actions.addArrangedSubview(status)
+
+        let dismiss = TransferDismissButton()
+        dismiss.transferID = progress.id
+        dismiss.target = self
+        dismiss.action = #selector(dismissTransfer(_:))
+        dismiss.isHidden = !progress.isFinished
+        actions.addArrangedSubview(dismiss)
+
         let cell = NSTableCellView()
         cell.addSubview(title)
         cell.addSubview(detail)
         cell.addSubview(bar)
+        cell.addSubview(actions)
         NSLayoutConstraint.activate([
             title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-            title.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+            title.trailingAnchor.constraint(equalTo: actions.leadingAnchor, constant: -6),
             title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 3),
             detail.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             detail.trailingAnchor.constraint(equalTo: title.trailingAnchor),
@@ -1208,6 +1251,14 @@ extension SFTPBrowserViewController: NSTableViewDataSource, NSTableViewDelegate,
             bar.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: title.trailingAnchor),
             bar.topAnchor.constraint(equalTo: detail.bottomAnchor, constant: 3),
+            actions.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+            actions.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            // 状态列宽度固定，进度刷新换行尾图标时标题不会被重新排版。
+            actions.widthAnchor.constraint(equalToConstant: 32),
+            status.widthAnchor.constraint(equalToConstant: 14),
+            status.heightAnchor.constraint(equalToConstant: 14),
+            dismiss.widthAnchor.constraint(equalToConstant: 16),
+            dismiss.heightAnchor.constraint(equalToConstant: 16),
         ])
         return cell
     }
@@ -1274,5 +1325,41 @@ extension SFTPBrowserViewController: NSTableViewDataSource, NSTableViewDelegate,
             uploadDroppedFiles(urls)
         }
         return true
+    }
+}
+
+/// 传输行尾的移除按钮：NSButton 没地方挂任务号，用子类把 UUID 带进 action。
+private final class TransferDismissButton: NSButton {
+    var transferID: UUID?
+    private var hoverArea: NSTrackingArea?
+
+    init() {
+        super.init(frame: .zero)
+        isBordered = false
+        setButtonType(.momentaryChange)
+        imageScaling = .scaleProportionallyDown
+        contentTintColor = Theme.textTertiary
+        image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "从列表移除")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .regular))
+        toolTip = "只从列表移除这条记录，不会删除远端或本地文件"
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        contentTintColor = Theme.textPrimary
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        contentTintColor = Theme.textTertiary
     }
 }

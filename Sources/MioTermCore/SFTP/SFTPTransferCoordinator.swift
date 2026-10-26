@@ -199,6 +199,13 @@ public actor SFTPTransferCoordinator {
         }
     }
 
+    /// 抹掉一条已结束的记录。只动列表，不碰远端文件和续传用的 part 文件；
+    /// 仍在排队或传输中的条目不接受这个操作，免得任务被丢了却没人停。
+    public func dismiss(_ id: UUID) {
+        guard let state = states[id], isTerminal(state) else { return }
+        remove(id)
+    }
+
     /// 会话关闭时一次性停掉所有在飞任务。
     public func cancelAll() {
         for id in order {

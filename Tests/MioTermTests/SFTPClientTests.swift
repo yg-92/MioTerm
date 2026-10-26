@@ -114,6 +114,37 @@ struct SFTPClientTests {
         await client.close()
     }
 
+    @Test func removeTreeClearsNonEmptyDirectoriesIncludingHiddenEntries() async throws {
+        let server = FakeSFTPServer()
+        let client = try await SFTPClient.connect(transport: server)
+        try await client.makeDirectory("/home/user/.trash")
+        try await client.makeDirectory("/home/user/.trash/keep")
+        try await client.makeDirectory("/home/user/.trash/keep/.hidden")
+        try await client.makeDirectory("/home/user/.trash/empty")
+        try await client.write(Data("note".utf8), to: "/home/user/.trash/keep/.hidden/note.txt")
+        try await client.write(Data("cache".utf8), to: "/home/user/.trash/cache.bin")
+
+        try await client.removeTree("/home/user/.trash")
+
+        #expect(server.node(at: "/home/user/.trash") == nil)
+        #expect(server.node(at: "/home/user/.trash/keep/.hidden/note.txt") == nil)
+        // 同级项不能被误删。
+        #expect(server.node(at: "/home/user/hello.txt") != nil)
+        #expect(server.node(at: "/home/user/sub/nested.bin") != nil)
+        #expect(server.leakedDirectoryHandles == 0)
+        await client.close()
+    }
+
+    @Test func removeTreeHandlesPlainFilesAndMissingPaths() async throws {
+        let server = FakeSFTPServer()
+        let client = try await SFTPClient.connect(transport: server)
+        // 已经不在的路径当作删成功，重复操作不该报错。
+        try await client.removeTree("/home/user/ghost")
+        try await client.removeTree("/home/user/hello.txt")
+        #expect(server.node(at: "/home/user/hello.txt") == nil)
+        await client.close()
+    }
+
     @Test func renameIntoExistingNameSurfacesServerMessage() async throws {
         let server = FakeSFTPServer()
         let client = try await SFTPClient.connect(transport: server)
