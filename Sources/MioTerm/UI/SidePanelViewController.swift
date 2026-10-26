@@ -142,6 +142,7 @@ private final class SidePanelBackgroundView: NSView {
 
 /// 系统 `NSSegmentedControl` 的胶囊样式在深色底上几乎看不出分段和选中态，
 /// 这里自绘容器、选中胶囊和悬停反馈，保证任何背景色下层级都清楚。
+/// 分段参照 Finder 标签页：等宽、边界细线，选中段是一块浮起的白色胶囊。
 @MainActor
 final class CapsuleSegmentedView: NSView {
     var onChange: ((Int) -> Void)?
@@ -161,7 +162,9 @@ final class CapsuleSegmentedView: NSView {
     private var enabledFlags: [Bool]
     private var hovered: Int?
     private var trackingAreaRef: NSTrackingArea?
-    private let inset: CGFloat = 3
+    /// 胶囊与分段边界之间留一点缝，选中块不糊在细线上。
+    private let horizontalInset: CGFloat = 1.5
+    private let verticalInset: CGFloat = 1
 
     init(titles: [String]) {
         self.titles = titles
@@ -224,20 +227,18 @@ final class CapsuleSegmentedView: NSView {
     }
 
     private func index(at point: NSPoint) -> Int? {
-        guard !titles.isEmpty, bounds.contains(point), bounds.width > inset * 2 else { return nil }
-        let segmentWidth = (bounds.width - inset * 2) / CGFloat(titles.count)
-        let relative = point.x - inset
-        guard relative >= 0, relative < segmentWidth * CGFloat(titles.count) else { return nil }
-        return min(titles.count - 1, Int(relative / segmentWidth))
+        guard !titles.isEmpty, bounds.contains(point), bounds.width > 0 else { return nil }
+        let segmentWidth = bounds.width / CGFloat(titles.count)
+        return min(titles.count - 1, max(0, Int(point.x / segmentWidth)))
     }
 
     private func segmentRect(_ index: Int) -> NSRect {
-        let segmentWidth = (bounds.width - inset * 2) / CGFloat(titles.count)
+        let segmentWidth = bounds.width / CGFloat(titles.count)
         return NSRect(
-            x: inset + CGFloat(index) * segmentWidth + 1,
-            y: inset,
-            width: segmentWidth - 2,
-            height: bounds.height - inset * 2
+            x: CGFloat(index) * segmentWidth + horizontalInset,
+            y: verticalInset,
+            width: segmentWidth - horizontalInset * 2,
+            height: bounds.height - verticalInset * 2
         )
     }
 
@@ -253,15 +254,33 @@ final class CapsuleSegmentedView: NSView {
         }
 
         guard !titles.isEmpty else { return }
+        let segmentWidth = bounds.width / CGFloat(titles.count)
+        let dark = Theme.isDark(effectiveAppearance)
 
+        // 选中段浮起一层白色胶囊：细描边 + 轻投影，和 Finder 的活动标签一致。
         if titles.indices.contains(selectedIndex) {
             let pillRect = segmentRect(selectedIndex)
             let pill = NSBezierPath(roundedRect: pillRect, xRadius: pillRect.height / 2, yRadius: pillRect.height / 2)
-            Theme.accent.withAlphaComponent(0.16).setFill()
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(dark ? 0.30 : 0.10)
+            shadow.shadowBlurRadius = 3
+            shadow.shadowOffset = NSSize(width: 0, height: -1)
+            shadow.set()
+            (dark ? Theme.surfaceRaised : Theme.surface).setFill()
             pill.fill()
-            Theme.accent.withAlphaComponent(0.38).setStroke()
+            NSGraphicsContext.restoreGraphicsState()
+            Theme.border.setStroke()
             pill.lineWidth = 1
             pill.stroke()
+        }
+
+        // 分段细线；紧挨选中胶囊的那条让位，避免和描边叠在一起。
+        Theme.border.setFill()
+        for boundary in 1..<titles.count {
+            guard selectedIndex != boundary, selectedIndex != boundary - 1 else { continue }
+            let x = (CGFloat(boundary) * segmentWidth).rounded()
+            NSRect(x: x, y: 6, width: 1, height: bounds.height - 12).fill()
         }
 
         for index in titles.indices where index != selectedIndex {
@@ -280,21 +299,20 @@ final class CapsuleSegmentedView: NSView {
             if !enabledFlags[index] {
                 color = Theme.textTertiary.withAlphaComponent(0.45)
             } else if isSelected {
-                color = Theme.accent
+                color = Theme.textPrimary
             } else {
                 color = Theme.textSecondary
             }
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 11, weight: isSelected ? .semibold : .medium),
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
                 .foregroundColor: color,
                 .paragraphStyle: paragraph,
             ]
-            let segmentWidth = (bounds.width - inset * 2) / CGFloat(titles.count)
             let textRect = NSRect(
-                x: inset + CGFloat(index) * segmentWidth,
-                y: (bounds.height - 14) / 2,
+                x: CGFloat(index) * segmentWidth,
+                y: (bounds.height - 15) / 2,
                 width: segmentWidth,
-                height: 14
+                height: 15
             )
             (title as NSString).draw(in: textRect, withAttributes: attributes)
         }
