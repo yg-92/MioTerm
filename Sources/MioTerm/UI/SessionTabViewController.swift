@@ -518,6 +518,23 @@ final class SessionTabBarView: NSView {
     }
 }
 
+/// 正圆状态点。`circle.fill` 这类符号的对齐矩形不是正方形，小尺寸下会被画扁；
+/// 直接铺一层圆形图层，圆角跟着实际尺寸走，任何大小都是正圆。
+@MainActor
+final class StatusDotView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
+    }
+}
+
 /// 单个标签：状态点或图标 + 标题 + 关闭按钮。选中与悬停各有自己的底色。
 @MainActor
 final class SessionTabChip: NSView {
@@ -525,6 +542,7 @@ final class SessionTabChip: NSView {
     var onClose: (() -> Void)?
 
     private let icon = NSImageView()
+    private let statusDot = StatusDotView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let closable: Bool
@@ -551,11 +569,16 @@ final class SessionTabChip: NSView {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
-        icon.image = Self.iconImage(symbol: symbol, color: symbolColor)
+        icon.image = symbol.flatMap { Self.iconImage(symbol: $0, color: symbolColor) }
         icon.contentTintColor = symbolColor
         icon.imageScaling = .scaleProportionallyDown
+        icon.isHidden = symbol == nil
         icon.translatesAutoresizingMaskIntoConstraints = false
         addSubview(icon)
+
+        statusDot.isHidden = symbol != nil
+        statusDot.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(statusDot)
 
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "关闭标签")
         closeButton.isBordered = false
@@ -572,6 +595,11 @@ final class SessionTabChip: NSView {
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 13),
             icon.heightAnchor.constraint(equalToConstant: 13),
+            // 圆点占住图标原本的视觉中心，标题的起点不用跟着变。
+            statusDot.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
+            statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusDot.widthAnchor.constraint(equalToConstant: 7),
+            statusDot.heightAnchor.constraint(equalToConstant: 7),
             titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -593,7 +621,7 @@ final class SessionTabChip: NSView {
             ])
         }
         closeButton.isHidden = true
-        updateAppearance()
+        refreshAppearance()
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
@@ -604,8 +632,9 @@ final class SessionTabChip: NSView {
     }
 
     func refreshAppearance() {
-        icon.image = Self.iconImage(symbol: symbol, color: symbolColor)
+        icon.image = symbol.flatMap { Self.iconImage(symbol: $0, color: symbolColor) }
         icon.contentTintColor = symbolColor
+        statusDot.layer?.backgroundColor = Theme.layerColor(symbolColor, for: self)
         updateAppearance()
     }
 
@@ -653,11 +682,9 @@ final class SessionTabChip: NSView {
         onClose?()
     }
 
-    private static func iconImage(symbol: String?, color: NSColor) -> NSImage? {
-        let name = symbol ?? "circle.fill"
-        let pointSize: CGFloat = symbol == nil ? 7 : 11
-        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return nil }
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+    private static func iconImage(symbol: String, color: NSColor) -> NSImage? {
+        guard let base = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) else { return nil }
+        let configuration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
         return base.withSymbolConfiguration(configuration) ?? base
     }
@@ -701,7 +728,7 @@ final class TerminalTabViewController: NSViewController {
 /// 容器里的路径属于另一套文件系统，这个徽标同时是“为什么文件树不再跟随”的提示。
 @MainActor
 final class TerminalModeBadge: NSView {
-    private let dot = NSView()
+    private let dot = StatusDotView()
     private let label = NSTextField(labelWithString: "")
     private var mode: TerminalMode = .shell
 
@@ -712,8 +739,6 @@ final class TerminalModeBadge: NSView {
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
 
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 2.5
         dot.translatesAutoresizingMaskIntoConstraints = false
         addSubview(dot)
 
@@ -785,7 +810,7 @@ final class TerminalStatusBarView: NSView {
     static let height: CGFloat = 26
 
     private let topBorder = NSView()
-    private let dot = NSView()
+    private let dot = StatusDotView()
     private let stateLabel = NSTextField(labelWithString: "")
     private let identityLabel = NSTextField(labelWithString: "")
     private let pathIcon = NSImageView()
@@ -804,8 +829,6 @@ final class TerminalStatusBarView: NSView {
         topBorder.translatesAutoresizingMaskIntoConstraints = false
         addSubview(topBorder)
 
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 3.5
         dot.translatesAutoresizingMaskIntoConstraints = false
         addSubview(dot)
 
