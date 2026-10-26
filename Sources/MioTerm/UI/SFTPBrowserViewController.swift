@@ -164,7 +164,7 @@ final class SFTPBrowserViewController: NSViewController {
         ] {
             button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             button.imagePosition = .imageOnly
-            button.bezelStyle = .texturedRounded
+            Self.applyActionBezelStyle(to: button)
             button.controlSize = .small
             button.target = self
             button.action = action
@@ -173,7 +173,7 @@ final class SFTPBrowserViewController: NSViewController {
         hiddenToggle.setButtonType(.pushOnPushOff)
         hiddenToggle.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "显示隐藏文件")
         hiddenToggle.imagePosition = .imageOnly
-        hiddenToggle.bezelStyle = .texturedRounded
+        Self.applyActionBezelStyle(to: hiddenToggle)
         hiddenToggle.controlSize = .small
         hiddenToggle.target = self
         hiddenToggle.action = #selector(toggleHidden)
@@ -193,6 +193,15 @@ final class SFTPBrowserViewController: NSViewController {
         retryButton.action = #selector(reconnectChannel)
         retryButton.toolTip = "重新建立文件通道"
         retryButton.isHidden = true
+    }
+
+    /// macOS 26 起用液态玻璃按钮；旧系统维持原来的浮凸小按钮。
+    private static func applyActionBezelStyle(to button: NSButton) {
+        if #available(macOS 26.0, *) {
+            button.bezelStyle = .glass
+        } else {
+            button.bezelStyle = .texturedRounded
+        }
     }
 
     private func configureNotice() {
