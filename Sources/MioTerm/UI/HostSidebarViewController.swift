@@ -451,10 +451,54 @@ final class HostOutlineView: NSOutlineView {
     }
 }
 
-/// 选中行画成圆角块，比系统整行蓝条更贴合深色侧栏。
+/// 选中行用系统玻璃做胶囊底，和面板上的玻璃工具栏是同一种材质；
+/// 26 以前没有 NSGlassEffectView，退回自绘的强调色圆角块。
 @MainActor
 private final class SidebarRowView: NSTableRowView {
+    private var selectionGlass: NSView?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = 10
+            glass.tintColor = Theme.accent.withAlphaComponent(0.22)
+            glass.isHidden = true
+            addSubview(glass, positioned: .below, relativeTo: nil)
+            selectionGlass = glass
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override var isSelected: Bool {
+        didSet { updateGlass() }
+    }
+
+    override var isEmphasized: Bool {
+        didSet { updateGlass() }
+    }
+
+    override func layout() {
+        super.layout()
+        selectionGlass?.frame = bounds.insetBy(dx: 6, dy: 2)
+    }
+
+    private func updateGlass() {
+        guard let selectionGlass else {
+            needsDisplay = true
+            return
+        }
+        selectionGlass.isHidden = !isSelected
+        if #available(macOS 26.0, *), let glass = selectionGlass as? NSGlassEffectView {
+            glass.tintColor = Theme.accent.withAlphaComponent(isEmphasized ? 0.26 : 0.16)
+        }
+        needsDisplay = true
+    }
+
     override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionGlass == nil else { return }
         let rect = bounds.insetBy(dx: 6, dy: 2)
         let path = NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7)
         Theme.accent.withAlphaComponent(isEmphasized ? 0.22 : 0.12).setFill()
@@ -463,7 +507,7 @@ private final class SidebarRowView: NSTableRowView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
+        updateGlass()
     }
 }
 

@@ -79,3 +79,50 @@ final class GlassBarView: NSView {
         ])
     }
 }
+
+/// 玻璃栏里的图标按钮：去掉边框只留符号，靠悬停变色给出反馈。
+final class GlassActionButton: NSButton {
+    var restingTint: NSColor = Theme.textSecondary {
+        didSet { updateTint() }
+    }
+
+    private var hoverArea: NSTrackingArea?
+    private var hovering = false
+
+    init() {
+        super.init(frame: .zero)
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        updateTint()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        updateTint()
+    }
+
+    private func updateTint() {
+        // 旧系统仍是带边框的圆角按钮，着色交给系统。
+        guard !isBordered else { return }
+        contentTintColor = hovering ? Theme.textPrimary : restingTint
+    }
+}

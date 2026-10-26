@@ -8,11 +8,10 @@ import MioTermCore
 @MainActor
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let workspace = WorkspaceViewController()
-    private static let newTab = NSToolbarItem.Identifier("mio.newTab")
+    private static let actions = NSToolbarItem.Identifier("mio.actions")
     private static let home = NSToolbarItem.Identifier("mio.home")
     private static let connect = NSToolbarItem.Identifier("mio.connect")
     private static let newHost = NSToolbarItem.Identifier("mio.newHost")
-    private static let preferences = NSToolbarItem.Identifier("mio.preferences")
     private static let toggleSidebar = NSToolbarItem.Identifier("mio.toggleSidebar")
     private static let appIcon = NSToolbarItem.Identifier("mio.appIcon")
     private var showingSession = false
@@ -100,8 +99,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             toolbar.removeItem(at: 0)
         }
         let identifiers: [NSToolbarItem.Identifier] = showSession
-            ? [Self.toggleSidebar, Self.home, .flexibleSpace, Self.newTab, Self.preferences, Self.appIcon]
-            : [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences, Self.appIcon]
+            ? [Self.toggleSidebar, Self.home, .flexibleSpace, Self.actions, Self.appIcon]
+            : [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.actions, Self.appIcon]
         for (index, identifier) in identifiers.enumerated() {
             toolbar.insertItem(withItemIdentifier: identifier, at: index)
         }
@@ -111,16 +110,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch itemIdentifier {
-        case Self.newTab:
-            return button(itemIdentifier, symbol: "plus", label: "新建标签", action: #selector(WorkspaceViewController.newLocalTerminal(_:)))
+        case Self.actions:
+            return actionClusterItem(itemIdentifier)
         case Self.home:
             return button(itemIdentifier, symbol: "house", label: "主页", action: #selector(WorkspaceViewController.showHome(_:)))
         case Self.connect:
             return button(itemIdentifier, symbol: "bolt", label: "连接所选主机", action: #selector(WorkspaceViewController.connectSelectedHost(_:)))
         case Self.newHost:
             return button(itemIdentifier, symbol: "plus.circle", label: "新增主机", action: #selector(WorkspaceViewController.newHost(_:)))
-        case Self.preferences:
-            return button(itemIdentifier, symbol: "gearshape", label: "设置", action: #selector(WorkspaceViewController.showPreferences(_:)))
         case Self.toggleSidebar:
             let item = paletteItem(itemIdentifier, symbol: "sidebar.left", label: "显示/隐藏侧栏")
             item.action = #selector(NSSplitViewController.toggleSidebar(_:))
@@ -130,6 +127,48 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         default:
             return nil
         }
+    }
+
+    /// 右上角动作合成一条玻璃胶囊：新建标签和设置都装进同一块系统材质里。
+    private func actionClusterItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let newTabButton = glassButton(
+            symbol: "plus",
+            label: "新建标签",
+            action: #selector(WorkspaceViewController.newLocalTerminal(_:))
+        )
+        let preferencesButton = glassButton(
+            symbol: "gearshape",
+            label: "设置",
+            action: #selector(WorkspaceViewController.showPreferences(_:))
+        )
+        let row = NSStackView(views: [newTabButton, preferencesButton])
+        row.orientation = .horizontal
+        row.spacing = 3
+
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.view = GlassBarView(
+            content: row,
+            padding: NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
+        )
+        item.label = "新建标签 / 设置"
+        item.paletteLabel = "新建标签 / 设置"
+        item.toolTip = "新建标签 / 设置"
+        item.autovalidates = false
+        return item
+    }
+
+    private func glassButton(symbol: String, label: String, action: Selector) -> GlassActionButton {
+        let button = GlassActionButton()
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        button.restingTint = Theme.textSecondary
+        button.target = workspace
+        button.action = action
+        button.toolTip = label
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 28),
+            button.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        return button
     }
 
     /// 右上角的品牌图标只作标识，不参与点击与键盘导航。
@@ -142,7 +181,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         imageView.image = icon
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.setFrameSize(NSSize(width: 26, height: 26))
-        item.view = imageView
+        // 也套一层玻璃，让右上角整条都落在同一种材质上。
+        item.view = GlassBarView(
+            content: imageView,
+            padding: NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
+        )
         item.label = "MioTerm"
         item.paletteLabel = "MioTerm"
         item.toolTip = "MioTerm"
@@ -168,10 +211,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.newTab, Self.preferences, Self.appIcon]
+        [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.actions, Self.appIcon]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.home, Self.newTab, Self.connect, Self.newHost, Self.preferences, Self.appIcon, .space, .flexibleSpace]
+        [Self.toggleSidebar, Self.home, Self.actions, Self.connect, Self.newHost, Self.appIcon, .space, .flexibleSpace]
     }
 }

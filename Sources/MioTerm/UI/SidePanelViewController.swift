@@ -14,7 +14,15 @@ final class SidePanelViewController: NSViewController {
     let files = SFTPBrowserViewController()
     let commands = CommandLibraryViewController()
 
-    private let switcher = CapsuleSegmentedView(titles: ["主机", "文件", "命令"])
+    private let modeSwitcher = CapsuleSegmentedView(titles: ["主机", "文件", "命令"])
+    /// 切换器套进系统玻璃，胶囊轨道由 NSGlassEffectView 提供，控件自己只画选中块和文字。
+    private lazy var switcher: GlassBarView = {
+        modeSwitcher.drawsTrack = false
+        return GlassBarView(
+            content: modeSwitcher,
+            padding: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        )
+    }()
     private let content = ContainerViewController()
     private let divider = NSView()
     private var autoSwitchedFor: UUID?
@@ -24,11 +32,11 @@ final class SidePanelViewController: NSViewController {
         let root = SidePanelBackgroundView(frame: NSRect(x: 0, y: 0, width: 280, height: 620))
         root.onAppearanceChange = { [weak self] in self?.refreshAppearance() }
 
-        switcher.onChange = { [weak self] index in
+        modeSwitcher.onChange = { [weak self] index in
             self?.select(Mode(rawValue: index) ?? .hosts)
         }
-        switcher.selectedIndex = mode.rawValue
-        switcher.setEnabled(false, at: Mode.files.rawValue)
+        modeSwitcher.selectedIndex = mode.rawValue
+        modeSwitcher.setEnabled(false, at: Mode.files.rawValue)
         switcher.translatesAutoresizingMaskIntoConstraints = false
 
         divider.wantsLayer = true
@@ -80,7 +88,7 @@ final class SidePanelViewController: NSViewController {
 
     func bind(to controller: TerminalController?) {
         let canBrowse = Self.supportsFiles(controller)
-        switcher.setEnabled(canBrowse, at: Mode.files.rawValue)
+        modeSwitcher.setEnabled(canBrowse, at: Mode.files.rawValue)
         // 命令库对任何会话都有意义（本地终端也有历史），不跟着文件面板的可用性走。
         commands.bind(to: controller)
         if !canBrowse {
@@ -106,7 +114,7 @@ final class SidePanelViewController: NSViewController {
     func select(_ mode: Mode) {
         guard mode != self.mode else { return }
         self.mode = mode
-        switcher.selectedIndex = mode.rawValue
+        modeSwitcher.selectedIndex = mode.rawValue
         content.show(viewController(for: mode))
     }
 
@@ -146,6 +154,11 @@ final class CapsuleSegmentedView: NSView {
             guard selectedIndex != oldValue else { return }
             needsDisplay = true
         }
+    }
+
+    /// 外层轨道交给玻璃时不再自绘底色和描边，只保留选中块、悬停与文字。
+    var drawsTrack = true {
+        didSet { needsDisplay = true }
     }
 
     private let titles: [String]
@@ -233,13 +246,15 @@ final class CapsuleSegmentedView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let outer = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let outerPath = NSBezierPath(roundedRect: outer, xRadius: outer.height / 2, yRadius: outer.height / 2)
-        Theme.surface.withAlphaComponent(0.9).setFill()
-        outerPath.fill()
-        Theme.border.setStroke()
-        outerPath.lineWidth = 1
-        outerPath.stroke()
+        if drawsTrack {
+            let outer = bounds.insetBy(dx: 0.5, dy: 0.5)
+            let outerPath = NSBezierPath(roundedRect: outer, xRadius: outer.height / 2, yRadius: outer.height / 2)
+            Theme.surface.withAlphaComponent(0.9).setFill()
+            outerPath.fill()
+            Theme.border.setStroke()
+            outerPath.lineWidth = 1
+            outerPath.stroke()
+        }
 
         guard !titles.isEmpty else { return }
 
