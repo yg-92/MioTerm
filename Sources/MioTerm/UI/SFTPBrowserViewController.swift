@@ -8,8 +8,9 @@ import MioTermCore
 @MainActor
 final class SFTPBrowserViewController: NSViewController {
     private static let nameColumn = NSUserInterfaceItemIdentifier("name")
-    private static let sizeColumn = NSUserInterfaceItemIdentifier("size")
     private static let jobColumn = NSUserInterfaceItemIdentifier("job")
+    /// 行尾“大小”文字的宽度，和名称列固定一起排版，各行文件名起点才对得齐。
+    private static let sizeColumnWidth: CGFloat = 62
 
     /// 树上的一行。children 为 nil 表示还没读过该目录，展开时才发读取请求。
     private final class Node: Hashable {
@@ -57,6 +58,8 @@ final class SFTPBrowserViewController: NSViewController {
     private var isResolvingHome = false
 
     private let outlineView = FileOutlineView()
+    /// 名称列要靠 sizeLastColumnToFit() 铺满一次，之后才会跟着表格宽度自动伸缩。
+    private var didFitTreeColumns = false
     /// 树的第一层 = 这个目录的直接子项；不再套一层主机名节点。
     private var roots: [Node] = []
     private var currentDirectory: String?
@@ -381,15 +384,13 @@ final class SFTPBrowserViewController: NSViewController {
 
         let name = NSTableColumn(identifier: Self.nameColumn)
         name.title = "名称"
+        name.minWidth = 80
         name.resizingMask = .autoresizingMask
         outlineView.addTableColumn(name)
         outlineView.outlineTableColumn = name
-
-        let size = NSTableColumn(identifier: Self.sizeColumn)
-        size.title = "大小"
-        size.width = 62
-        size.minWidth = 44
-        outlineView.addTableColumn(size)
+        // 大小文字并进名称单元格，名称列就是唯一的列：它会铺满表格宽度，
+        // 面板拉宽就多显示几个字，变窄时 label 自己打省略号。
+        outlineView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
 
         transferTable.headerView = nil
         transferTable.usesAlternatingRowBackgroundColors = false
@@ -401,6 +402,15 @@ final class SFTPBrowserViewController: NSViewController {
         job.title = "任务"
         job.resizingMask = .autoresizingMask
         transferTable.addTableColumn(job)
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // 必须等滚动视图真正有宽度再铺满；之后列宽由 AppKit 跟着表格伸缩，
+        // 自己改 column.width 反而会让表格 frame 反过来变大，不能走那条路。
+        guard !didFitTreeColumns, outlineView.bounds.width > 1 else { return }
+        didFitTreeColumns = true
+        outlineView.sizeLastColumnToFit()
     }
 
     private lazy var fileMenu: NSMenu = {
@@ -1218,12 +1228,8 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        guard let node = item as? Node else { return nil }
-        switch tableColumn?.identifier {
-        case Self.nameColumn: return nameCell(for: node)
-        case Self.sizeColumn: return textCell(node.entry.isDirectory ? "" : node.entry.sizeText, secondary: true, align: .right)
-        default: return nil
-        }
+        guard let node = item as? Node, tableColumn?.identifier == Self.nameColumn else { return nil }
+        return nameCell(for: node)
     }
 
     private func nameCell(for node: Node) -> NSView {
@@ -1237,6 +1243,7 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
         return iconCell(
             text: title,
             fullName: node.entry.name,
+            detail: node.entry.isDirectory ? "" : node.entry.sizeText,
             symbol: symbol,
             tint: node.entry.isDirectory ? .controlAccentColor : .secondaryLabelColor,
             hidden: node.entry.isHidden
@@ -1244,7 +1251,7 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
     }
 
     private func textCell(_ text: String, secondary: Bool = false, align: NSTextAlignment = .left) -> NSTextField {
-        // 大小列比名称列小一号，和字号设置一起缩放。
+        // 行尾的大小文字比名称小一号，和字号设置一起缩放。
         let size = secondary ? max(10, treeFontSize - 1) : treeFontSize
         let cell = NSTextField(labelWithString: text)
         cell.font = .systemFont(ofSize: size)
@@ -1258,7 +1265,8 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
     }
 
     /// NSTextField 没有 image 属性，名称列的图标只能自己拼。
-    private func iconCell(text: String, fullName: String, symbol: String, tint: NSColor, hidden: Bool) -> NSView {
+    /// 大小文字挂在同一格里右对齐，名称列才能独占整行宽度、随面板宽窄伸缩。
+    private func iconCell(text: String, fullName: String, detail: String, symbol: String, tint: NSColor, hidden: Bool) -> NSView {
         let icon = NSImageView()
         let configuration = NSImage.SymbolConfiguration(pointSize: treeIconSize, weight: .regular)
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
@@ -1273,20 +1281,28 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
         label.toolTip = fullName
         label.setContentCompressionResistancePriority(.init(250), for: .horizontal)
         label.translatesAutoresizingMaskIntoConstraints = false
+        let detailLabel = textCell(detail, secondary: true, align: .right)
+        detailLabel.setContentHuggingPriority(.required, for: .horizontal)
+        detailLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        detailLabel.translatesAutoresizingMaskIntoConstraints = false
         let cell = NSTableCellView()
         cell.toolTip = fullName
         cell.textField = label
         cell.addSubview(icon)
         cell.addSubview(label)
+        cell.addSubview(detailLabel)
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
             icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: treeIconSize),
             icon.heightAnchor.constraint(equalToConstant: treeIconSize),
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
-            // 必须用等号：宽度不足时由 label 自己打省略号，而不是顶出单元格被硬裁。
-            label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
             label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            // 名称给不出宽度时由它自己打省略号，不能顶掉大小文字或撑出单元格。
+            label.trailingAnchor.constraint(equalTo: detailLabel.leadingAnchor, constant: -6),
+            detailLabel.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+            detailLabel.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            detailLabel.widthAnchor.constraint(equalToConstant: Self.sizeColumnWidth),
         ])
         return cell
     }
