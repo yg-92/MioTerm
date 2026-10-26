@@ -463,7 +463,8 @@ private final class SidebarRowView: NSTableRowView {
             let glass = NSGlassEffectView()
             glass.style = .regular
             glass.cornerRadius = 10
-            glass.tintColor = Theme.accent.withAlphaComponent(0.22)
+            // 玻璃会把染色放大，0.26 在浅色下会变成整块高饱和蓝，压到和旧版选中块相近的浓度。
+            glass.tintColor = Theme.accent.withAlphaComponent(0.16)
             glass.isHidden = true
             addSubview(glass, positioned: .below, relativeTo: nil)
             selectionGlass = glass
@@ -492,7 +493,7 @@ private final class SidebarRowView: NSTableRowView {
         }
         selectionGlass.isHidden = !isSelected
         if #available(macOS 26.0, *), let glass = selectionGlass as? NSGlassEffectView {
-            glass.tintColor = Theme.accent.withAlphaComponent(isEmphasized ? 0.26 : 0.16)
+            glass.tintColor = Theme.accent.withAlphaComponent(isEmphasized ? 0.16 : 0.10)
         }
         needsDisplay = true
     }

@@ -181,11 +181,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         imageView.image = icon
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.setFrameSize(NSSize(width: 26, height: 26))
-        // 也套一层玻璃，让右上角整条都落在同一种材质上。
-        item.view = GlassBarView(
-            content: imageView,
-            padding: NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
-        )
+        item.view = imageView
         item.label = "MioTerm"
         item.paletteLabel = "MioTerm"
         item.toolTip = "MioTerm"
