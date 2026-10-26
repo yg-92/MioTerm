@@ -455,60 +455,101 @@ final class HostOutlineView: NSOutlineView {
 /// 26 以前没有 NSGlassEffectView，退回自绘的强调色圆角块。
 @MainActor
 private final class SidebarRowView: NSTableRowView {
-    private var selectionGlass: NSView?
+    private var hoverBackground: NSView?
+    private let selectedMarker = NSView()
+    private var hoverArea: NSTrackingArea?
+    private var hovering = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+
+        selectedMarker.wantsLayer = true
+        selectedMarker.layer?.cornerRadius = 1.5
+        selectedMarker.isHidden = true
+        addSubview(selectedMarker)
+
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.style = .regular
-            glass.cornerRadius = 10
-            // 玻璃会把染色放大，0.26 在浅色下会变成整块高饱和蓝，压到和旧版选中块相近的浓度。
-            glass.tintColor = Theme.accent.withAlphaComponent(0.16)
+            glass.cornerRadius = 9
+            glass.tintColor = Theme.accentSoft
             glass.isHidden = true
             addSubview(glass, positioned: .below, relativeTo: nil)
-            selectionGlass = glass
+            hoverBackground = glass
+        } else {
+            let fill = NSView()
+            fill.wantsLayer = true
+            fill.layer?.cornerRadius = 9
+            fill.layer?.backgroundColor = Theme.layerColor(Theme.hoverFill, for: self)
+            fill.isHidden = true
+            addSubview(fill, positioned: .below, relativeTo: nil)
+            hoverBackground = fill
         }
+        updateMarker()
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
 
     override var isSelected: Bool {
-        didSet { updateGlass() }
-    }
-
-    override var isEmphasized: Bool {
-        didSet { updateGlass() }
+        didSet { updateMarker() }
     }
 
     override func layout() {
         super.layout()
-        selectionGlass?.frame = bounds.insetBy(dx: 6, dy: 2)
+        hoverBackground?.frame = bounds.insetBy(dx: 6, dy: 2)
+        let height = min(18, max(0, bounds.height - 10))
+        selectedMarker.frame = NSRect(
+            x: 3,
+            y: (bounds.height - height) / 2,
+            width: 3,
+            height: height
+        )
     }
 
-    private func updateGlass() {
-        guard let selectionGlass else {
-            needsDisplay = true
-            return
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea {
+            removeTrackingArea(hoverArea)
         }
-        selectionGlass.isHidden = !isSelected
-        if #available(macOS 26.0, *), let glass = selectionGlass as? NSGlassEffectView {
-            glass.tintColor = Theme.accent.withAlphaComponent(isEmphasized ? 0.16 : 0.10)
-        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        updateHover()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        updateHover()
+    }
+
+    func updateHover() {
+        hoverBackground?.isHidden = !hovering
+    }
+
+    /// 选中不再铺色块，只留左侧细条，避免列表整行变成蓝色背景。
+    private func updateMarker() {
+        selectedMarker.isHidden = !isSelected
+        selectedMarker.layer?.backgroundColor = Theme.layerColor(Theme.accent, for: self)
         needsDisplay = true
     }
 
-    override func drawSelection(in dirtyRect: NSRect) {
-        guard selectionGlass == nil else { return }
-        let rect = bounds.insetBy(dx: 6, dy: 2)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7)
-        Theme.accent.withAlphaComponent(isEmphasized ? 0.22 : 0.12).setFill()
-        path.fill()
-    }
+    override func drawSelection(in dirtyRect: NSRect) {}
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateGlass()
+        updateMarker()
+        if !(hoverBackground is NSGlassEffectView) {
+            hoverBackground?.layer?.backgroundColor = Theme.layerColor(Theme.hoverFill, for: self)
+        }
     }
 }
 

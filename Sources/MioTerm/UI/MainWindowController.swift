@@ -8,12 +8,8 @@ import MioTermCore
 @MainActor
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let workspace = WorkspaceViewController()
-    private static let actions = NSToolbarItem.Identifier("mio.actions")
-    private static let home = NSToolbarItem.Identifier("mio.home")
-    private static let connect = NSToolbarItem.Identifier("mio.connect")
-    private static let newHost = NSToolbarItem.Identifier("mio.newHost")
-    private static let toggleSidebar = NSToolbarItem.Identifier("mio.toggleSidebar")
-    private static let appIcon = NSToolbarItem.Identifier("mio.appIcon")
+    private static let pageActions = NSToolbarItem.Identifier("mio.pageActions")
+    private static let windowActions = NSToolbarItem.Identifier("mio.windowActions")
     private var showingSession = false
 
     convenience init() {
@@ -75,7 +71,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         toolbar.autosavesConfiguration = false
         toolbar.showsBaselineSeparator = false
         window.toolbar = toolbar
-        applyToolbarItems(showSession: false)
+        applyToolbarItems()
     }
 
     func show() {
@@ -89,18 +85,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private func setSessionActive(_ active: Bool) {
         guard active != showingSession else { return }
         showingSession = active
-        applyToolbarItems(showSession: active)
+        applyToolbarItems()
     }
 
     /// `NSToolbarItem` 没有“隐藏”，只能按当前上下文重建条目。
-    private func applyToolbarItems(showSession: Bool) {
+    private func applyToolbarItems() {
         guard let toolbar = window?.toolbar else { return }
         while !toolbar.items.isEmpty {
             toolbar.removeItem(at: 0)
         }
-        let identifiers: [NSToolbarItem.Identifier] = showSession
-            ? [Self.toggleSidebar, Self.home, .flexibleSpace, Self.actions, Self.appIcon]
-            : [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.actions, Self.appIcon]
+        let identifiers: [NSToolbarItem.Identifier] = [Self.pageActions, .flexibleSpace, Self.windowActions]
         for (index, identifier) in identifiers.enumerated() {
             toolbar.insertItem(withItemIdentifier: identifier, at: index)
         }
@@ -110,58 +104,97 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch itemIdentifier {
-        case Self.actions:
-            return actionClusterItem(itemIdentifier)
-        case Self.home:
-            return button(itemIdentifier, symbol: "house", label: "主页", action: #selector(WorkspaceViewController.showHome(_:)))
-        case Self.connect:
-            return button(itemIdentifier, symbol: "bolt", label: "连接所选主机", action: #selector(WorkspaceViewController.connectSelectedHost(_:)))
-        case Self.newHost:
-            return button(itemIdentifier, symbol: "plus.circle", label: "新增主机", action: #selector(WorkspaceViewController.newHost(_:)))
-        case Self.toggleSidebar:
-            let item = paletteItem(itemIdentifier, symbol: "sidebar.left", label: "显示/隐藏侧栏")
-            item.action = #selector(NSSplitViewController.toggleSidebar(_:))
-            return item
-        case Self.appIcon:
-            return brandItem(itemIdentifier)
+        case Self.pageActions:
+            return pageActionsItem(itemIdentifier)
+        case Self.windowActions:
+            return windowActionsItem(itemIdentifier)
         default:
             return nil
         }
     }
 
-    /// 右上角动作合成一条玻璃胶囊：新建标签和设置都装进同一块系统材质里。
-    private func actionClusterItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
-        let newTabButton = glassButton(
-            symbol: "plus",
-            label: "新建标签",
-            action: #selector(WorkspaceViewController.newLocalTerminal(_:))
-        )
-        let preferencesButton = glassButton(
-            symbol: "gearshape",
-            label: "设置",
-            action: #selector(WorkspaceViewController.showPreferences(_:))
-        )
-        let row = NSStackView(views: [newTabButton, preferencesButton])
+    /// 左侧：侧栏开关 + 随上下文变化的页面动作，统一收进一块玻璃。
+    private func pageActionsItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 3
+        row.addArrangedSubview(glassButton(
+            symbol: "sidebar.left",
+            label: "显示/隐藏侧栏",
+            action: #selector(NSSplitViewController.toggleSidebar(_:))
+        ))
+        if showingSession {
+            row.addArrangedSubview(glassButton(
+                symbol: "house",
+                label: "主页",
+                action: #selector(WorkspaceViewController.showHome(_:)),
+                target: workspace
+            ))
+        } else {
+            row.addArrangedSubview(glassButton(
+                symbol: "bolt",
+                label: "连接所选主机",
+                action: #selector(WorkspaceViewController.connectSelectedHost(_:)),
+                target: workspace
+            ))
+            row.addArrangedSubview(glassButton(
+                symbol: "plus.circle",
+                label: "新增主机",
+                action: #selector(WorkspaceViewController.newHost(_:)),
+                target: workspace
+            ))
+        }
+        return glassItem(identifier, content: row, label: "侧栏 / 页面操作")
+    }
 
+    /// 右侧：新建标签、设置和品牌图标也放进同一块玻璃，避免一半有玻璃一半没有。
+    private func windowActionsItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let newTab = glassButton(
+            symbol: "plus",
+            label: "新建标签",
+            action: #selector(WorkspaceViewController.newLocalTerminal(_:)),
+            target: workspace
+        )
+        let preferences = glassButton(
+            symbol: "gearshape",
+            label: "设置",
+            action: #selector(WorkspaceViewController.showPreferences(_:)),
+            target: workspace
+        )
+        let row = NSStackView(views: [newTab, preferences, brandView()])
+        row.orientation = .horizontal
+        row.spacing = 3
+        row.setCustomSpacing(7, after: preferences)
+        return glassItem(identifier, content: row, label: "新建标签 / 设置 / MioTerm")
+    }
+
+    private func glassItem(
+        _ identifier: NSToolbarItem.Identifier,
+        content: NSView,
+        label: String
+    ) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.view = GlassBarView(
-            content: row,
+            content: content,
             padding: NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
         )
-        item.label = "新建标签 / 设置"
-        item.paletteLabel = "新建标签 / 设置"
-        item.toolTip = "新建标签 / 设置"
+        item.label = label
+        item.paletteLabel = label
+        item.toolTip = label
         item.autovalidates = false
         return item
     }
 
-    private func glassButton(symbol: String, label: String, action: Selector) -> GlassActionButton {
+    private func glassButton(
+        symbol: String,
+        label: String,
+        action: Selector,
+        target: AnyObject? = nil
+    ) -> GlassActionButton {
         let button = GlassActionButton()
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         button.restingTint = Theme.textSecondary
-        button.target = workspace
+        button.target = target
         button.action = action
         button.toolTip = label
         NSLayoutConstraint.activate([
@@ -171,46 +204,29 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         return button
     }
 
-    /// 右上角的品牌图标只作标识，不参与点击与键盘导航。
-    private func brandItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
-        let item = NSToolbarItem(itemIdentifier: identifier)
+    /// 品牌图标只作标识，不参与点击与键盘导航。
+    private func brandView() -> NSImageView {
         // 复制一份再改尺寸：applicationIconImage 是全局对象，直接改会连带影响 Dock 与关于面板。
         let icon = NSApp.applicationIconImage?.copy() as? NSImage
-        icon?.size = NSSize(width: 26, height: 26)
+        icon?.size = NSSize(width: 22, height: 22)
         let imageView = NSImageView()
         imageView.image = icon
         imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.setFrameSize(NSSize(width: 26, height: 26))
-        item.view = imageView
-        item.label = "MioTerm"
-        item.paletteLabel = "MioTerm"
-        item.toolTip = "MioTerm"
-        // 不设 isEnabled = false：禁用态会把图标压暗，反而显得灰扑扑的。
-        item.autovalidates = false
-        return item
-    }
-
-    private func button(_ identifier: NSToolbarItem.Identifier, symbol: String, label: String, action: Selector) -> NSToolbarItem {
-        let item = paletteItem(identifier, symbol: symbol, label: label)
-        item.target = workspace
-        item.action = action
-        return item
-    }
-
-    private func paletteItem(_ identifier: NSToolbarItem.Identifier, symbol: String, label: String) -> NSToolbarItem {
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-        item.label = label
-        item.paletteLabel = label
-        item.toolTip = label
-        return item
+        imageView.toolTip = "MioTerm"
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.setContentHuggingPriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            imageView.widthAnchor.constraint(equalToConstant: 22),
+            imageView.heightAnchor.constraint(equalToConstant: 22),
+        ])
+        return imageView
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.connect, Self.newHost, .flexibleSpace, Self.actions, Self.appIcon]
+        [Self.pageActions, .flexibleSpace, Self.windowActions]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.toggleSidebar, Self.home, Self.actions, Self.connect, Self.newHost, Self.appIcon, .space, .flexibleSpace]
+        [Self.pageActions, Self.windowActions, .space, .flexibleSpace]
     }
 }
