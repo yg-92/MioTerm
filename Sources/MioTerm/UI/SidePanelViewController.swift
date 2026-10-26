@@ -1,20 +1,19 @@
 import AppKit
 
-/// 左侧面板：主机列表、远端文件树与命令库共用一个槽位。
+/// 左侧面板：主机列表与远端文件树共用一个槽位。
 /// 没会话时看主机，进入 SSH 主机后看文件，切换由会话状态驱动，也允许手动切。
+/// 命令库已经移到右上角按钮的弹出面板，不再占用左侧。
 @MainActor
 final class SidePanelViewController: NSViewController {
     enum Mode: Int {
         case hosts = 0
         case files = 1
-        case commands = 2
     }
 
     let hosts = HostSidebarViewController(repository: AppEnvironment.shared.hosts)
     let files = SFTPBrowserViewController()
-    let commands = CommandLibraryViewController()
 
-    private let modeSwitcher = CapsuleSegmentedView(titles: ["主机", "文件", "命令"])
+    private let modeSwitcher = CapsuleSegmentedView(titles: ["主机", "文件"])
     /// 切换器套进系统玻璃，胶囊轨道由 NSGlassEffectView 提供，控件自己只画选中块和文字。
     private lazy var switcher: GlassBarView = {
         modeSwitcher.drawsTrack = false
@@ -77,7 +76,6 @@ final class SidePanelViewController: NSViewController {
         switch mode {
         case .hosts: return hosts
         case .files: return files
-        case .commands: return commands
         }
     }
 
@@ -89,12 +87,10 @@ final class SidePanelViewController: NSViewController {
     func bind(to controller: TerminalController?) {
         let canBrowse = Self.supportsFiles(controller)
         modeSwitcher.setEnabled(canBrowse, at: Mode.files.rawValue)
-        // 命令库对任何会话都有意义（本地终端也有历史），不跟着文件面板的可用性走。
-        commands.bind(to: controller)
         if !canBrowse {
             autoSwitchedFor = nil
             files.bind(to: nil)
-            // 只有正停在文件视图上才退回主机；用户手动切到命令库不该被抢回去。
+            // 只有正停在文件视图上才退回主机。
             if mode == .files { select(.hosts) }
             return
         }

@@ -147,12 +147,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         return glassItem(identifier, content: row, label: "侧栏 / 页面操作")
     }
 
-    /// 右侧：新建标签、设置和品牌图标也放进同一块玻璃，避免一半有玻璃一半没有。
+    /// 右侧：命令库、新建标签、设置和品牌图标放进同一块玻璃，避免一半有玻璃一半没有。
     private func windowActionsItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let newTab = glassButton(
             symbol: "plus",
             label: "新建标签",
             action: #selector(WorkspaceViewController.newLocalTerminal(_:)),
+            target: workspace
+        )
+        let commands = glassButton(
+            symbol: "command",
+            label: "命令库",
+            action: #selector(WorkspaceViewController.showCommandLibrary(_:)),
             target: workspace
         )
         let preferences = glassButton(
@@ -161,11 +167,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             action: #selector(WorkspaceViewController.showPreferences(_:)),
             target: workspace
         )
-        let row = NSStackView(views: [newTab, preferences, brandView()])
+        workspace.attachCommandAnchor(commands)
+        let row = NSStackView(views: [newTab, commands, preferences, brandView()])
         row.orientation = .horizontal
         row.spacing = 3
         row.setCustomSpacing(7, after: preferences)
-        return glassItem(identifier, content: row, label: "新建标签 / 设置 / MioTerm")
+        return glassItem(identifier, content: row, label: "新建标签 / 命令库 / 设置 / MioTerm")
     }
 
     private func glassItem(

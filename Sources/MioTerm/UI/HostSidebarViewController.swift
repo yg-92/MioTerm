@@ -454,40 +454,28 @@ final class HostOutlineView: NSOutlineView {
     }
 }
 
-/// 选中行用系统玻璃做胶囊底，和面板上的玻璃工具栏是同一种材质；
-/// 26 以前没有 NSGlassEffectView，退回自绘的强调色圆角块。
+/// 选中行只在左侧留一条细色条；悬停给一层很淡的底色，和整体扁平风格一致。
 @MainActor
 private final class SidebarRowView: NSTableRowView {
-    private var hoverBackground: NSView?
+    private let hoverBackground = NSView()
     private let selectedMarker = NSView()
     private var hoverArea: NSTrackingArea?
-    private var hovering = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+
+        hoverBackground.wantsLayer = true
+        hoverBackground.layer?.cornerRadius = 7
+        hoverBackground.layer?.cornerCurve = .continuous
+        hoverBackground.layer?.backgroundColor = Theme.layerColor(Theme.hoverFill, for: self)
+        hoverBackground.isHidden = true
+        addSubview(hoverBackground, positioned: .below, relativeTo: nil)
 
         selectedMarker.wantsLayer = true
         selectedMarker.layer?.cornerRadius = 1.5
         selectedMarker.isHidden = true
         addSubview(selectedMarker)
 
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.style = .regular
-            glass.cornerRadius = 9
-            glass.tintColor = Theme.accentSoft
-            glass.isHidden = true
-            addSubview(glass, positioned: .below, relativeTo: nil)
-            hoverBackground = glass
-        } else {
-            let fill = NSView()
-            fill.wantsLayer = true
-            fill.layer?.cornerRadius = 9
-            fill.layer?.backgroundColor = Theme.layerColor(Theme.hoverFill, for: self)
-            fill.isHidden = true
-            addSubview(fill, positioned: .below, relativeTo: nil)
-            hoverBackground = fill
-        }
         updateMarker()
     }
 
@@ -499,7 +487,7 @@ private final class SidebarRowView: NSTableRowView {
 
     override func layout() {
         super.layout()
-        hoverBackground?.frame = bounds.insetBy(dx: 6, dy: 2)
+        hoverBackground.frame = bounds.insetBy(dx: 6, dy: 2)
         let height = min(18, max(0, bounds.height - 10))
         selectedMarker.frame = NSRect(
             x: 3,
@@ -525,17 +513,11 @@ private final class SidebarRowView: NSTableRowView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        hovering = true
-        updateHover()
+        hoverBackground.isHidden = false
     }
 
     override func mouseExited(with event: NSEvent) {
-        hovering = false
-        updateHover()
-    }
-
-    func updateHover() {
-        hoverBackground?.isHidden = !hovering
+        hoverBackground.isHidden = true
     }
 
     /// 选中不再铺色块，只留左侧细条，避免列表整行变成蓝色背景。
@@ -549,10 +531,8 @@ private final class SidebarRowView: NSTableRowView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        hoverBackground.layer?.backgroundColor = Theme.layerColor(Theme.hoverFill, for: self)
         updateMarker()
-        if !(hoverBackground is NSGlassEffectView) {
-            hoverBackground?.layer?.backgroundColor = Theme.layerColor(Theme.hoverFill, for: self)
-        }
     }
 }
 

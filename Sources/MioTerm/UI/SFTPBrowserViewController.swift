@@ -46,7 +46,7 @@ final class SFTPBrowserViewController: NSViewController {
     private let downloadButton = GlassActionButton()
     private let hiddenToggle = GlassActionButton()
     /// 每个标签单独的跟随开关：全局设置管默认，临时不想被终端拽走时在这里关掉。
-    private let followToggle = NSButton(checkboxWithTitle: "跟随", target: nil, action: nil)
+    private let followToggle = FollowToggleButton()
     private let retryButton = NSButton()
     private let statusLabel = NSTextField(labelWithString: "未选择 SSH 会话")
     /// 远端拒绝 SFTP 子系统时，在列表的位置给出说明；这种情况不该弹错误框。
@@ -91,15 +91,26 @@ final class SFTPBrowserViewController: NSViewController {
 
         // 跟随开关放在顶部操作行：底部状态行在矮窗口里会被裁掉，
         // 而“现在到底跟不跟随”是用户最需要一眼确认的信息。
-        // 图标按钮和跟随开关排成一条，套进玻璃胶囊，按钮本身只留图标。
-        let iconRow = Self.makeActionBar([
-            refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle,
-            followToggle,
+        // 整条操作行跟着文件面板宽度伸缩，窄的时候按钮间距和宽度自动收紧。
+        let actionRow = FileActionRow(
+            buttons: [refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle],
+            accessory: followToggle
+        )
+        let actionBar = GlassBarView(
+            content: actionRow,
+            padding: NSEdgeInsets(top: 3, left: 6, bottom: 3, right: 6)
+        )
+        actionBar.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        actionBar.translatesAutoresizingMaskIntoConstraints = false
+        let actions = NSView()
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        actions.addSubview(actionBar)
+        NSLayoutConstraint.activate([
+            actionBar.leadingAnchor.constraint(equalTo: actions.leadingAnchor, constant: 8),
+            actionBar.trailingAnchor.constraint(equalTo: actions.trailingAnchor, constant: -8),
+            actionBar.topAnchor.constraint(equalTo: actions.topAnchor, constant: 6),
+            actionBar.bottomAnchor.constraint(equalTo: actions.bottomAnchor, constant: -2),
         ])
-        let actions = NSStackView(views: [iconRow])
-        actions.orientation = .horizontal
-        actions.spacing = 6
-        actions.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 2, right: 8)
 
         let statusRow = NSStackView(views: [statusLabel, retryButton])
         statusRow.orientation = .horizontal
@@ -181,9 +192,6 @@ final class SFTPBrowserViewController: NSViewController {
         hiddenToggle.toolTip = "显示 / 隐藏以点开头的文件"
         updateHiddenToggleAppearance()
 
-        followToggle.font = .systemFont(ofSize: 11)
-        followToggle.controlSize = .small
-        followToggle.setContentHuggingPriority(.required, for: .horizontal)
         followToggle.target = self
         followToggle.action = #selector(toggleFollow)
         followToggle.toolTip = "文件列表跟着终端的 cd 走；关掉后终端再换目录也不影响这里"
@@ -197,24 +205,10 @@ final class SFTPBrowserViewController: NSViewController {
         retryButton.isHidden = true
     }
 
-    /// 玻璃栏里的按钮只画图标，尺寸固定，着色交给 GlassActionButton 的悬停逻辑。
+    /// 玻璃栏里的按钮只画图标，尺寸由 FileActionRow 按面板宽度分配。
     private static func applyActionAppearance(to button: GlassActionButton) {
         button.isBordered = false
         button.restingTint = Theme.textSecondary
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 28),
-            button.heightAnchor.constraint(equalToConstant: 26),
-        ])
-    }
-
-    /// 图标和跟随开关合成一条玻璃胶囊；胶囊的底色和描边自己画，
-    /// 纯色面板上也能看清边界，26 起再叠系统材质。
-    private static func makeActionBar(_ buttons: [NSView]) -> NSView {
-        let row = NSStackView(views: buttons)
-        row.orientation = .horizontal
-        row.spacing = 3
-        row.setCustomSpacing(9, after: buttons[buttons.count - 2])
-        return GlassBarView(content: row)
     }
 
     private func updateHiddenToggleAppearance() {
@@ -1356,6 +1350,140 @@ extension SFTPBrowserViewController: NSTableViewDataSource, NSTableViewDelegate,
             uploadDroppedFiles(urls)
         }
         return true
+    }
+}
+
+/// 文件操作行：胶囊宽度跟着面板走，按钮宽度与间距按可用空间收缩，窄面板也不会溢出。
+@MainActor
+private final class FileActionRow: NSView {
+    private let buttons: [GlassActionButton]
+    private let accessory: NSView
+
+    init(buttons: [GlassActionButton], accessory: NSView) {
+        self.buttons = buttons
+        self.accessory = accessory
+        super.init(frame: .zero)
+        // 子视图全部用 frame 排版，关掉自动转换约束，避免 Auto Layout 把宽度抢回去。
+        accessory.translatesAutoresizingMaskIntoConstraints = false
+        for button in buttons {
+            button.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(button)
+        }
+        addSubview(accessory)
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: 26)
+    }
+
+    override func layout() {
+        super.layout()
+        guard !buttons.isEmpty else { return }
+        let spacing: CGFloat = bounds.width < 260 ? 2 : 3
+        let accessoryWidth = min(46, max(36, accessory.intrinsicContentSize.width))
+        let available = max(0, bounds.width - accessoryWidth - 8 - spacing * CGFloat(buttons.count - 1))
+        let buttonWidth = min(28, max(20, available / CGFloat(buttons.count)))
+        var x: CGFloat = 0
+        for button in buttons {
+            button.frame = NSRect(x: x, y: (bounds.height - 26) / 2, width: buttonWidth, height: 26)
+            x += buttonWidth + spacing
+        }
+        let accessoryHeight = min(22, bounds.height)
+        accessory.frame = NSRect(
+            x: max(x, bounds.width - accessoryWidth),
+            y: (bounds.height - accessoryHeight) / 2,
+            width: accessoryWidth,
+            height: accessoryHeight
+        )
+    }
+}
+
+/// 文件面板的“跟随”开关：和胶囊切换器同一套强调色胶囊，不用系统复选框。
+@MainActor
+private final class FollowToggleButton: NSButton {
+    private var hoverArea: NSTrackingArea?
+    private var hovering = false {
+        didSet { needsDisplay = true }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        title = "跟随"
+        isBordered = false
+        setButtonType(.toggle)
+        toolTip = "文件列表跟着终端的 cd 走；关掉后终端再换目录也不影响这里"
+        setAccessibilityLabel("跟随终端目录")
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 46, height: 22) }
+
+    override var state: NSControl.StateValue {
+        didSet { needsDisplay = true }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea {
+            removeTrackingArea(hoverArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let on = state == .on
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let pill = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        if on {
+            Theme.accent.withAlphaComponent(0.16).setFill()
+            pill.fill()
+            Theme.accent.withAlphaComponent(hovering ? 0.48 : 0.38).setStroke()
+        } else {
+            Theme.hoverFill.setFill()
+            pill.fill()
+            (hovering ? Theme.borderStrong : Theme.border).setStroke()
+        }
+        pill.lineWidth = 1
+        pill.stroke()
+
+        let text = title as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10.5, weight: on ? .semibold : .medium),
+            .foregroundColor: on ? Theme.accent : Theme.textSecondary,
+        ]
+        let size = text.size(withAttributes: attributes)
+        text.draw(
+            in: NSRect(
+                x: (bounds.width - size.width) / 2,
+                y: (bounds.height - size.height) / 2,
+                width: size.width,
+                height: size.height
+            ),
+            withAttributes: attributes
+        )
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 }
 

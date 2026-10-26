@@ -10,6 +10,10 @@ final class WorkspaceViewController: NSSplitViewController {
     private let sessions = SessionTabViewController()
     private let mainArea = ContainerViewController()
     private let sidePanel = SidePanelViewController()
+    private let commands = CommandLibraryViewController()
+    private var commandPopover: NSPopover?
+    /// 右上角命令按钮的位置：菜单或快捷键触发时也贴在它下面弹出。
+    private(set) weak var commandAnchorView: NSView?
     private lazy var coordinator = ConnectionCoordinator(environment: environment)
 
     /// 主机列表相关代码沿用旧名字，实际视图由侧栏面板持有。
@@ -90,6 +94,7 @@ final class WorkspaceViewController: NSSplitViewController {
     /// 会话增删与选中变化统一走这里，保证左右两侧的状态一次到位。
     private func apply(selected controller: TerminalController?) {
         mainArea.show(sessions)
+        commands.bind(to: controller)
         if let controller {
             sidePanel.bind(to: controller)
         } else {
@@ -156,10 +161,29 @@ final class WorkspaceViewController: NSSplitViewController {
         sidePanel.showHosts()
     }
 
-    /// 命令库跟着当前标签走：没有会话时面板自己显示占位说明。
+    /// 命令库从左侧面板移到了右上角按钮：点击后在按钮下方弹出，选完即关。
     @objc func showCommandLibrary(_ sender: Any?) {
-        mainArea.show(sessions)
-        sidePanel.select(.commands)
+        if let popover = commandPopover, popover.isShown {
+            popover.performClose(sender)
+            return
+        }
+        let anchor = (sender as? NSView) ?? commandAnchorView
+        guard let anchor, anchor.window != nil else { return }
+        if commandPopover == nil {
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = true
+            popover.contentViewController = commands
+            popover.contentSize = NSSize(width: 320, height: 440)
+            commandPopover = popover
+        }
+        commands.bind(to: sessions.selectedController)
+        commandPopover?.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+    }
+
+    /// 工具栏每次重建都会换新按钮，这里记下最新位置供菜单触发时复用。
+    func attachCommandAnchor(_ view: NSView) {
+        commandAnchorView = view
     }
 
     /// 关闭整个工作区前回收所有子进程，避免残留 ssh 与 askpass 临时文件。
