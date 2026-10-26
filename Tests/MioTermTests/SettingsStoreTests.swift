@@ -42,6 +42,9 @@ struct SettingsStoreTests {
         #expect(settings.maxConcurrentTransfers == 3)
         #expect(settings.fileTreeFontSize == 12)
         #expect(settings.fileTreeIconSize == 13)
+        // 配色档位与强调色是后加的，老文件没有这两个键也要退回默认。
+        #expect(settings.contrast == .soft)
+        #expect(settings.accent == .blue)
     }
 
     @Test("存进去的每一项都能读回来")
@@ -49,6 +52,8 @@ struct SettingsStoreTests {
         let (store, url) = try makeStore(name: "round")
         try store.update { next in
             next.appearance = .light
+            next.contrast = .high
+            next.accent = .green
             next.terminalFontName = "Menlo Bold"
             next.terminalFontSize = 18
             next.fileTreeFontSize = 14

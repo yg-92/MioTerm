@@ -14,10 +14,47 @@ public enum AppearanceMode: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// 配色档位。深色下最刺眼的是近黑底配近白字，柔和档把底色抬亮、文字压暗，
+/// 长时间盯着终端不那么累；标准档是原来的观感，高对比留给强光环境。
+public enum UIContrast: String, Codable, CaseIterable, Sendable {
+    case soft
+    case standard
+    case high
+
+    public var displayName: String {
+        switch self {
+        case .soft: return "柔和"
+        case .standard: return "标准"
+        case .high: return "高对比"
+        }
+    }
+}
+
+/// 强调色只作用于选中态、图标与链接，不换协议标识色。
+public enum AccentColor: String, Codable, CaseIterable, Sendable {
+    case blue
+    case purple
+    case green
+    case rose
+    case graphite
+
+    public var displayName: String {
+        switch self {
+        case .blue: return "蓝"
+        case .purple: return "紫"
+        case .green: return "绿"
+        case .rose: return "玫瑰"
+        case .graphite: return "石墨"
+        }
+    }
+}
+
 /// 界面与连接的可调项。除监听/路径类配置外，这里的改动即时生效，
 /// 对齐 webterm “页面配置热更新” 的行为。
 public struct AppSettings: Codable, Equatable, Sendable {
     public var appearance: AppearanceMode
+    public var contrast: UIContrast
+    public var accent: AccentColor
     public var terminalFontName: String
     public var terminalFontSize: Double
     /// 左侧目录树的文字与图标尺寸；树比终端窄得多，两者分开调。
@@ -33,6 +70,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     public init(
         appearance: AppearanceMode = .system,
+        contrast: UIContrast = .soft,
+        accent: AccentColor = .blue,
         terminalFontName: String = "Menlo Regular",
         terminalFontSize: Double = 13,
         fileTreeFontSize: Double = 12,
@@ -46,6 +85,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         defaultKeepaliveInterval: Int = 30
     ) {
         self.appearance = appearance
+        self.contrast = contrast
+        self.accent = accent
         self.terminalFontName = terminalFontName
         self.terminalFontSize = terminalFontSize
         self.fileTreeFontSize = fileTreeFontSize
@@ -66,6 +107,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         appearance = (try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearance)) ?? .system
+        contrast = (try? c.decodeIfPresent(UIContrast.self, forKey: .contrast)) ?? .soft
+        accent = (try? c.decodeIfPresent(AccentColor.self, forKey: .accent)) ?? .blue
         terminalFontName = (try? c.decodeIfPresent(String.self, forKey: .terminalFontName)) ?? "Menlo Regular"
         terminalFontSize = (try? c.decodeIfPresent(Double.self, forKey: .terminalFontSize)) ?? 13
         fileTreeFontSize = (try? c.decodeIfPresent(Double.self, forKey: .fileTreeFontSize)) ?? 12

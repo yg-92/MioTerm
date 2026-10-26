@@ -2,18 +2,52 @@ import AppKit
 import MioTermCore
 import SwiftTerm
 
-/// 统一主题：颜色分成深浅两套，装进动态 NSColor，界面在切换外观时自动重绘。
+/// 统一主题：颜色按“深浅 × 对比度档位 × 强调色”从 `ThemePalette` 取，
+/// 装进动态 NSColor，界面在切换外观或配色档位时自动重绘。
 /// 强调色只出现在选中态与图标上，避免整屏花哨。
 enum Theme {
+    /// 当前档位对应的深浅两套调色板。动态色的提供器每次绘制都会来取，
+    /// 所以换档位只需替换这份数据，再让视图重绘一次。
+    private struct Scheme {
+        var dark: ThemePalette
+        var light: ThemePalette
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var scheme = Scheme(
+        dark: ThemePalette.palette(dark: true, contrast: .soft, accent: .blue),
+        light: ThemePalette.palette(dark: false, contrast: .soft, accent: .blue)
+    )
+
+    /// 由设置在启动与保存时调用；调用方随后要让已经画好的视图重绘一次。
+    static func configure(contrast: UIContrast, accent: AccentColor) {
+        lock.lock()
+        scheme = Scheme(
+            dark: ThemePalette.palette(dark: true, contrast: contrast, accent: accent),
+            light: ThemePalette.palette(dark: false, contrast: contrast, accent: accent)
+        )
+        lock.unlock()
+    }
+
+    static func palette(dark: Bool) -> ThemePalette {
+        lock.lock()
+        defer { lock.unlock() }
+        return dark ? scheme.dark : scheme.light
+    }
+
     static func rgba(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 1) -> NSColor {
         NSColor(srgbRed: red / 255, green: green / 255, blue: blue / 255, alpha: alpha)
     }
 
+    private static func color(_ rgb: ThemeRGB, alpha: CGFloat = 1) -> NSColor {
+        rgba(CGFloat(rgb.red), CGFloat(rgb.green), CGFloat(rgb.blue), alpha)
+    }
+
     /// 同一个颜色名给出深浅两份：AppKit 在绘制时按当前外观取用，
     /// 文本、图标、描边这类 NSColor 就不必在切换主题时逐个重设。
-    private static func dynamic(_ name: String, dark: NSColor, light: NSColor) -> NSColor {
+    private static func dynamic(_ name: String, _ pick: @escaping (ThemePalette) -> NSColor) -> NSColor {
         NSColor(name: NSColor.Name("mio.theme.\(name)")) { appearance in
-            isDark(appearance) ? dark : light
+            pick(palette(dark: isDark(appearance)))
         }
     }
 
@@ -32,34 +66,35 @@ enum Theme {
         return resolved
     }
 
-    static let background = dynamic("background", dark: rgba(13, 15, 19), light: rgba(244, 246, 250))
-    static let sidebarTop = dynamic("sidebarTop", dark: rgba(23, 26, 32), light: rgba(255, 255, 255))
-    static let sidebarBottom = dynamic("sidebarBottom", dark: rgba(18, 21, 26), light: rgba(240, 243, 248))
-    static let tabBar = dynamic("tabBar", dark: rgba(17, 19, 24), light: rgba(233, 237, 245))
-    static let surface = dynamic("surface", dark: rgba(23, 26, 32), light: rgba(255, 255, 255))
-    static let surfaceRaised = dynamic("surfaceRaised", dark: rgba(32, 37, 46), light: rgba(238, 242, 248))
-    static let selectedTab = dynamic("selectedTab", dark: rgba(38, 44, 55), light: rgba(220, 228, 242))
-    static let hoverFill = dynamic("hoverFill", dark: NSColor(white: 1, alpha: 0.045), light: NSColor(white: 0, alpha: 0.05))
-    static let terminalBackground = dynamic("terminalBackground", dark: rgba(11, 13, 17), light: rgba(250, 251, 252))
-    static let terminalForeground = dynamic("terminalForeground", dark: rgba(201, 209, 217), light: rgba(36, 41, 47))
+    static let background = dynamic("background") { color($0.background) }
+    static let sidebarTop = dynamic("sidebarTop") { color($0.sidebarTop) }
+    static let sidebarBottom = dynamic("sidebarBottom") { color($0.sidebarBottom) }
+    static let tabBar = dynamic("tabBar") { color($0.tabBar) }
+    static let surface = dynamic("surface") { color($0.surface) }
+    static let surfaceRaised = dynamic("surfaceRaised") { color($0.surfaceRaised) }
+    static let selectedTab = dynamic("selectedTab") { color($0.selectedTab) }
+    static let hoverFill = dynamic("hoverFill") { color($0.overlay, alpha: $0.hoverAlpha) }
+    static let terminalBackground = dynamic("terminalBackground") { color($0.terminalBackground) }
+    static let terminalForeground = dynamic("terminalForeground") { color($0.terminalForeground) }
 
-    static let border = dynamic("border", dark: NSColor(white: 1, alpha: 0.07), light: NSColor(white: 0, alpha: 0.10))
-    static let borderStrong = dynamic("borderStrong", dark: NSColor(white: 1, alpha: 0.12), light: NSColor(white: 0, alpha: 0.16))
+    static let border = dynamic("border") { color($0.overlay, alpha: $0.borderAlpha) }
+    static let borderStrong = dynamic("borderStrong") { color($0.overlay, alpha: $0.borderStrongAlpha) }
 
-    static let textPrimary = dynamic("textPrimary", dark: rgba(230, 234, 240), light: rgba(28, 36, 48))
-    static let textSecondary = dynamic("textSecondary", dark: rgba(148, 156, 170), light: rgba(90, 102, 117))
-    static let textTertiary = dynamic("textTertiary", dark: rgba(104, 113, 128), light: rgba(138, 148, 163))
+    static let textPrimary = dynamic("textPrimary") { color($0.textPrimary) }
+    static let textSecondary = dynamic("textSecondary") { color($0.textSecondary) }
+    static let textTertiary = dynamic("textTertiary") { color($0.textTertiary) }
 
-    static let accent = dynamic("accent", dark: rgba(106, 166, 255), light: rgba(46, 111, 224))
-    static let accentDeep = dynamic("accentDeep", dark: rgba(59, 130, 246), light: rgba(31, 95, 209))
-    static let accentSoft = dynamic("accentSoft", dark: rgba(106, 166, 255, 0.16), light: rgba(46, 111, 224, 0.12))
-    static let success = dynamic("success", dark: rgba(74, 222, 128), light: rgba(31, 157, 85))
-    static let warning = dynamic("warning", dark: rgba(251, 191, 36), light: rgba(183, 110, 0))
-    static let danger = dynamic("danger", dark: rgba(248, 113, 113), light: rgba(211, 47, 47))
-    static let purple = dynamic("purple", dark: rgba(192, 132, 252), light: rgba(124, 58, 237))
-    static let orange = dynamic("orange", dark: rgba(251, 146, 60), light: rgba(194, 65, 12))
+    static let accent = dynamic("accent") { color($0.accent) }
+    static let accentDeep = dynamic("accentDeep") { color($0.accentDeep) }
+    static let accentSoft = dynamic("accentSoft") { color($0.accent, alpha: $0.accentSoftAlpha) }
+    static let success = dynamic("success") { color($0.success) }
+    static let warning = dynamic("warning") { color($0.warning) }
+    static let danger = dynamic("danger") { color($0.danger) }
+    static let purple = dynamic("purple") { color($0.purple) }
+    static let teal = dynamic("teal") { color($0.teal) }
+    static let orange = dynamic("orange") { color($0.orange) }
     /// 欢迎页左上角那团柔光：深色下偏蓝，浅色下只是一层淡雾。
-    static let glow = dynamic("glow", dark: rgba(26, 34, 50), light: rgba(226, 235, 250))
+    static let glow = dynamic("glow") { color($0.glow) }
 
     static func color(for state: TerminalController.State) -> NSColor {
         switch state {
@@ -83,21 +118,21 @@ enum Theme {
     static func tint(for kind: ConnectionProtocol) -> NSColor {
         switch kind {
         case .ssh: return accent
-        case .telnet: return purple
+        case .telnet: return teal
         case .serial: return orange
         }
     }
 
     // MARK: - 终端
 
-    /// SwiftTerm 只接受具体色值，没法跟着动态颜色走，所以深浅各备一套，
-    /// 由 TerminalController 在外观变化时重新安装。
+    /// SwiftTerm 只接受具体色值，没法跟着动态颜色走，所以按深浅各取一份，
+    /// 由 TerminalController 在外观或配色档位变化时重新安装。
     static func terminalBackground(dark: Bool) -> NSColor {
-        dark ? rgba(11, 13, 17) : rgba(250, 251, 252)
+        color(palette(dark: dark).terminalBackground)
     }
 
     static func terminalForeground(dark: Bool) -> NSColor {
-        dark ? rgba(201, 209, 217) : rgba(36, 41, 47)
+        color(palette(dark: dark).terminalForeground)
     }
 
     static func terminalPalette(dark: Bool) -> [SwiftTerm.Color] {
@@ -154,5 +189,17 @@ final class AppearanceAwareView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         onAppearanceChange?()
+    }
+}
+
+extension NSView {
+    /// 配色档位或强调色变了，但系统外观没变，AppKit 不会自己回调外观变化。
+    /// 沿视图树把 `viewDidChangeEffectiveAppearance` 走一遍，各视图既有的刷新逻辑
+    /// 就会重新解析图层色，draw 型视图也会跟着重绘。
+    @MainActor
+    func applyThemeChangeRecursively() {
+        viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+        for subview in subviews { subview.applyThemeChangeRecursively() }
     }
 }

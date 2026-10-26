@@ -1022,8 +1022,8 @@ final class TerminalModeBadge: NSView {
             tint = Theme.accent
             fill = Theme.accentSoft
         case .container:
-            tint = Theme.purple
-            fill = Theme.purple.withAlphaComponent(0.14)
+            tint = Theme.teal
+            fill = Theme.teal.withAlphaComponent(0.14)
         case .remoteShell:
             tint = Theme.warning
             fill = Theme.warning.withAlphaComponent(0.14)

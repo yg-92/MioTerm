@@ -9,6 +9,8 @@ final class PreferencesWindowController: NSWindowController {
     private let store: SettingsStore
 
     private let appearancePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+    private let contrastPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+    private let accentPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let fontPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let fontSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
     private let treeFontSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
@@ -68,6 +70,8 @@ final class PreferencesWindowController: NSWindowController {
         guard let window else { return }
 
         appearancePopup.addItems(withTitles: AppearanceMode.allCases.map { $0.displayName })
+        contrastPopup.addItems(withTitles: UIContrast.allCases.map { $0.displayName })
+        accentPopup.addItems(withTitles: AccentColor.allCases.map { $0.displayName })
         fontPopup.addItems(withTitles: availableFonts)
         if fontPopup.itemTitles.isEmpty { fontPopup.addItem(withTitle: "Menlo Regular") }
         fontSizePopup.addItems(withTitles: Self.fontSizes.map { "\($0)" })
@@ -90,6 +94,8 @@ final class PreferencesWindowController: NSWindowController {
         }
         // 三个下拉框统一宽度，点开菜单时标题不会被挤成省略号。
         appearancePopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        contrastPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        accentPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
         fontPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
         fontSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
         treeFontSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
@@ -97,6 +103,8 @@ final class PreferencesWindowController: NSWindowController {
 
         let grid = NSGridView(views: [
             [label("外观"), appearancePopup],
+            [label("对比度"), contrastPopup],
+            [label("强调色"), accentPopup],
             [label("终端字体"), fontPopup],
             [label("字号"), fontSizePopup],
             [label("目录树字号"), treeFontSizePopup],
@@ -140,6 +148,8 @@ final class PreferencesWindowController: NSWindowController {
 
     private func load(_ settings: AppSettings) {
         appearancePopup.selectItem(at: AppearanceMode.allCases.firstIndex(of: settings.appearance) ?? 0)
+        contrastPopup.selectItem(at: UIContrast.allCases.firstIndex(of: settings.contrast) ?? 0)
+        accentPopup.selectItem(at: AccentColor.allCases.firstIndex(of: settings.accent) ?? 0)
         if let index = availableFonts.firstIndex(of: settings.terminalFontName) {
             fontPopup.selectItem(at: index)
         } else {
@@ -163,11 +173,18 @@ final class PreferencesWindowController: NSWindowController {
         keepaliveField.stringValue = "\(settings.defaultKeepaliveInterval)"
     }
 
+    /// 下拉框选项顺序就是枚举 allCases 的顺序，按索引反查即可。
+    private func selected<T>(_ popup: NSPopUpButton, _ values: [T]) -> T {
+        values[min(max(popup.indexOfSelectedItem, 0), values.count - 1)]
+    }
+
     @objc private func save(_ sender: NSButton) {
         let fontName = fontPopup.titleOfSelectedItem ?? "Menlo Regular"
         do {
             try store.update { settings in
-                settings.appearance = AppearanceMode.allCases[min(max(appearancePopup.indexOfSelectedItem, 0), AppearanceMode.allCases.count - 1)]
+                settings.appearance = selected(appearancePopup, AppearanceMode.allCases)
+                settings.contrast = selected(contrastPopup, UIContrast.allCases)
+                settings.accent = selected(accentPopup, AccentColor.allCases)
                 settings.terminalFontName = fontName
                 settings.terminalFontSize = Double(fontSizePopup.titleOfSelectedItem ?? "13") ?? 13
                 settings.fileTreeFontSize = Double(treeFontSizePopup.titleOfSelectedItem ?? "12") ?? 12

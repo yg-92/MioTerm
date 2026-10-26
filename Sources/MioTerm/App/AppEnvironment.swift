@@ -77,13 +77,20 @@ final class AppEnvironment {
     /// 界面外观跟随设置；终端配色由远端程序决定，只有底色与 ANSI 调色板属于本机，
     /// 所以要跟着深浅模式一起换掉。
     func applyAppearance() {
-        switch settings.settings.appearance {
+        let current = settings.settings
+        Theme.configure(contrast: current.contrast, accent: current.accent)
+        switch current.appearance {
         case .system: NSApp.appearance = nil
         case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
         case .light: NSApp.appearance = NSAppearance(named: .aqua)
         }
         for controller in sessions.values {
             controller.applyTheme()
+        }
+        // 只换配色档位时系统外观没变，AppKit 不会回调外观变化，
+        // 手动沿视图树走一遍，图层色才会按新调色板重新解析。
+        for window in NSApp.windows {
+            window.contentView?.applyThemeChangeRecursively()
         }
     }
 
