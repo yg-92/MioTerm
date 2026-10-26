@@ -88,7 +88,10 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc private func noteSidebarCollapse() {
         guard let panelItem else { return }
-        UserDefaults.standard.set(panelItem.isCollapsed, forKey: Self.sidebarCollapsedDefault)
+        UserDefaults.standard.set(
+            sidebarCollapse.preferredCollapsed(current: panelItem.isCollapsed),
+            forKey: Self.sidebarCollapsedDefault
+        )
     }
 
     /// 会话增删与选中变化统一走这里，保证左右两侧的状态一次到位。
@@ -102,8 +105,30 @@ final class WorkspaceViewController: NSSplitViewController {
             // 主页就是“欢迎页 + 主机列表”，不再把主机藏在分段控件后面。
             sidePanel.showHosts()
         }
+        applySidebarCollapse(for: controller)
         observeContext(of: controller)
         onPresentationChange?(controller)
+    }
+
+    // MARK: - 侧栏自动收起
+
+    /// 本地 shell、串口、Telnet 没有文件通道，开启时自动收起侧栏把宽度让给终端。
+    private var sidebarCollapse = SidebarAutoCollapse()
+
+    private func applySidebarCollapse(for controller: TerminalController?) {
+        guard let panelItem else { return }
+        guard let collapsed = sidebarCollapse.selectionChanged(
+            sessionID: controller?.sessionID,
+            canBrowseFiles: SidePanelViewController.supportsFiles(controller),
+            isCollapsed: panelItem.isCollapsed
+        ) else { return }
+        panelItem.isCollapsed = collapsed
+    }
+
+    /// 手动开合就是新的意图，自动收起记下的还原值作废。
+    override func toggleSidebar(_ sender: Any?) {
+        sidebarCollapse.userToggled()
+        super.toggleSidebar(sender)
     }
 
     // MARK: - 标题栏
