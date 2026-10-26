@@ -39,12 +39,12 @@ final class SFTPBrowserViewController: NSViewController {
     /// 面包屑每段代表的路径，按钮用 tag 索引它（NSButton 没有 representedObject）。
     private var breadcrumbPaths: [String] = []
 
-    private let refreshButton = NSButton()
-    private let goToButton = NSButton()
-    private let newFolderButton = NSButton()
-    private let uploadButton = NSButton()
-    private let downloadButton = NSButton()
-    private let hiddenToggle = NSButton()
+    private let refreshButton = GlassActionButton()
+    private let goToButton = GlassActionButton()
+    private let newFolderButton = GlassActionButton()
+    private let uploadButton = GlassActionButton()
+    private let downloadButton = GlassActionButton()
+    private let hiddenToggle = GlassActionButton()
     /// 每个标签单独的跟随开关：全局设置管默认，临时不想被终端拽走时在这里关掉。
     private let followToggle = NSButton(checkboxWithTitle: "跟随", target: nil, action: nil)
     private let retryButton = NSButton()
@@ -91,9 +91,13 @@ final class SFTPBrowserViewController: NSViewController {
 
         // 跟随开关放在顶部操作行：底部状态行在矮窗口里会被裁掉，
         // 而“现在到底跟不跟随”是用户最需要一眼确认的信息。
-        let actions = NSStackView(views: [refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle, followToggle])
+        // 图标按钮先组成一排；26 起整排套进液态玻璃，按钮本身只留图标。
+        let iconRow = Self.makeActionRow([
+            refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle,
+        ])
+        let actions = NSStackView(views: [iconRow, followToggle])
         actions.orientation = .horizontal
-        actions.spacing = 4
+        actions.spacing = 6
         actions.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 2, right: 8)
 
         let statusRow = NSStackView(views: [statusLabel, retryButton])
@@ -162,22 +166,19 @@ final class SFTPBrowserViewController: NSViewController {
             (uploadButton, "arrow.up.doc", "上传文件到选中目录", #selector(uploadFiles)),
             (downloadButton, "arrow.down.doc", "下载选中文件到本地", #selector(downloadSelected)),
         ] {
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
             button.imagePosition = .imageOnly
-            Self.applyActionBezelStyle(to: button)
-            button.controlSize = .small
+            Self.applyActionAppearance(to: button)
             button.target = self
             button.action = action
             button.toolTip = tip
         }
         hiddenToggle.setButtonType(.pushOnPushOff)
-        hiddenToggle.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "显示隐藏文件")
-        hiddenToggle.imagePosition = .imageOnly
-        Self.applyActionBezelStyle(to: hiddenToggle)
-        hiddenToggle.controlSize = .small
+        Self.applyActionAppearance(to: hiddenToggle)
         hiddenToggle.target = self
         hiddenToggle.action = #selector(toggleHidden)
         hiddenToggle.toolTip = "显示 / 隐藏以点开头的文件"
+        updateHiddenToggleAppearance()
 
         followToggle.font = .systemFont(ofSize: 11)
         followToggle.controlSize = .small
@@ -195,13 +196,47 @@ final class SFTPBrowserViewController: NSViewController {
         retryButton.isHidden = true
     }
 
-    /// macOS 26 起用液态玻璃按钮；旧系统维持原来的浮凸小按钮。
-    private static func applyActionBezelStyle(to button: NSButton) {
+    /// macOS 26 起玻璃由整排的 NSGlassEffectView 提供，按钮只画图标；
+    /// 旧系统维持原来的浮凸小按钮。
+    private static func applyActionAppearance(to button: GlassActionButton) {
         if #available(macOS 26.0, *) {
-            button.bezelStyle = .glass
+            button.isBordered = false
+            button.restingTint = Theme.textSecondary
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 26),
+                button.heightAnchor.constraint(equalToConstant: 24),
+            ])
         } else {
+            button.isBordered = true
             button.bezelStyle = .texturedRounded
+            button.controlSize = .small
         }
+    }
+
+    private static func makeActionRow(_ buttons: [NSView]) -> NSView {
+        let row = NSStackView(views: buttons)
+        row.orientation = .horizontal
+        row.spacing = 4
+        guard #available(macOS 26.0, *) else { return row }
+
+        row.spacing = 2
+        row.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
+        let glass = NSGlassEffectView()
+        glass.style = .regular
+        glass.cornerRadius = 14
+        // 面板底色是纯色，不染色的话浅色模式里玻璃几乎看不出来。
+        glass.tintColor = Theme.accentSoft
+        glass.contentView = row
+        glass.setContentHuggingPriority(.required, for: .horizontal)
+        return glass
+    }
+
+    private func updateHiddenToggleAppearance() {
+        hiddenToggle.image = NSImage(
+            systemSymbolName: showHidden ? "eye" : "eye.slash",
+            accessibilityDescription: "显示隐藏文件"
+        )
+        hiddenToggle.restingTint = showHidden ? Theme.accent : Theme.textSecondary
     }
 
     private func configureNotice() {
@@ -743,6 +778,7 @@ final class SFTPBrowserViewController: NSViewController {
 
     @objc private func toggleHidden() {
         showHidden = hiddenToggle.state == .on
+        updateHiddenToggleAppearance()
         requestReload()
     }
 
@@ -1370,5 +1406,52 @@ private final class TransferDismissButton: NSButton {
 
     override func mouseExited(with event: NSEvent) {
         contentTintColor = Theme.textTertiary
+    }
+}
+
+/// 玻璃工具栏里的图标按钮：26 起去掉边框，只留符号本身，靠悬停变色给出反馈。
+private final class GlassActionButton: NSButton {
+    var restingTint: NSColor = Theme.textSecondary {
+        didSet { updateTint() }
+    }
+
+    private var hoverArea: NSTrackingArea?
+    private var hovering = false
+
+    init() {
+        super.init(frame: .zero)
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        updateTint()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        updateTint()
+    }
+
+    private func updateTint() {
+        // 旧系统仍是带边框的圆角按钮，着色交给系统。
+        guard !isBordered else { return }
+        contentTintColor = hovering ? Theme.textPrimary : restingTint
     }
 }
