@@ -38,16 +38,7 @@ final class ConnectionCoordinator {
 
     /// 没有子进程可依托的连接：Telnet 走 TCP，串口走 termios，失败原因由会话打印在终端里。
     private func openByteStream(for host: HostProfile, in window: NSWindow?) -> TerminalController? {
-        let stream: any TerminalStream
-        switch host.protocolKind {
-        case .telnet:
-            stream = TelnetStream(host: host.address,
-                                  port: host.port,
-                                  terminalType: host.terminalType,
-                                  connectTimeout: TimeInterval(max(1, host.connectTimeout)))
-        case .serial:
-            stream = SerialStream(configuration: host.serial)
-        case .ssh:
+        guard let stream = makeStream(for: host) else {
             // SSH 有 OpenSSH 子进程可托管，不该走到这里。
             AlertPresenter.fail(title: "连接 \(host.displayName) 失败",
                                 message: "SSH 会话应通过子进程启动，这里是内部错误。",
@@ -59,6 +50,45 @@ final class ConnectionCoordinator {
         environment.register(controller)
         controller.start(stream)
         return controller
+    }
+
+    private func makeStream(for host: HostProfile) -> (any TerminalStream)? {
+        switch host.protocolKind {
+        case .telnet:
+            return TelnetStream(host: host.address,
+                                port: host.port,
+                                terminalType: host.terminalType,
+                                connectTimeout: TimeInterval(max(1, host.connectTimeout)))
+        case .serial:
+            return SerialStream(configuration: host.serial)
+        case .ssh:
+            return nil
+        }
+    }
+
+    /// 掉线后原地重连：标签、终端视图和已有输出都保留，只重建传输通道。
+    /// 主机密钥与凭据按当前配置重新取，主机在列表里被改过也能生效。
+    func reconnect(_ controller: TerminalController, in window: NSWindow?) async {
+        guard !controller.state.isAlive, let stored = controller.host else { return }
+        let host = environment.hosts.host(id: stored.id) ?? stored
+        do {
+            if host.protocolKind.usesHostKey {
+                // 重连同样走一遍指纹确认：服务器换过密钥时要在这里拦住。
+                guard try await ensureHostKeyTrusted(host: host, in: window) else { return }
+                let launch = try SSHLaunchPlanner.terminalLaunch(
+                    host: host,
+                    secrets: environment.secrets(for: host),
+                    context: .live()
+                )
+                controller.start(launch)
+            } else if let stream = makeStream(for: host) {
+                controller.start(stream)
+            }
+        } catch {
+            AlertPresenter.fail(title: "重新连接 \(host.displayName) 失败",
+                                message: error.localizedDescription,
+                                in: window)
+        }
     }
 
     /// 会话状态统一登记：失败要弹窗，其余只记日志。

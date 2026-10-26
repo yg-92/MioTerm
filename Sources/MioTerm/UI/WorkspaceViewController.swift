@@ -19,6 +19,8 @@ final class WorkspaceViewController: NSSplitViewController {
     private var preferences: PreferencesWindowController?
     /// 连接是异步的，同一主机连点两次会开出两个会话，用这个集合去重。
     private var pendingConnects: Set<String> = []
+    /// 重连也要去重：指纹确认期间连点会同时拉起两条 ssh。
+    private var reconnectingSessions: Set<UUID> = []
     /// 当前是否停在某个终端上：工具栏据此在“主机动作”和“主页”之间切换。
     var onPresentationChange: ((TerminalController?) -> Void)?
 
@@ -52,6 +54,10 @@ final class WorkspaceViewController: NSSplitViewController {
         sidebar.delegate = self
         sessions.onSessionsChange = { [weak self] controller in
             self?.apply(selected: controller)
+        }
+        // 标签里的“重新连接”和工作区菜单走同一条路径：原地重连，不换标签。
+        sessions.onReconnect = { [weak self] controller in
+            self?.reconnect(controller)
         }
         // 标签栏与主页都归会话控制器管：没有选中会话时它自己显示欢迎页。
         mainArea.show(sessions)
@@ -233,24 +239,33 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc func reconnectTerminal(_ sender: Any?) {
         guard let controller = sessions.selectedController else { return }
-        if controller.state.isAlive {
-            AlertPresenter.notify(title: "会话仍在运行", message: "先关闭当前标签或等它结束，再重新连接。", in: view.window)
-            return
-        }
-        guard let host = controller.host else {
-            let replacement = TerminalController(host: nil, settings: environment.settings.settings)
-            environment.register(replacement)
-            replacement.startLocalShell()
-            replaceSelectedTab(with: replacement)
-            return
-        }
-        sessions.closeSelectedTab()
-        connect(host: host)
+        reconnect(controller)
     }
 
-    private func replaceSelectedTab(with controller: TerminalController) {
-        sessions.closeSelectedTab()
-        sessions.append(controller)
+    /// 断线后原地重连：标签位置、滚动历史和当前目录都不动，换掉的只有传输通道。
+    private func reconnect(_ controller: TerminalController) {
+        guard !controller.state.isAlive else {
+            AlertPresenter.notify(title: "会话仍在运行",
+                                  message: "先关闭当前标签或等它结束，再重新连接。",
+                                  in: view.window)
+            return
+        }
+        guard !reconnectingSessions.contains(controller.sessionID) else { return }
+        // 本地 shell 没有远端可连：同一个视图里重开一个登录 shell 就够。
+        guard controller.host != nil else {
+            controller.startLocalShell()
+            return
+        }
+        reconnectingSessions.insert(controller.sessionID)
+        Task { @MainActor [weak self, weak controller] in
+            guard let self, let controller else { return }
+            defer { self.reconnectingSessions.remove(controller.sessionID) }
+            await self.coordinator.reconnect(controller, in: self.view.window)
+            guard controller.state.isAlive else { return }
+            // 旧文件通道挂在已经断开的那条 ssh 上，重连成功后换一条新的。
+            self.environment.closeSFTPSession(for: controller)
+            self.sidePanel.bind(to: controller)
+        }
     }
 
     private func connect(host: HostProfile) {
@@ -407,7 +422,10 @@ extension WorkspaceViewController: NSMenuItemValidation {
              #selector(duplicateSelectedHost(_:)), #selector(deleteSelectedHost(_:)),
              #selector(testSelectedHost(_:)), #selector(refreshFingerprintSelectedHost(_:)):
             return sidebar.selectedHost != nil
-        case #selector(reconnectTerminal(_:)), #selector(closeTerminalTab(_:)):
+        case #selector(reconnectTerminal(_:)):
+            // 只有在跑完了才给重连；运行中的会话不该被 ⌘R 悄悄换掉。
+            return sessions.selectedController.map { !$0.state.isAlive } ?? false
+        case #selector(closeTerminalTab(_:)):
             return sessions.selectedController != nil
         case #selector(selectNextTerminalTab(_:)), #selector(selectPreviousTerminalTab(_:)):
             return !sessions.isEmpty

@@ -12,6 +12,8 @@ final class SessionTabViewController: NSViewController {
     /// 外层要同时知道“选中了哪个会话”和“还剩几个标签”：
     /// 侧栏模式、标题栏与工具栏都靠这一个回调。
     var onSessionsChange: ((TerminalController?) -> Void)?
+    /// 断线后的“重新连接”：工作区负责重建传输，标签这边只负责把入口露出来。
+    var onReconnect: ((TerminalController) -> Void)?
     private let tabBar = SessionTabBarView()
     private let content = ContainerViewController()
     private let statusBar = TerminalStatusBarView()
@@ -76,9 +78,18 @@ final class SessionTabViewController: NSViewController {
 
     func append(_ controller: TerminalController) {
         order.append(controller)
-        tabControllers[controller.sessionID] = TerminalTabViewController(controller: controller)
+        let tab = TerminalTabViewController(controller: controller)
+        tab.onReconnect = { [weak self] controller in self?.onReconnect?(controller) }
+        tabControllers[controller.sessionID] = tab
         controller.onTitleChange = { [weak self] _ in self?.refreshTabs() }
-        controller.onStateChange = { [weak self] _ in self?.refreshTabs() }
+        controller.onStateChange = { [weak self, weak controller] _ in
+            guard let self else { return }
+            self.refreshTabs()
+            // 断线提示条跟着状态走：会话一起来就收起，不要等用户切标签。
+            if let controller {
+                self.tabControllers[controller.sessionID]?.updateConnectionState()
+            }
+        }
         // 顶部模式徽标跟着“当前选中标签”走：别的标签在后台进出容器不该改这里的显示。
         modeTokens[controller.sessionID] = controller.addContextObserver { [weak self, weak controller] context in
             guard let self, let controller, self.selectedController === controller else { return }
@@ -691,9 +702,13 @@ final class SessionTabChip: NSView {
 }
 
 /// 承载单个终端视图的标签内容控制器。
+/// 断线后终端顶部浮出一条“重新连接”，入口跟着会话走，不用去菜单里找。
 @MainActor
 final class TerminalTabViewController: NSViewController {
     let controller: TerminalController
+    var onReconnect: ((TerminalController) -> Void)?
+
+    private let banner = ReconnectBannerView()
 
     init(controller: TerminalController) {
         self.controller = controller
@@ -710,17 +725,239 @@ final class TerminalTabViewController: NSViewController {
         controller.terminalView.frame = container.bounds
         controller.terminalView.autoresizingMask = [.width, .height]
         container.addSubview(controller.terminalView)
+
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.isHidden = true
+        banner.onReconnect = { [weak self] in
+            guard let self else { return }
+            self.onReconnect?(self.controller)
+        }
+        container.addSubview(banner)
+        // 主区最窄也有 480pt，360 的提示条放得下；万一被压得更窄，让它让步而不是报冲突。
+        let preferredWidth = banner.widthAnchor.constraint(equalToConstant: 360)
+        preferredWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            banner.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
+            banner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            preferredWidth,
+            banner.heightAnchor.constraint(equalToConstant: 38),
+            banner.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -24),
+        ])
         view = container
+        updateConnectionState()
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
         controller.focus()
+        updateConnectionState()
+    }
+
+    /// 只在主机会话结束时提示；本地 shell 的 `exit` 是用户主动结束，不该劝人重连。
+    func updateConnectionState() {
+        guard isViewLoaded else { return }
+        guard controller.host != nil else {
+            banner.isHidden = true
+            return
+        }
+        switch controller.state {
+        case .exited(let code):
+            banner.show(title: code == 0 ? "会话已结束" : "连接已断开",
+                        detail: code.flatMap { $0 == 0 ? nil : "退出码 \($0)" })
+            banner.isHidden = false
+        case .failed(let reason):
+            banner.show(title: "连接失败", detail: reason)
+            banner.isHidden = false
+        default:
+            banner.isHidden = true
+        }
     }
 
     private func refreshAppearance() {
         view.layer?.backgroundColor = Theme.layerColor(Theme.terminalBackground, for: view)
+        banner.refreshAppearance()
         controller.applyTheme()
+    }
+}
+
+/// 断线提示条：浮在终端顶部，不占终端尺寸，也不挡底部最后几行输出。
+@MainActor
+private final class ReconnectBannerView: NSView {
+    var onReconnect: (() -> Void)?
+
+    private let icon = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private let action = ReconnectActionButton()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 1
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.3
+        layer?.shadowRadius = 10
+        layer?.shadowOffset = CGSize(width: 0, height: -2)
+
+        icon.image = NSImage(systemSymbolName: "bolt.slash.fill", accessibilityDescription: nil)
+        icon.imageScaling = .scaleProportionallyDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
+
+        for label in [titleLabel, detailLabel] {
+            label.lineBreakMode = .byTruncatingTail
+            label.maximumNumberOfLines = 1
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(label)
+        }
+        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.isHidden = true
+
+        action.onTap = { [weak self] in self?.onReconnect?() }
+        action.toolTip = "重新建立连接，保留当前标签与输出历史"
+        action.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(action)
+
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 14),
+            icon.heightAnchor.constraint(equalToConstant: 14),
+
+            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            detailLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 7),
+            detailLabel.trailingAnchor.constraint(lessThanOrEqualTo: action.leadingAnchor, constant: -10),
+            detailLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            action.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            action.centerYAnchor.constraint(equalTo: centerYAnchor),
+            action.widthAnchor.constraint(equalToConstant: 96),
+            action.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        refreshAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    func show(title: String, detail: String?) {
+        titleLabel.stringValue = title
+        let detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        detailLabel.stringValue = detail
+        detailLabel.isHidden = detail.isEmpty
+        refreshAppearance()
+    }
+
+    func refreshAppearance() {
+        icon.contentTintColor = Theme.warning
+        titleLabel.textColor = Theme.textPrimary
+        detailLabel.textColor = Theme.textSecondary
+        layer?.backgroundColor = Theme.layerColor(Theme.surfaceRaised, for: self)
+        layer?.borderColor = Theme.layerColor(Theme.warning.withAlphaComponent(0.38), for: self)
+        action.refreshAppearance()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+}
+
+/// 提示条里的“重新连接”。系统按钮在深色底上太抢眼，这里自绘一个跟随主题的胶囊。
+@MainActor
+private final class ReconnectActionButton: NSView {
+    var onTap: (() -> Void)?
+
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: "重新连接")
+    private var hovering = false
+    private var trackingAreaRef: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 1
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("重新连接")
+
+        icon.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        icon.imageScaling = .scaleProportionallyDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
+
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 11),
+            icon.heightAnchor.constraint(equalToConstant: 11),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 5),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        refreshAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    func refreshAppearance() {
+        let tint = Theme.accent
+        icon.contentTintColor = tint
+        label.textColor = tint
+        layer?.backgroundColor = Theme.layerColor(tint.withAlphaComponent(hovering ? 0.24 : 0.14), for: self)
+        layer?.borderColor = Theme.layerColor(tint.withAlphaComponent(hovering ? 0.55 : 0.34), for: self)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+
+    /// 图标和文字都是这个按钮的子视图，命中测试直接交还按钮本身，
+    /// 否则点在文字上没反应。
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : nil
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef { removeTrackingArea(trackingAreaRef) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self)
+        addTrackingArea(area)
+        trackingAreaRef = area
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        refreshAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        refreshAppearance()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onTap?()
     }
 }
 

@@ -169,8 +169,10 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     }
 
     /// 启动 SSH 会话。launch 由 SSHLaunchPlanner 生成，机密落在一次性文件里。
+    /// 状态已结束时会原地重启同一个视图，断线重连不会丢掉标签和输出历史。
     func start(_ launch: ProcessLaunch) {
         guard !state.isAlive, let process = processView else { return }
+        prepareForReconnectIfNeeded()
         resetContextTracking()
         askpassFile = launch.askpassFile
         state = .starting
@@ -185,6 +187,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
 
     func startLocalShell() {
         guard !state.isAlive, let process = processView else { return }
+        prepareForReconnectIfNeeded()
         resetContextTracking()
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         var entries = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
@@ -206,6 +209,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     /// 变的只是“另一端是谁”。
     func start(_ stream: any TerminalStream) {
         guard !state.isAlive, processView == nil else { return }
+        prepareForReconnectIfNeeded()
         resetContextTracking()
         self.stream = stream
         state = .starting
@@ -417,6 +421,17 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     private func resetContextTracking() {
         follow.reset()
         follow.isLive = true
+    }
+
+    /// 断线时远端来不及收尾：屏幕可能还停在 vim 之类的备用缓冲，鼠标上报等模式
+    /// 也还开着。重连前退回主缓冲并软复位，否则新提示符会画在上一轮的残留上。
+    /// 主缓冲里的历史滚屏保持不动。
+    private func prepareForReconnectIfNeeded() {
+        guard state != .idle, !state.isAlive else { return }
+        remoteTitle = nil
+        workingDirectory = nil
+        terminalView.feed(text: "\u{1B}[?1049l\u{1B}[!p")
+        terminalView.feed(text: "\r\n\u{1B}[2m[\(title)] 重新连接…\u{1B}[0m\r\n")
     }
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
