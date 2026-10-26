@@ -91,11 +91,12 @@ final class SFTPBrowserViewController: NSViewController {
 
         // 跟随开关放在顶部操作行：底部状态行在矮窗口里会被裁掉，
         // 而“现在到底跟不跟随”是用户最需要一眼确认的信息。
-        // 图标按钮先组成一排；26 起整排套进液态玻璃，按钮本身只留图标。
+        // 图标按钮和跟随开关排成一条，26 起整条套进液态玻璃，按钮本身只留图标。
         let iconRow = Self.makeActionRow([
             refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle,
+            followToggle,
         ])
-        let actions = NSStackView(views: [iconRow, followToggle])
+        let actions = NSStackView(views: [iconRow])
         actions.orientation = .horizontal
         actions.spacing = 6
         actions.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 2, right: 8)
