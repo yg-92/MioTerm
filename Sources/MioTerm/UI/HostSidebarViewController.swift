@@ -168,15 +168,24 @@ final class HostSidebarViewController: NSViewController {
         countLabel.textColor = Theme.textTertiary
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        bottomBar.addArrangedSubview(addButton)
-        bottomBar.addArrangedSubview(localTerminalButton)
+        // 两个图标按钮合成一条玻璃胶囊，和文件面板的操作栏保持同一种材质。
+        let tools = NSStackView(views: [addButton, localTerminalButton])
+        tools.orientation = .horizontal
+        tools.spacing = 3
+        let toolBar = GlassBarView(
+            content: tools,
+            padding: NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
+        )
+        toolBar.setContentHuggingPriority(.required, for: .horizontal)
+
+        bottomBar.addArrangedSubview(toolBar)
         bottomBar.addArrangedSubview(NSView())
         bottomBar.addArrangedSubview(countLabel)
         NSLayoutConstraint.activate([
-            addButton.widthAnchor.constraint(equalToConstant: 22),
-            addButton.heightAnchor.constraint(equalToConstant: 22),
-            localTerminalButton.widthAnchor.constraint(equalToConstant: 22),
-            localTerminalButton.heightAnchor.constraint(equalToConstant: 22),
+            addButton.widthAnchor.constraint(equalToConstant: 26),
+            addButton.heightAnchor.constraint(equalToConstant: 24),
+            localTerminalButton.widthAnchor.constraint(equalToConstant: 26),
+            localTerminalButton.heightAnchor.constraint(equalToConstant: 24),
         ])
     }
 

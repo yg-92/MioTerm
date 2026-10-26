@@ -91,8 +91,8 @@ final class SFTPBrowserViewController: NSViewController {
 
         // 跟随开关放在顶部操作行：底部状态行在矮窗口里会被裁掉，
         // 而“现在到底跟不跟随”是用户最需要一眼确认的信息。
-        // 图标按钮和跟随开关排成一条，26 起整条套进液态玻璃，按钮本身只留图标。
-        let iconRow = Self.makeActionRow([
+        // 图标按钮和跟随开关排成一条，套进玻璃胶囊，按钮本身只留图标。
+        let iconRow = Self.makeActionBar([
             refreshButton, goToButton, newFolderButton, uploadButton, downloadButton, hiddenToggle,
             followToggle,
         ])
@@ -197,39 +197,24 @@ final class SFTPBrowserViewController: NSViewController {
         retryButton.isHidden = true
     }
 
-    /// macOS 26 起玻璃由整排的 NSGlassEffectView 提供，按钮只画图标；
-    /// 旧系统维持原来的浮凸小按钮。
+    /// 玻璃栏里的按钮只画图标，尺寸固定，着色交给 GlassActionButton 的悬停逻辑。
     private static func applyActionAppearance(to button: GlassActionButton) {
-        if #available(macOS 26.0, *) {
-            button.isBordered = false
-            button.restingTint = Theme.textSecondary
-            NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 26),
-                button.heightAnchor.constraint(equalToConstant: 24),
-            ])
-        } else {
-            button.isBordered = true
-            button.bezelStyle = .texturedRounded
-            button.controlSize = .small
-        }
+        button.isBordered = false
+        button.restingTint = Theme.textSecondary
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 28),
+            button.heightAnchor.constraint(equalToConstant: 26),
+        ])
     }
 
-    private static func makeActionRow(_ buttons: [NSView]) -> NSView {
+    /// 图标和跟随开关合成一条玻璃胶囊；胶囊的底色和描边自己画，
+    /// 纯色面板上也能看清边界，26 起再叠系统材质。
+    private static func makeActionBar(_ buttons: [NSView]) -> NSView {
         let row = NSStackView(views: buttons)
         row.orientation = .horizontal
-        row.spacing = 4
-        guard #available(macOS 26.0, *) else { return row }
-
-        row.spacing = 2
-        row.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
-        let glass = NSGlassEffectView()
-        glass.style = .regular
-        glass.cornerRadius = 14
-        // 面板底色是纯色，不染色的话浅色模式里玻璃几乎看不出来。
-        glass.tintColor = Theme.accentSoft
-        glass.contentView = row
-        glass.setContentHuggingPriority(.required, for: .horizontal)
-        return glass
+        row.spacing = 3
+        row.setCustomSpacing(9, after: buttons[buttons.count - 2])
+        return GlassBarView(content: row)
     }
 
     private func updateHiddenToggleAppearance() {

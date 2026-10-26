@@ -57,20 +57,31 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
         ignoreButton.title = "忽略…"
         ignoreButton.target = self
         ignoreButton.action = #selector(addIgnoreManually(_:))
-        ignoreButton.bezelStyle = .rounded
-        ignoreButton.controlSize = .small
         ignoreButton.toolTip = "把一条命令加入忽略清单，之后不再记录"
         clearButton.title = "清空"
         clearButton.target = self
         clearButton.action = #selector(clearScope(_:))
-        clearButton.bezelStyle = .rounded
-        clearButton.controlSize = .small
         clearButton.toolTip = "清掉这个作用域的历史与本机忽略清单"
+        for button in [ignoreButton, clearButton] {
+            // 玻璃胶囊里不再套系统圆角按钮，只留文字，按下时由 AppKit 自己压暗。
+            button.isBordered = false
+            button.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        }
+        ignoreButton.contentTintColor = Theme.accent
+        clearButton.contentTintColor = Theme.danger
 
         let header = NSStackView(views: [scopeLabel, NSView(), sortPopup])
         header.orientation = .horizontal
         header.spacing = 8
-        let footer = NSStackView(views: [hintLabel, NSView(), ignoreButton, clearButton])
+        let footTools = NSStackView(views: [ignoreButton, clearButton])
+        footTools.orientation = .horizontal
+        footTools.spacing = 10
+        let footBar = GlassBarView(
+            content: footTools,
+            padding: NSEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
+        )
+        footBar.setContentHuggingPriority(.required, for: .horizontal)
+        let footer = NSStackView(views: [hintLabel, NSView(), footBar])
         footer.orientation = .horizontal
         footer.spacing = 6
         hintLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
