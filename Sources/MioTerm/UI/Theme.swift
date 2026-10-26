@@ -46,11 +46,6 @@ enum Theme {
     static let border = dynamic("border", dark: NSColor(white: 1, alpha: 0.07), light: NSColor(white: 0, alpha: 0.10))
     static let borderStrong = dynamic("borderStrong", dark: NSColor(white: 1, alpha: 0.12), light: NSColor(white: 0, alpha: 0.16))
 
-    /// 玻璃胶囊：底色要比面板亮一档，描边和顶部高光负责在纯色底上勾出边界。
-    static let glassFill = dynamic("glassFill", dark: NSColor(white: 1, alpha: 0.09), light: rgba(15, 23, 42, 0.055))
-    static let glassHighlight = dynamic("glassHighlight", dark: NSColor(white: 1, alpha: 0.18), light: NSColor(white: 1, alpha: 0.55))
-    static let glassBorder = dynamic("glassBorder", dark: NSColor(white: 1, alpha: 0.18), light: rgba(15, 23, 42, 0.12))
-
     static let textPrimary = dynamic("textPrimary", dark: rgba(230, 234, 240), light: rgba(28, 36, 48))
     static let textSecondary = dynamic("textSecondary", dark: rgba(148, 156, 170), light: rgba(90, 102, 117))
     static let textTertiary = dynamic("textTertiary", dark: rgba(104, 113, 128), light: rgba(138, 148, 163))
