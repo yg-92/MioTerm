@@ -307,7 +307,8 @@ final class WorkspaceViewController: NSSplitViewController {
     // MARK: - 主机配置动作
 
     @objc func newHost(_ sender: Any?) {
-        presentHostForm(HostProfile(connectTimeout: environment.settings.settings.defaultConnectTimeout,
+        presentHostForm(HostProfile(authMethod: .password,
+                                    connectTimeout: environment.settings.settings.defaultConnectTimeout,
                                     keepaliveInterval: environment.settings.settings.defaultKeepaliveInterval))
     }
 

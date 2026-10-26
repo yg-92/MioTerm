@@ -305,4 +305,14 @@ public enum HostSorting {
             .map { (name: $0.key, hosts: $0.value) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
+
+    /// 主机表单的分组下拉：列出已有分组名，去重后按中文顺序排列。
+    /// 空串代表“未分组”，不作为可选项。
+    public static func groupNames(_ hosts: [HostProfile]) -> [String] {
+        var seen = Set<String>()
+        return hosts
+            .map { $0.group.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
 }

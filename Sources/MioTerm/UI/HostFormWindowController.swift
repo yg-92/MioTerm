@@ -9,7 +9,8 @@ final class HostFormWindowController: NSWindowController {
     private let environment: AppEnvironment
 
     private let nameField = NSTextField()
-    private let groupField = NSTextField()
+    /// 分组既可从已有分组里挑，也可直接输入新名字。
+    private let groupField = NSComboBox()
     private let tagsField = NSTextField()
     private let protocolPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
     private let addressField = NSTextField()
@@ -109,6 +110,10 @@ final class HostFormWindowController: NSWindowController {
         startupDirectoryField.placeholderString = "/var/log"
         tagsField.placeholderString = "逗号分隔"
         secretField.placeholderString = "未保存"
+        groupField.removeAllItems()
+        groupField.addItems(withObjectValues: HostSorting.groupNames(environment.hosts.hosts))
+        groupField.numberOfVisibleItems = 8
+        groupField.placeholderString = "选择已有分组，或直接输入新分组"
 
         let pickButton = NSButton(title: "选择…", target: self, action: #selector(pickIdentity(_:)))
         pickButton.bezelStyle = .rounded
