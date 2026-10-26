@@ -71,6 +71,9 @@ final class HostSidebarViewController: NSViewController {
         outlineView.autoresizesOutlineColumn = false
         outlineView.indentationPerLevel = 14
         outlineView.style = .sourceList
+        // sourceList 样式会用一整行 NSVisualEffectView 画选中背景，绕过 drawSelection；
+        // 这里关掉它，选中态只留 SidebarRowView 自己的细色条。
+        outlineView.selectionHighlightStyle = .none
         outlineView.floatsGroupRows = false
         outlineView.allowsMultipleSelection = false
         outlineView.backgroundColor = .clear
