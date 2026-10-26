@@ -33,6 +33,8 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--probe-host-k
 // 顶层代码不是 MainActor 隔离域，而 AppKit 的类型基本都是；这里显式声明
 // “此刻就在主线程”，避免为绕开检查而把 AppDelegate 的隔离标记去掉。
 MainActor.assumeIsolated {
+    // AppKit 默认要悬停 2 秒才弹提示；工具栏大多只有图标，扫过去根本等不到。
+    UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 500])
     let application = NSApplication.shared
     let delegate = AppDelegate()
     application.delegate = delegate

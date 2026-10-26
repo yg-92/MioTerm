@@ -183,12 +183,12 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     private func configureChrome() {
-        for (button, symbol, action) in [
-            (refreshButton, "arrow.clockwise", #selector(reloadTree)),
-            (goToButton, "arrow.right.circle", #selector(goToDirectory)),
-            (newFolderButton, "folder.badge.plus", #selector(createDirectory)),
-            (uploadButton, "arrow.up.doc", #selector(uploadFiles)),
-            (downloadButton, "arrow.down.doc", #selector(downloadSelected)),
+        for (button, symbol, tip, action) in [
+            (refreshButton, "arrow.clockwise", "重新读取当前目录", #selector(reloadTree)),
+            (goToButton, "arrow.right.circle", "打开指定目录…", #selector(goToDirectory)),
+            (newFolderButton, "folder.badge.plus", "在选中目录下新建文件夹", #selector(createDirectory)),
+            (uploadButton, "arrow.up.doc", "上传文件到选中目录", #selector(uploadFiles)),
+            (downloadButton, "arrow.down.doc", "下载选中文件到本地", #selector(downloadSelected)),
         ] {
             button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             button.imagePosition = .imageOnly
@@ -196,7 +196,7 @@ final class SFTPBrowserViewController: NSViewController {
             button.controlSize = .small
             button.target = self
             button.action = action
-            button.toolTip = tooltip(for: button)
+            button.toolTip = tip
         }
         hiddenToggle.setButtonType(.pushOnPushOff)
         hiddenToggle.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "显示隐藏文件")
@@ -205,6 +205,7 @@ final class SFTPBrowserViewController: NSViewController {
         hiddenToggle.controlSize = .small
         hiddenToggle.target = self
         hiddenToggle.action = #selector(toggleHidden)
+        hiddenToggle.toolTip = "显示 / 隐藏以点开头的文件"
 
         followToggle.font = .systemFont(ofSize: 11)
         followToggle.controlSize = .small
@@ -218,6 +219,7 @@ final class SFTPBrowserViewController: NSViewController {
         retryButton.controlSize = .mini
         retryButton.target = self
         retryButton.action = #selector(reconnectChannel)
+        retryButton.toolTip = "重新建立文件通道"
         retryButton.isHidden = true
     }
 
@@ -264,17 +266,6 @@ final class SFTPBrowserViewController: NSViewController {
 
     private func setNoticeVisible(_ visible: Bool) {
         noticeStack.isHidden = !visible
-    }
-
-    private func tooltip(for button: NSButton) -> String {
-        switch button {
-        case refreshButton: return "重新读取当前目录"
-        case goToButton: return "打开指定目录…"
-        case newFolderButton: return "在选中目录下新建文件夹"
-        case uploadButton: return "上传文件到选中目录"
-        case downloadButton: return "下载选中文件到本地"
-        default: return "显示/隐藏点文件"
-        }
     }
 
     /// 面包屑横放在侧栏里必然超宽，交给横向滚动，重建后滚到最右端露出当前目录。
