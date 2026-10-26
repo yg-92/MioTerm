@@ -1,10 +1,10 @@
 import AppKit
 import MioTermCore
 
-/// 左侧远端文件树：顶层就是当前目录的内容，目录按需展开。
+/// 左侧远端文件列表：只展示当前目录的直接子项，双击目录进入下一层。
 ///
 /// 面板本身不持有连接，只跟随当前标签的 `SFTPSession`；
-/// 切标签时重新绑定，避免一棵树同时对着两台主机。
+/// 切标签时重新绑定，避免一份列表同时对着两台主机。
 @MainActor
 final class SFTPBrowserViewController: NSViewController {
     private static let nameColumn = NSUserInterfaceItemIdentifier("name")
@@ -12,41 +12,10 @@ final class SFTPBrowserViewController: NSViewController {
     /// 行尾“大小”文字的宽度，和名称列固定一起排版，各行文件名起点才对得齐。
     private static let sizeColumnWidth: CGFloat = 62
 
-    /// 树上的一行。children 为 nil 表示还没读过该目录，展开时才发读取请求。
-    private final class Node: Hashable {
-        let entry: SFTPFileEntry
-        var children: [Node]?
-        var loaded = false
-        var failed: String?
-
-        init(_ entry: SFTPFileEntry) {
-            self.entry = entry
-        }
-
-        static func == (lhs: Node, rhs: Node) -> Bool { lhs === rhs }
-        func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
-    }
-
-    /// 展开/折叠要触发远程读取，委托方法名在不同 SDK 上写法不一，直接拦 expandItem 更可靠。
-    private final class FileOutlineView: NSOutlineView {
-        var onExpand: ((Any?) -> Void)?
-        var onCollapse: ((Any?) -> Void)?
-
-        override func expandItem(_ item: Any?, expandChildren: Bool) {
-            onExpand?(item)
-            super.expandItem(item, expandChildren: expandChildren)
-        }
-
-        override func collapseItem(_ item: Any?, collapseChildren: Bool) {
-            if let item { onCollapse?(item) }
-            super.collapseItem(item, collapseChildren: collapseChildren)
-        }
-    }
-
     private let environment = AppEnvironment.shared
     private var session: SFTPSession?
     private var boundController: TerminalController?
-    /// 只对当前标签的终端订阅上下文变化，切标签后旧标签的输出不能再惊动这棵树。
+    /// 只对当前标签的终端订阅上下文变化，切标签后旧标签的输出不能再惊动这份列表。
     private weak var contextController: TerminalController?
     private var contextToken: UUID?
     private var lastContext = TerminalContext()
@@ -57,11 +26,11 @@ final class SFTPBrowserViewController: NSViewController {
     private var remoteHome: String?
     private var isResolvingHome = false
 
-    private let outlineView = FileOutlineView()
+    private let fileTable = NSTableView()
     /// 名称列要靠 sizeLastColumnToFit() 铺满一次，之后才会跟着表格宽度自动伸缩。
-    private var didFitTreeColumns = false
-    /// 树的第一层 = 这个目录的直接子项；不再套一层主机名节点。
-    private var roots: [Node] = []
+    private var didFitNameColumn = false
+    /// 当前目录的直接子项；进入下一层就是整份替换掉。
+    private var entries: [SFTPFileEntry] = []
     private var currentDirectory: String?
 
     /// 当前目录的位置导航：操作按钮下面一条可点的面包屑。
@@ -80,7 +49,7 @@ final class SFTPBrowserViewController: NSViewController {
     private let followToggle = NSButton(checkboxWithTitle: "跟随", target: nil, action: nil)
     private let retryButton = NSButton()
     private let statusLabel = NSTextField(labelWithString: "未选择 SSH 会话")
-    /// 远端拒绝 SFTP 子系统时，在树的位置给出说明；这种情况不该弹错误框。
+    /// 远端拒绝 SFTP 子系统时，在列表的位置给出说明；这种情况不该弹错误框。
     private let noticeStack = NSStackView()
     private let noticeTitle = NSTextField(labelWithString: "服务器未启用 SFTP 文件服务")
     private let noticeDetail = NSTextField(wrappingLabelWithString: "")
@@ -100,7 +69,7 @@ final class SFTPBrowserViewController: NSViewController {
     private var lastFollowSetting = false
     /// 按标签覆盖全局设置的选择；会话 ID 每次连接都是新的，所以只活在本次运行里，不必落盘。
     private var followOverrides: [UUID: Bool] = [:]
-    /// 上传落点记下来，传输结束后只重读这一层，不用整棵树回到根目录。
+    /// 上传落点记下来，传完后只有落在当前目录才需要重读列表。
     private var lastUploadDirectory: String?
 
     deinit {
@@ -137,7 +106,7 @@ final class SFTPBrowserViewController: NSViewController {
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         let treeScroll = NSScrollView()
-        treeScroll.documentView = outlineView
+        treeScroll.documentView = fileTable
         treeScroll.hasVerticalScroller = true
         treeScroll.autohidesScrollers = true
         treeScroll.borderType = .noBorder
@@ -215,7 +184,7 @@ final class SFTPBrowserViewController: NSViewController {
         followToggle.setContentHuggingPriority(.required, for: .horizontal)
         followToggle.target = self
         followToggle.action = #selector(toggleFollow)
-        followToggle.toolTip = "目录树跟着终端的 cd 走；关掉后终端再换目录也不影响这里"
+        followToggle.toolTip = "文件列表跟着终端的 cd 走；关掉后终端再换目录也不影响这里"
 
         retryButton.title = "重试"
         retryButton.bezelStyle = .recessed
@@ -244,7 +213,7 @@ final class SFTPBrowserViewController: NSViewController {
         noticeTitle.alignment = .center
 
         noticeDetail.stringValue = """
-        当前服务器拒绝了 SFTP 子系统请求，文件树无法读取。
+        当前服务器拒绝了 SFTP 子系统请求，文件列表无法读取。
         你仍可以在右侧终端里直接操作文件。
 
         若需要文件面板，请在服务器上启用 sftp-server
@@ -366,31 +335,26 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     private func configureTables() {
-        outlineView.headerView = nil
-        outlineView.style = .sourceList
-        outlineView.indentationPerLevel = 10
-        outlineView.usesAlternatingRowBackgroundColors = false
-        outlineView.allowsMultipleSelection = true
+        fileTable.headerView = nil
+        fileTable.style = .sourceList
+        fileTable.usesAlternatingRowBackgroundColors = false
+        fileTable.allowsMultipleSelection = true
         // 行高由字号/图标尺寸算出来，必须用 custom，否则 small 会把内容压回系统行高。
-        outlineView.rowSizeStyle = .custom
-        outlineView.autoresizesOutlineColumn = false
-        outlineView.dataSource = self
-        outlineView.delegate = self
-        outlineView.menu = fileMenu
-        outlineView.doubleAction = #selector(handleDoubleClick)
-        outlineView.registerForDraggedTypes([.fileURL])
-        outlineView.onExpand = { [weak self] item in self?.loadChildren(of: item) }
-        outlineView.onCollapse = { [weak self] item in self?.forgetChildren(of: item) }
+        fileTable.rowSizeStyle = .custom
+        fileTable.dataSource = self
+        fileTable.delegate = self
+        fileTable.menu = fileMenu
+        fileTable.doubleAction = #selector(handleDoubleClick)
+        fileTable.registerForDraggedTypes([.fileURL])
 
         let name = NSTableColumn(identifier: Self.nameColumn)
         name.title = "名称"
         name.minWidth = 80
         name.resizingMask = .autoresizingMask
-        outlineView.addTableColumn(name)
-        outlineView.outlineTableColumn = name
+        fileTable.addTableColumn(name)
         // 大小文字并进名称单元格，名称列就是唯一的列：它会铺满表格宽度，
         // 面板拉宽就多显示几个字，变窄时 label 自己打省略号。
-        outlineView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        fileTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
 
         transferTable.headerView = nil
         transferTable.usesAlternatingRowBackgroundColors = false
@@ -408,15 +372,14 @@ final class SFTPBrowserViewController: NSViewController {
         super.viewDidLayout()
         // 必须等滚动视图真正有宽度再铺满；之后列宽由 AppKit 跟着表格伸缩，
         // 自己改 column.width 反而会让表格 frame 反过来变大，不能走那条路。
-        guard !didFitTreeColumns, outlineView.bounds.width > 1 else { return }
-        didFitTreeColumns = true
-        outlineView.sizeLastColumnToFit()
+        guard !didFitNameColumn, fileTable.bounds.width > 1 else { return }
+        didFitNameColumn = true
+        fileTable.sizeLastColumnToFit()
     }
 
     private lazy var fileMenu: NSMenu = {
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(menuItem("展开/折叠", #selector(toggleExpansion)))
         menu.addItem(menuItem("下载", #selector(downloadSelected)))
         menu.addItem(menuItem("复制路径", #selector(copyPaths)))
         menu.addItem(menuItem("路径填入终端", #selector(insertPathsIntoTerminal)))
@@ -446,13 +409,13 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     /// 字号与图标尺寸都是用户可调的，单元格每次重建都按当前设置取，
-    /// 改设置后只需要重载数据，不用重建整棵树。
+    /// 改设置后只需要重载数据，不用重建整份列表。
     private var treeFontSize: CGFloat { CGFloat(environment.settings.settings.fileTreeFontSize) }
     private var treeIconSize: CGFloat { CGFloat(environment.settings.settings.fileTreeIconSize) }
 
     private func applyTreeMetrics() {
-        outlineView.rowHeight = max(treeFontSize, treeIconSize) + 6
-        outlineView.reloadData()
+        fileTable.rowHeight = max(treeFontSize, treeIconSize) + 6
+        fileTable.reloadData()
     }
 
     @objc private func settingsDidChange() {
@@ -462,7 +425,7 @@ final class SFTPBrowserViewController: NSViewController {
 
     // MARK: - 绑定会话
 
-    /// 跟随当前标签；传 nil 解绑并清空树。
+    /// 跟随当前标签；传 nil 解绑并清空列表。
     func bind(to controller: TerminalController?) {
         // 先落 boundController：setContextSource 里要按这个标签读跟随开关，
         // 晚一步就会拿上一个标签的覆盖值来初始化。
@@ -470,7 +433,7 @@ final class SFTPBrowserViewController: NSViewController {
         setContextSource(controller)
         guard controller != nil else {
             detach()
-            roots = []
+            entries = []
             currentDirectory = nil
             lastUploadDirectory = nil
             resetContent("未选择会话")
@@ -484,7 +447,7 @@ final class SFTPBrowserViewController: NSViewController {
         applyBinding()
     }
 
-    /// 终端里的 cd 与增删改要立刻反映到树上，所以每个标签只订阅自己那个控制器。
+    /// 终端里的 cd 与增删改要立刻反映到列表上，所以每个标签只订阅自己那个控制器。
     /// 上下文回调是多播的：工作区也在同一条会话上挂了一个订阅用来更新标题。
     private func setContextSource(_ controller: TerminalController?) {
         guard controller !== contextController else { return }
@@ -531,7 +494,7 @@ final class SFTPBrowserViewController: NSViewController {
         followTerminal(directory)
     }
 
-    /// 决策结果写成一句人话，日志里看得懂树为什么没动。
+    /// 决策结果写成一句人话，日志里看得懂列表为什么没动。
     private func describe(_ action: PanelFollowAction) -> String {
         switch action {
         case .jump(let directory): return "跳到 \(directory)"
@@ -544,7 +507,7 @@ final class SFTPBrowserViewController: NSViewController {
         }
     }
 
-    /// 终端上下文变了要不要动树，判断只看「这次和上次比有什么不同」：
+    /// 终端上下文变了要不要换目录，判断只看「这次和上次比有什么不同」：
     /// 电平触发会让用户手动浏览到的别处，被终端随后的一条 `ls` 抢回当前目录。
     /// 规则本身在 DirectoryFollowPlanner，这里只把动作做出来。
     private func applyTerminalContext(_ context: TerminalContext) {
@@ -562,7 +525,7 @@ final class SFTPBrowserViewController: NSViewController {
                 isBusy: isBusy
             )
         )
-        // 跟随不出结果时，用户能看到的只有「树不动」；把每次判断的原因留在日志里。
+        // 跟随不出结果时，用户能看到的只有「列表不动」；把每次判断的原因留在日志里。
         let subject = context.displayDirectory ?? "未上报"
         FileLogger.shared.info("文件面板：终端在 \(subject)，\(describe(action))")
         // 这两种情况都别把上下文记成「已经跟上」：连接期间终端报上来的目录，
@@ -594,7 +557,7 @@ final class SFTPBrowserViewController: NSViewController {
             statusLabel.stringValue = "终端未上报目录，暂时无法跟随"
         case .idle:
             // 从容器里 exit 回来时目录往往没变，但状态行还挂着“暂停跟随”，
-            // 必须换回普通状态，否则看起来像树卡住了。
+            // 必须换回普通状态，否则看起来像列表卡住了。
             if isPausedByTerminal, context.followAllowed {
                 isPausedByTerminal = false
                 statusLabel.stringValue = session?.state == .ready ? "已连接" : "未连接"
@@ -604,7 +567,7 @@ final class SFTPBrowserViewController: NSViewController {
         }
     }
 
-    /// 把树挪到终端此刻的目录。
+    /// 把列表挪到终端此刻的目录。
     ///
     /// 第一次对齐不要求“目录变过”，否则用户刚切到文件面板时永远差那一步。
     private func followTerminal(_ directory: String) {
@@ -669,7 +632,7 @@ final class SFTPBrowserViewController: NSViewController {
               host.protocolKind.supportsSFTP,
               let next = environment.sftpSession(for: controller) else {
             detach()
-            roots = []
+            entries = []
             currentDirectory = nil
             resetContent(Self.placeholder(for: boundController, host: boundController?.host))
             return
@@ -712,7 +675,7 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     private func resetContent(_ status: String) {
-        outlineView.reloadData()
+        fileTable.reloadData()
         clearTransfers()
         renderBreadcrumbs(nil)
         statusLabel.stringValue = status
@@ -729,19 +692,19 @@ final class SFTPBrowserViewController: NSViewController {
         case .ready:
             statusLabel.stringValue = "已连接"
             // 通道没建好之前攒下的请求（跟随、面包屑）这时补做；
-            // 队列空但树还没内容，说明连接期间没排上队，这里补一次。
+            // 队列空但列表还没内容，说明连接期间没排上队，这里补一次。
             if currentDirectory == nil, listingTarget == nil {
                 requestReload()
             } else {
                 drainListing()
             }
         case .unsupported:
-            // 服务器拒绝 SFTP 不是异常：清掉可能残留的旧树，原地给出说明，
+            // 服务器拒绝 SFTP 不是异常：清掉可能残留的旧列表，原地给出说明，
             // 不弹错误框，也不把目标路径和传输队列留在半成品状态。
-            roots = []
+            entries = []
             currentDirectory = nil
             listingTarget = nil
-            outlineView.reloadData()
+            fileTable.reloadData()
             renderBreadcrumbs(nil)
             clearTransfers()
             statusLabel.stringValue = "文件通道不可用"
@@ -774,7 +737,7 @@ final class SFTPBrowserViewController: NSViewController {
         requestReload()
     }
 
-    /// 树只会向下展开，没有这个入口就出不了登录目录。
+    /// 列表只显示一层，没有这个入口就出不了登录目录。
     @objc private func goToDirectory() {
         guard let session else { return }
         guard let raw = pathPrompt(value: currentDirectory ?? ".") else { return }
@@ -795,7 +758,7 @@ final class SFTPBrowserViewController: NSViewController {
             let client = try await session.ensureClient()
             requestListing(try await client.realpath(startPath(for: session.host)))
         } catch {
-            // “服务器没开 SFTP”已经在树的位置说明了，不必再弹一个错误框。
+            // “服务器没开 SFTP”已经在列表的位置说明了，不必再弹一个错误框。
             guard session?.state != .unsupported else { return }
             AlertPresenter.fail(title: "打开文件面板失败", message: error.localizedDescription, in: view.window)
         }
@@ -812,13 +775,13 @@ final class SFTPBrowserViewController: NSViewController {
         return SFTPPath.normalize(host.startupDirectory.isEmpty ? "." : host.startupDirectory)
     }
 
-    /// 重读当前这一层；已经展开的子层跟着重新点开。
+    /// 重读当前目录。
     private func requestReload() {
         guard let host = session?.host else { return }
         requestListing(currentDirectory ?? startPath(for: host))
     }
 
-    /// 把树切到 `directory`：请求先入队，真正的读取由 drainListing 串行发起。
+    /// 把列表切到 `directory`：请求先入队，真正的读取由 drainListing 串行发起。
     private func requestListing(_ directory: String) {
         listingTarget = directory
         drainListing()
@@ -838,7 +801,7 @@ final class SFTPBrowserViewController: NSViewController {
         Task { await self.read(directory) }
     }
 
-    /// 把 `directory` 的直接子项铺成树的第一层，不再套主机名节点。
+    /// 把 `directory` 的直接子项铺成列表。
     private func read(_ directory: String) async {
         guard let client = session?.client else {
             isBusy = false
@@ -851,117 +814,54 @@ final class SFTPBrowserViewController: NSViewController {
             // 读取期间攒下的最新请求，读完立刻跟上。
             drainListing()
         }
-        let expanded = expandedPaths()
         var failure: String?
         do {
-            roots = try await client.list(directory, showHidden: showHidden).map { Node($0) }
+            entries = try await client.list(directory, showHidden: showHidden)
         } catch {
-            roots = []
+            entries = []
             failure = "读取 \(directory) 失败：\(error.localizedDescription)"
         }
+        // 换目录后旧的行号指向的是另一批文件，留着选区会让删除作用到错误的项。
+        let directoryChanged = directory != currentDirectory
         currentDirectory = directory
         renderBreadcrumbs(directory)
         statusLabel.stringValue = failure ?? "已连接"
         if let failure {
             FileLogger.shared.warning("文件面板：\(failure)")
         } else {
-            FileLogger.shared.info("文件面板：读取 \(directory) 完成，\(roots.count) 项")
+            FileLogger.shared.info("文件面板：读取 \(directory) 完成，\(entries.count) 项")
         }
-        outlineView.reloadData()
-        restoreExpansion(expanded)
-    }
-
-    private func expandedPaths() -> Set<String> {
-        var paths: Set<String> = []
-        for row in 0..<outlineView.numberOfRows {
-            if let node = outlineView.item(atRow: row) as? Node, outlineView.isItemExpanded(node) {
-                paths.insert(node.entry.path)
-            }
+        if directoryChanged {
+            fileTable.deselectAll(nil)
         }
-        return paths
-    }
-
-    private func restoreExpansion(_ paths: Set<String>) {
-        for path in paths {
-            if let node = findNode(path: path) {
-                outlineView.expandItem(node)
-            }
-        }
-    }
-
-    private func loadChildren(of item: Any?) {
-        guard let node = item as? Node, !node.loaded else { return }
-        Task { await loadChildren(of: node) }
-    }
-
-    private func loadChildren(of node: Node) async {
-        guard let client = session?.client else { return }
-        do {
-            let listed = try await client.list(node.entry.path, showHidden: showHidden)
-            node.children = listed.map { Node($0) }
-            node.failed = nil
-        } catch {
-            node.children = []
-            node.failed = error.localizedDescription
-            statusLabel.stringValue = "读取 \(node.entry.path) 失败：\(error.localizedDescription)"
-        }
-        node.loaded = true
-        outlineView.reloadItem(node, reloadChildren: true)
-    }
-
-    /// 折叠即忘：再点开时重新读，避免树里留着早已不存在的文件。
-    private func forgetChildren(of item: Any?) {
-        guard let node = item as? Node, node.loaded else { return }
-        node.children = nil
-        node.loaded = false
-    }
-
-    private func findNode(path: String) -> Node? {
-        search(roots, path: path)
-    }
-
-    private func search(_ nodes: [Node], path: String) -> Node? {
-        for node in nodes {
-            if node.entry.path == path { return node }
-            if let hit = search(node.children ?? [], path: path) { return hit }
-        }
-        return nil
+        fileTable.reloadData()
     }
 
     // MARK: - 选择
 
-    private var selectedNodes: [Node] {
-        outlineView.selectedRowIndexes.compactMap { outlineView.item(atRow: $0) as? Node }
+    private var selectedEntries: [SFTPFileEntry] {
+        fileTable.selectedRowIndexes.compactMap { entries.indices.contains($0) ? entries[$0] : nil }
     }
 
-    private var targetNode: Node? {
-        let row = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
-        if row >= 0, let node = outlineView.item(atRow: row) as? Node { return node }
-        return selectedNodes.first
+    private var targetEntry: SFTPFileEntry? {
+        let row = fileTable.clickedRow >= 0 ? fileTable.clickedRow : fileTable.selectedRow
+        if entries.indices.contains(row) { return entries[row] }
+        return selectedEntries.first
     }
 
     /// 上传落点：选中目录用目录，选中文件用它的父目录，都没选就落在当前这一层。
     private var uploadDirectory: String {
-        guard let node = targetNode else { return currentDirectory ?? "/" }
-        return node.entry.isDirectory ? node.entry.path : SFTPPath.parent(node.entry.path)
+        guard let entry = targetEntry else { return currentDirectory ?? "/" }
+        return entry.isDirectory ? entry.path : SFTPPath.parent(entry.path)
     }
 
     @objc private func handleDoubleClick() {
-        guard let node = targetNode else { return }
-        if node.entry.isDirectory {
-            // 双击是“走进去”，把这一层换成它的内容；展开留给左侧三角或右键。
-            requestListing(node.entry.path)
+        guard let entry = targetEntry else { return }
+        if entry.isDirectory {
+            // 列表只显示一层，双击目录就是进入它。
+            requestListing(entry.path)
         } else {
             downloadSelected()
-        }
-    }
-
-    @objc private func toggleExpansion() {
-        guard let node = targetNode, node.entry.isDirectory else { return }
-        if outlineView.isItemExpanded(node) {
-            outlineView.collapseItem(node)
-        } else {
-            outlineView.expandItem(node)
         }
     }
 
@@ -969,17 +869,17 @@ final class SFTPBrowserViewController: NSViewController {
 
     /// 远端路径手敲容易错，也能直接给别的程序用，所以给的是原文而不是带引号的版本。
     @objc private func copyPaths() {
-        let paths = selectedNodes.map { $0.entry.path }
+        let paths = selectedEntries.map(\.path)
         guard !paths.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(paths.joined(separator: "\n"), forType: .string)
     }
 
-    /// 对应 webterm 的“把树里的路径拖进终端”：填进当前会话但不回车，
+    /// 对应 webterm 的“把列表里的路径拖进终端”：填进当前会话但不回车，
     /// 带空格的路径自动补引号，用户可以接着敲命令。
     @objc private func insertPathsIntoTerminal() {
-        let paths = selectedNodes.map { $0.entry.path }
+        let paths = selectedEntries.map(\.path)
         guard !paths.isEmpty else { return }
         guard let controller = boundController, controller.state.isAlive else {
             AlertPresenter.notify(title: "没有可用的终端", message: "当前会话已断开，先重新连接再填路径。", in: view.window)
@@ -997,7 +897,7 @@ final class SFTPBrowserViewController: NSViewController {
         Task {
             do {
                 try await session?.client?.makeDirectory(target)
-                await reread(parent)
+                requestReload()
             } catch {
                 AlertPresenter.fail(title: "新建文件夹失败", message: error.localizedDescription, in: view.window)
             }
@@ -1005,14 +905,14 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     @objc private func renameSelected() {
-        guard let node = targetNode else { return }
-        guard let name = prompt(title: "重命名 “\(node.entry.name)”", message: "新名称：", value: node.entry.name) else { return }
-        let parent = SFTPPath.parent(node.entry.path)
+        guard let entry = targetEntry else { return }
+        guard let name = prompt(title: "重命名 “\(entry.name)”", message: "新名称：", value: entry.name) else { return }
+        let parent = SFTPPath.parent(entry.path)
         let target = SFTPPath.join(parent, name)
         Task {
             do {
-                try await session?.client?.move(from: node.entry.path, to: target)
-                await reread(parent)
+                try await session?.client?.move(from: entry.path, to: target)
+                requestReload()
             } catch {
                 AlertPresenter.fail(title: "重命名失败", message: error.localizedDescription, in: view.window)
             }
@@ -1020,49 +920,29 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     @objc private func deleteSelected() {
-        let targets = selectedNodes
-        guard let first = targets.first else { return }
+        let targets = selectedEntries
+        guard !targets.isEmpty else { return }
         let alert = NSAlert()
         alert.messageText = "删除 \(targets.count) 项？"
-        alert.informativeText = targets.map { $0.entry.name }.joined(separator: "、")
+        alert.informativeText = targets.map(\.name).joined(separator: "、")
         alert.alertStyle = .warning
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let parent = SFTPPath.parent(first.entry.path)
         Task {
-            for node in targets {
+            for entry in targets {
                 do {
-                    if node.entry.isDirectory {
-                        try await session?.client?.removeDirectory(node.entry.path)
+                    if entry.isDirectory {
+                        try await session?.client?.removeDirectory(entry.path)
                     } else {
-                        try await session?.client?.removeFile(node.entry.path)
+                        try await session?.client?.removeFile(entry.path)
                     }
                 } catch {
-                    AlertPresenter.fail(title: "删除 \(node.entry.name) 失败", message: error.localizedDescription, in: view.window)
+                    AlertPresenter.fail(title: "删除 \(entry.name) 失败", message: error.localizedDescription, in: view.window)
                 }
             }
-            await reread(parent)
-        }
-    }
-
-    /// 只重读受影响的那一层，整棵树回到起点会让人找不到刚才在哪。
-    private func reread(_ path: String) async {
-        guard session?.client != nil else { return }
-        guard path != currentDirectory else {
-            requestListing(path)
-            return
-        }
-        guard let node = findNode(path: path) else {
             requestReload()
-            return
-        }
-        node.loaded = false
-        node.children = nil
-        await loadChildren(of: node)
-        if !outlineView.isItemExpanded(node) {
-            outlineView.expandItem(node)
         }
     }
 
@@ -1114,7 +994,7 @@ final class SFTPBrowserViewController: NSViewController {
         scheduleUploads(panel.urls)
     }
 
-    /// 从 Finder 拖文件到树即上传，和 webterm 的拖拽上传一致。
+    /// 从 Finder 拖文件到列表即上传，和 webterm 的拖拽上传一致。
     func uploadDroppedFiles(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         scheduleUploads(urls)
@@ -1131,7 +1011,7 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     @objc private func downloadSelected() {
-        let files = selectedNodes.filter { !$0.entry.isDirectory }.map(\.entry)
+        let files = selectedEntries.filter { !$0.isDirectory }
         guard !files.isEmpty else {
             AlertPresenter.notify(title: "未选择文件", message: "先选中要下载的文件（目录暂不支持整目录下载）。", in: view.window)
             return
@@ -1155,17 +1035,12 @@ final class SFTPBrowserViewController: NSViewController {
         }
         // 完成后先留在队列里让人看清结果，需要清理走右键“清除已完成”。
         transfers[progress.id] = progress
-        if progress.isFinished, progress.state == .completed, progress.kind == .upload {
-            Task { await self.rereadUploadedDirectory() }
+        if progress.isFinished, progress.state == .completed, progress.kind == .upload,
+           lastUploadDirectory == currentDirectory {
+            requestReload()
         }
         transferScroll.isHidden = transferOrder.isEmpty
         transferTable.reloadData()
-    }
-
-    private func rereadUploadedDirectory() async {
-        guard let directory = lastUploadDirectory,
-              directory == currentDirectory || findNode(path: directory) != nil else { return }
-        await reread(directory)
     }
 
     private func clearTransfers() {
@@ -1210,43 +1085,15 @@ final class SFTPBrowserViewController: NSViewController {
 
 // MARK: - 数据源、代理与菜单校验
 
-extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuItemValidation, NSMenuDelegate {
-    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        guard let node = item as? Node else { return roots.count }
-        return node.children?.count ?? 0
-    }
-
-    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        let children = (item as? Node)?.children ?? roots
-        if children.indices.contains(index) { return children[index] }
-        // 异步读取替换 children 的瞬间可能读到旧行号，返回父节点等下一次 reload 修正。
-        return (item as? Node) ?? roots.first ?? Node(SFTPFileEntry(path: "/", name: "…", isDirectory: true, size: 0, modifiedAt: nil))
-    }
-
-    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        (item as? Node)?.entry.isDirectory == true
-    }
-
-    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        guard let node = item as? Node, tableColumn?.identifier == Self.nameColumn else { return nil }
-        return nameCell(for: node)
-    }
-
-    private func nameCell(for node: Node) -> NSView {
-        let symbol: String
-        if !node.entry.isDirectory {
-            symbol = "doc"
-        } else {
-            symbol = outlineView.isItemExpanded(node) ? "folder" : "folder.fill"
-        }
-        let title = node.entry.name + (node.failed != nil ? " · 读取失败" : "")
+extension SFTPBrowserViewController: NSTableViewDataSource, NSTableViewDelegate, NSMenuItemValidation, NSMenuDelegate {
+    private func nameCell(for entry: SFTPFileEntry) -> NSView {
         return iconCell(
-            text: title,
-            fullName: node.entry.name,
-            detail: node.entry.isDirectory ? "" : node.entry.sizeText,
-            symbol: symbol,
-            tint: node.entry.isDirectory ? .controlAccentColor : .secondaryLabelColor,
-            hidden: node.entry.isHidden
+            text: entry.name,
+            fullName: entry.name,
+            detail: entry.isDirectory ? "" : entry.sizeText,
+            symbol: entry.isDirectory ? "folder.fill" : "doc",
+            tint: entry.isDirectory ? .controlAccentColor : .secondaryLabelColor,
+            hidden: entry.isHidden
         )
     }
 
@@ -1310,18 +1157,22 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
     // MARK: 传输队列
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        tableView == transferTable ? transferOrder.count : 0
+        tableView === transferTable ? transferOrder.count : entries.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard tableColumn?.identifier == Self.jobColumn,
-              transferOrder.indices.contains(row),
-              let progress = transfers[transferOrder[row]] else { return nil }
-        return jobCell(progress)
+        if tableView === transferTable {
+            guard tableColumn?.identifier == Self.jobColumn,
+                  transferOrder.indices.contains(row),
+                  let progress = transfers[transferOrder[row]] else { return nil }
+            return jobCell(progress)
+        }
+        guard tableColumn?.identifier == Self.nameColumn, entries.indices.contains(row) else { return nil }
+        return nameCell(for: entries[row])
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        46
+        tableView === transferTable ? 46 : max(treeFontSize, treeIconSize) + 6
     }
 
     private func jobCell(_ progress: SFTPTransferProgress) -> NSView {
@@ -1371,25 +1222,23 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
             transferTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             return
         }
-        let row = outlineView.clickedRow
-        guard row >= 0, !outlineView.selectedRowIndexes.contains(row) else { return }
-        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        let row = fileTable.clickedRow
+        guard row >= 0, !fileTable.selectedRowIndexes.contains(row) else { return }
+        fileTable.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(toggleExpansion):
-            return targetNode?.entry.isDirectory == true
         case #selector(downloadSelected):
-            return !selectedNodes.filter { !$0.entry.isDirectory }.isEmpty
+            return selectedEntries.contains { !$0.isDirectory }
         case #selector(copyPaths):
-            return !selectedNodes.isEmpty
+            return !selectedEntries.isEmpty
         case #selector(insertPathsIntoTerminal):
-            return !selectedNodes.isEmpty && boundController?.state.isAlive == true
+            return !selectedEntries.isEmpty && boundController?.state.isAlive == true
         case #selector(renameSelected):
-            return targetNode != nil
+            return targetEntry != nil
         case #selector(deleteSelected):
-            return !selectedNodes.isEmpty
+            return !selectedEntries.isEmpty
         case #selector(pauseTransfer(_:)):
             return targetedTransfer?.state == .running
         case #selector(resumeTransfer(_:)):
@@ -1405,16 +1254,22 @@ extension SFTPBrowserViewController: NSOutlineViewDataSource, NSOutlineViewDeleg
 
     // MARK: 拖放上传
 
-    func outlineView(_ outlineView: NSOutlineView, validateDrop info: NSDraggingInfo, proposedItem item: Any?, proposedChildIndex index: Int) -> NSDragOperation {
-        guard session?.transfers != nil, index == -1 || index == 0 else { return [] }
-        return info.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil) ? .copy : []
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+        guard tableView === fileTable, session?.transfers != nil,
+              info.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil) else { return [] }
+        // 拖到目录行上就传进这个目录；落在空白处或文件行上则传进当前目录。
+        if dropOperation != .on, entries.indices.contains(row), entries[row].isDirectory {
+            tableView.setDropRow(row, dropOperation: .on)
+        }
+        return .copy
     }
 
-    func outlineView(_ outlineView: NSOutlineView, acceptDrop info: NSDraggingInfo, item: Any?, childIndex index: Int) -> Bool {
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+        guard tableView === fileTable else { return false }
         let urls = (info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL]) ?? []
         guard !urls.isEmpty else { return false }
-        if let node = item as? Node, node.entry.isDirectory {
-            scheduleUploads(urls, to: node.entry.path)
+        if dropOperation == .on, entries.indices.contains(row), entries[row].isDirectory {
+            scheduleUploads(urls, to: entries[row].path)
         } else {
             uploadDroppedFiles(urls)
         }
