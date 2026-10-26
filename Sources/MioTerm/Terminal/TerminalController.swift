@@ -38,6 +38,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     let terminalView: TerminalView
     private var processView: LocalProcessTerminalView?
     private var keyboardMonitor: TerminalKeyboardMonitor?
+    private var keypadNormalizer: TerminalKeypadNormalizer?
     private var stream: (any TerminalStream)?
     private var streamTask: Task<Void, Never>?
 
@@ -145,6 +146,9 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         } else {
             terminalView.terminalDelegate = self
         }
+        // 小键盘在 application keypad 模式下会被编成 SS3，zsh 这类只开模式不绑序列的
+        // 对端只会响铃；事件进视图前换成主键盘等价键，两种视图都适用。
+        keypadNormalizer = TerminalKeypadNormalizer(view: terminalView)
         terminalView.autoresizingMask = [.width, .height]
         apply(settings)
     }
@@ -227,6 +231,10 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     func stop() {
         follow.isLive = false
         follow.stop()
+        keyboardMonitor?.stop()
+        keyboardMonitor = nil
+        keypadNormalizer?.stop()
+        keypadNormalizer = nil
         if let process = processView, state.isAlive, process.process?.running == true {
             process.terminate()
         }
