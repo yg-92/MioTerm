@@ -39,6 +39,8 @@ public final class SSHSubsystemTransport: SFTPTransport {
     private let errorQueue = DispatchQueue(label: "com.mio.term.sftp.stderr", qos: .utility)
     private let stateLock = NSLock()
     private var stderr = Data()
+    /// stderr 只用来回答「为什么连不上」，留最后 8 KB 足够。
+    private static let stderrLimit = 8 * 1024
     private var started = false
     private var finished = false
 
@@ -69,7 +71,14 @@ public final class SSHSubsystemTransport: SFTPTransport {
             let handle = self.errorPipe.fileHandleForReading
             while true {
                 guard let chunk = Self.readSome(from: handle, capacity: 4096) else { break }
-                self.stateLock.withLock { self.stderr.append(chunk) }
+                self.stateLock.withLock {
+                    self.stderr.append(chunk)
+                    // 只留结尾一段：要的是「Connection refused」这类失败原因，
+                    // 而长跑连接的 ssh 可能一直往 stderr 唠叨，不能无界攒着。
+                    if self.stderr.count > Self.stderrLimit {
+                        self.stderr.removeSubrange(0..<(self.stderr.count - Self.stderrLimit))
+                    }
+                }
             }
         }
 

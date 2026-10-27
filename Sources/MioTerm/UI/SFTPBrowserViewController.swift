@@ -25,6 +25,8 @@ final class SFTPBrowserViewController: NSViewController {
     /// 提示符只写 `~` 时用来换成绝对路径的远端主目录，向 SFTP 服务端问一次。
     private var remoteHome: String?
     private var isResolvingHome = false
+    /// 问过一次没问出来就记下：换通道、用户点刷新之前不再问，否则跟随会原地自旋。
+    private var homeUnresolvable = false
 
     private let fileTable = NSTableView()
     /// 名称列要靠 sizeLastColumnToFit() 铺满一次，之后才会跟着表格宽度自动伸缩。
@@ -483,6 +485,7 @@ final class SFTPBrowserViewController: NSViewController {
         contextController = controller
         remoteHome = nil
         isResolvingHome = false
+        homeUnresolvable = false
         hasAlignedWithTerminal = false
         lastContext = controller?.context ?? TerminalContext()
         lastFollowSetting = followsTerminalDirectory
@@ -546,6 +549,7 @@ final class SFTPBrowserViewController: NSViewController {
                 justEnabled: follow && !lastFollowSetting,
                 channelReady: session != nil,
                 remoteHome: remoteHome,
+                homeUnresolvable: homeUnresolvable,
                 targetBefore: terminalTarget(lastContext),
                 filesystemRevisionBefore: lastContext.filesystemRevision,
                 hasAligned: hasAlignedWithTerminal,
@@ -580,8 +584,10 @@ final class SFTPBrowserViewController: NSViewController {
         case .explainMissingDirectory:
             isPausedByTerminal = true
             // 远端 shell 既不报 OSC 7、提示符里也没有路径时，跟随确实无从下手，
-            // 与其默默不动，不如把原因说出来。
-            statusLabel.stringValue = "终端未上报目录，暂时无法跟随"
+            // 与其默默不动，不如把原因说出来。主目录问不出来是另一种情况，别混为一谈。
+            statusLabel.stringValue = homeUnresolvable && context.promptHomeHint != nil
+                ? "问不出远端主目录，`~` 跟随不了（点刷新可重试）"
+                : "终端未上报目录，暂时无法跟随"
         case .idle:
             // 从容器里 exit 回来时目录往往没变，但状态行还挂着“暂停跟随”，
             // 必须换回普通状态，否则看起来像列表卡住了。
@@ -632,13 +638,16 @@ final class SFTPBrowserViewController: NSViewController {
             for probe in [".", "~"] {
                 if let home = try? await client.realpath(probe), home.hasPrefix("/") {
                     remoteHome = home
+                    homeUnresolvable = false
                     FileLogger.shared.info("远端主目录：\(home)（realpath \(probe)）")
                     return home
                 }
             }
-            FileLogger.shared.warning("问不出远端主目录：realpath(. 和 ~) 都没有应答")
+            homeUnresolvable = true
+            FileLogger.shared.warning("问不出远端主目录：realpath(. 和 ~) 都没有应答，本次连接内不再重试")
         } catch {
-            FileLogger.shared.warning("问不出远端主目录：\(error.localizedDescription)")
+            homeUnresolvable = true
+            FileLogger.shared.warning("问不出远端主目录：\(error.localizedDescription)，本次连接内不再重试")
         }
         return nil
     }
@@ -699,6 +708,7 @@ final class SFTPBrowserViewController: NSViewController {
         session?.onTransferUpdate = nil
         session = nil
         remoteHome = nil
+        homeUnresolvable = false
     }
 
     private func resetContent(_ status: String) {
@@ -752,10 +762,18 @@ final class SFTPBrowserViewController: NSViewController {
     // MARK: - 目录读取
 
     @objc private func reconnectChannel() {
+        // 重连是用户主动要求「再试一次」：主目录问过失败的标记一并清掉。
+        homeUnresolvable = false
         Task { await connectAndBrowse() }
     }
 
     @objc private func reloadTree() {
+        homeUnresolvable = false
+        if currentDirectory == nil, let context = contextController?.context {
+            // 树还没落到任何目录，多半是主目录没问出来：借这次刷新再问一遍。
+            applyTerminalContext(context)
+            return
+        }
         requestReload()
     }
 

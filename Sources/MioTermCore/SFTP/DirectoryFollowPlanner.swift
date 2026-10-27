@@ -33,6 +33,8 @@ public struct PanelFollowFacts: Equatable {
     public var channelReady: Bool
     /// 远端主目录的绝对路径，问到之前是 nil。
     public var remoteHome: String?
+    /// 主目录已经问过、问不出来：再问也是同样的结果，不能继续要求解析。
+    public var homeUnresolvable: Bool
     /// 终端上一次说过的目录（已经翻译成绝对路径）。
     public var targetBefore: String?
     public var filesystemRevisionBefore: Int
@@ -47,6 +49,7 @@ public struct PanelFollowFacts: Equatable {
         justEnabled: Bool = false,
         channelReady: Bool,
         remoteHome: String? = nil,
+        homeUnresolvable: Bool = false,
         targetBefore: String? = nil,
         filesystemRevisionBefore: Int = 0,
         hasAligned: Bool = false,
@@ -57,6 +60,7 @@ public struct PanelFollowFacts: Equatable {
         self.justEnabled = justEnabled
         self.channelReady = channelReady
         self.remoteHome = remoteHome
+        self.homeUnresolvable = homeUnresolvable
         self.targetBefore = targetBefore
         self.filesystemRevisionBefore = filesystemRevisionBefore
         self.hasAligned = hasAligned
@@ -84,8 +88,11 @@ public enum DirectoryFollowPlanner {
             return .pause(reason: facts.terminal.mode.pauseReason ?? "终端进入了别的机器，已暂停跟随")
         }
         let target = target(facts.terminal, remoteHome: facts.remoteHome)
+        // 问过一次没问出来就到此为止：面板解析失败后会重放同一条上下文，
+        // 这里再给一次 .resolveHome 就成了自旋——实测一分钟转 24000 圈，
+        // 把日志刷到截断上限、内存峰值顶到 325 MB。
         if facts.followEnabled, target == nil,
-           facts.terminal.promptHomeHint != nil, facts.remoteHome == nil {
+           facts.terminal.promptHomeHint != nil, facts.remoteHome == nil, !facts.homeUnresolvable {
             return .resolveHome
         }
         let moved = target != facts.targetBefore

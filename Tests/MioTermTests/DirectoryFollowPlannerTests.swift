@@ -41,6 +41,19 @@ struct DirectoryFollowPlannerTests {
         #expect(action == .jump("/root/logs"))
     }
 
+    /// 问不出来就不能一直要求重问：面板解析失败后会重放同一条上下文，
+    /// 再给一次 .resolveHome 就是自旋——实测一分钟两万四千圈，日志刷到截断上限、
+    /// 内存峰值 325 MB。
+    @Test func stopsAskingForHomeOnceTheProbeFailed() {
+        let stuck = PanelFollowFacts(terminal: context(homeHint: "logs"), followEnabled: true,
+                                     channelReady: true, homeUnresolvable: true, hasAligned: true)
+        #expect(DirectoryFollowPlanner.decide(stuck) == .explainMissingDirectory)
+        // 换通道或用户点刷新会把标记清掉，那时可以再问一次。
+        let retry = PanelFollowFacts(terminal: context(homeHint: "logs"), followEnabled: true,
+                                     channelReady: true, hasAligned: true)
+        #expect(DirectoryFollowPlanner.decide(retry) == .resolveHome)
+    }
+
     @Test func emptyHomeHintIsTheHomeItself() {
         let target = DirectoryFollowPlanner.target(context(homeHint: ""), remoteHome: "/home/ops")
         #expect(target == "/home/ops")
