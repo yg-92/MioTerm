@@ -56,11 +56,14 @@ enum Theme {
         return resolved?.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 
-    /// 图层只接受 CGColor；动态色必须在赋值前按视图当前外观解析，
+    /// 图层只接受 CGColor；动态色必须在赋值前按当前外观解析，
     /// 否则会固化成赋值那一刻的深浅版本。
+    /// 外观取窗口的而不是这个视图自己的：外观变化自上而下派发，
+    /// 父视图收到回调时子视图的 effectiveAppearance 还是旧值，按它解析会把旧配色固化进图层。
     static func layerColor(_ color: NSColor, for view: NSView) -> CGColor {
+        let appearance = view.window?.effectiveAppearance ?? view.effectiveAppearance
         var resolved = color.cgColor
-        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+        appearance.performAsCurrentDrawingAppearance {
             resolved = color.cgColor
         }
         return resolved

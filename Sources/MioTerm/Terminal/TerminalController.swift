@@ -160,7 +160,10 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
 
     /// 终端配色只认具体色值，切换深浅外观后要重新装一遍；`apply(settings)` 不负责外观。
     func applyTheme() {
-        let dark = Theme.isDark(terminalView.effectiveAppearance)
+        // 深浅要从窗口取（没有窗口时 isDark 自己回落到 NSApp），不能读终端视图的
+        // effectiveAppearance：外观变化是自上而下派发的，父视图收到回调那一刻子视图还是旧值，
+        // 读它等于把刚换掉的配色又装回去，终端就一直停在切换前的深浅。
+        let dark = Theme.isDark(terminalView.window?.effectiveAppearance)
         terminalView.nativeBackgroundColor = Theme.terminalBackground(dark: dark)
         terminalView.nativeForegroundColor = Theme.terminalForeground(dark: dark)
         terminalView.installColors(Theme.terminalPalette(dark: dark))
