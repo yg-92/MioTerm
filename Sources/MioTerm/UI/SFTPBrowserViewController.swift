@@ -369,6 +369,9 @@ final class SFTPBrowserViewController: NSViewController {
         fileTable.delegate = self
         fileTable.menu = fileMenu
         fileTable.doubleAction = #selector(handleDoubleClick)
+        // 双击动作不写 target 就得沿响应链找接收者：第一响应者是终端时一路走到窗口
+        // 都碰不到本控制器，双击就静默没反应。钉死在这里，不赌响应链。
+        fileTable.target = self
         fileTable.registerForDraggedTypes([.fileURL])
 
         let name = NSTableColumn(identifier: Self.nameColumn)
@@ -881,12 +884,14 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     @objc private func handleDoubleClick() {
-        guard let entry = targetEntry else { return }
-        if entry.isDirectory {
-            // 列表只显示一层，双击目录就是进入它。
-            requestListing(entry.path)
-        } else {
-            downloadSelected()
+        switch FilePanelDoubleClick.decide(clicked: targetEntry, selected: selectedEntries) {
+        case .open(let path):
+            requestListing(path)
+        case .download(let files):
+            download(files)
+        case .nothing:
+            // 双击落空要留证据：能分清是行没解析出来，还是压根没收到双击。
+            FileLogger.shared.info("文件面板：双击落空 clickedRow=\(fileTable.clickedRow) 选中 \(selectedEntries.count) 项")
         }
     }
 
@@ -1040,7 +1045,10 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     @objc private func downloadSelected() {
-        let files = selectedEntries.filter { !$0.isDirectory }
+        download(selectedEntries.filter { !$0.isDirectory })
+    }
+
+    private func download(_ files: [SFTPFileEntry]) {
         guard !files.isEmpty else {
             AlertPresenter.notify(title: "未选择文件", message: "先选中要下载的文件（目录暂不支持整目录下载）。", in: view.window)
             return

@@ -80,6 +80,8 @@ final class HostSidebarViewController: NSViewController {
         outlineView.dataSource = self
         outlineView.delegate = self
         outlineView.doubleAction = #selector(doubleClicked(_:))
+        // 同文件树：双击动作显式指向本控制器，别让它沿响应链去撞终端视图。
+        outlineView.target = self
         outlineView.menu = buildMenu()
         outlineView.isGroupRow = { item in (item as? Row)?.groupName != nil }
         outlineView.onToggleGroup = { [weak self] item in self?.toggleGroup(item) }

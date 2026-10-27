@@ -194,9 +194,10 @@ final class CapsuleSegmentedView: NSView {
         if let trackingAreaRef {
             removeTrackingArea(trackingAreaRef)
         }
+        // 跟踪区不能再要 .mouseMoved：见 moveMonitor 上的说明。进出仍由这片区域负责。
         let area = NSTrackingArea(
             rect: .zero,
-            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -204,8 +205,46 @@ final class CapsuleSegmentedView: NSView {
         trackingAreaRef = area
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        let index = index(at: convert(event.locationInWindow, from: nil))
+    /// macOS 26 上，窗口里只要有一片跟踪区要 `.mouseMoved`，窗口服务器就会凭空造出
+    /// `leftMouseDown`——用户没点，事件却来了（SwiftTerm 上游 issue #584 记的是同一件事，
+    /// 它的处理就是摘掉 `.mouseMoved`，改用窗口级监听收移动）。
+    /// 幻影单击落在指针当时所在的视图上，于是终端里刚框选的单词被当成“又单击了一下”清掉，
+    /// 文件树上的双击也因为 clickCount 被搅乱而发不出 doubleAction。
+    /// 所以悬停要的移动事件走这里：打开窗口的 `acceptsMouseMovedEvents`，用一个监听派发。
+    /// 这个控件全应用只有一个实例，监听也就只留一份。
+    private static weak var moveWindow: NSWindow?
+    private static var moveMonitor: Any?
+    private static var moveWindowOriginalSetting = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        Self.stopReceivingMoves()
+        guard let window else { return }
+        Self.moveWindow = window
+        Self.moveWindowOriginalSetting = window.acceptsMouseMovedEvents
+        window.acceptsMouseMovedEvents = true
+        Self.moveMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            MainActor.assumeIsolated { self?.pointerMoved(within: event) }
+            // 绝不吞掉：同窗口的终端视图和响应链还要看这些移动事件。
+            return event
+        }
+    }
+
+    private static func stopReceivingMoves() {
+        if let monitor = moveMonitor { NSEvent.removeMonitor(monitor) }
+        moveMonitor = nil
+        // 只有还停在我们写上去的那个 true 上才还原，免得盖掉别人后来的设置。
+        if let window = moveWindow, window.acceptsMouseMovedEvents {
+            window.acceptsMouseMovedEvents = moveWindowOriginalSetting
+        }
+        moveWindow = nil
+    }
+
+    private func pointerMoved(within event: NSEvent) {
+        guard let window, event.window === window else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(point) else { return }
+        let index = index(at: point)
         updateHover(index.flatMap { enabledFlags[$0] ? $0 : nil })
     }
 
