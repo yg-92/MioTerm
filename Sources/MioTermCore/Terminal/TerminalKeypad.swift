@@ -43,7 +43,8 @@ public enum TerminalKeypad {
             modifierFlags: event.modifierFlags.subtracting(.numericPad),
             timestamp: event.timestamp,
             windowNumber: event.windowNumber,
-            context: event.context,
+            // NSEvent.context 自 macOS 10.12 起恒为 nil，传它只会踩废弃 API 警告。
+            context: nil,
             characters: event.characters ?? "",
             charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
             isARepeat: event.isARepeat,
@@ -65,15 +66,18 @@ public final class TerminalKeypadNormalizer {
     public init(view: TerminalView) {
         self.view = view
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // 本地监听回调只在主线程投递，assumeIsolated 就是照这个前提用的；
+            // 它的返回值要求 Sendable，而 NSEvent 不是，所以结果写在局部变量里带出来。
+            nonisolated(unsafe) var handled: NSEvent?
             MainActor.assumeIsolated {
                 guard let self, let view = self.view,
                       event.window === view.window,
                       view.window?.firstResponder === view,
-                      view.terminalInputStateSnapshot()?.applicationKeypad == true,
-                      let replacement = TerminalKeypad.mainKeyboardEvent(for: event)
-                else { return event }
-                return replacement
+                      view.terminalInputStateSnapshot()?.applicationKeypad == true
+                else { return }
+                handled = TerminalKeypad.mainKeyboardEvent(for: event)
             }
+            return handled ?? event
         }
     }
 

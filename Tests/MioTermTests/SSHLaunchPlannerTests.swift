@@ -42,6 +42,15 @@ struct SSHLaunchPlannerTests {
         #expect(launch.arguments.contains("2222"))
     }
 
+    /// 主机指定了终端类型就要原样传给远端；没指定时由 passwordAuth… 用例守着兜底值。
+    @Test func hostTerminalTypeReachesEnvironment() throws {
+        var host = HostProfile(name: "vt", address: "h", username: "u")
+        host.terminalType = "vt220"
+        let launch = try SSHLaunchPlanner.terminalLaunch(host: host, secrets: nil, context: makeContext())
+        #expect(launch.environment.contains("TERM=vt220"))
+        #expect(launch.environment.contains("COLORTERM=truecolor"))
+    }
+
     @Test func passwordAuthRestrictsMethodsAndFailsFast() throws {
         var host = HostProfile(name: "pw", address: "h", username: "u", authMethod: .password)
         host.connectTimeout = 5

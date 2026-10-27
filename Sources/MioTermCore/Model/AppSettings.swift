@@ -57,6 +57,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var accent: AccentColor
     public var terminalFontName: String
     public var terminalFontSize: Double
+    /// 新建主机时预填的 TERM，也是主机留空时的兜底；本地终端不吃这一项，
+    /// 因为内置模拟器就是 xterm，给它换 TERM 只会让本地程序按错的能力表输出。
+    public var terminalType: String
     /// 左侧目录树的文字与图标尺寸；树比终端窄得多，两者分开调。
     public var fileTreeFontSize: Double
     public var fileTreeIconSize: Double
@@ -74,6 +77,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         accent: AccentColor = .blue,
         terminalFontName: String = "Menlo Regular",
         terminalFontSize: Double = 13,
+        terminalType: String = TerminalTypes.fallback,
         fileTreeFontSize: Double = 12,
         fileTreeIconSize: Double = 13,
         scrollbackLines: Int = 10_000,
@@ -89,6 +93,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.accent = accent
         self.terminalFontName = terminalFontName
         self.terminalFontSize = terminalFontSize
+        self.terminalType = terminalType
         self.fileTreeFontSize = fileTreeFontSize
         self.fileTreeIconSize = fileTreeIconSize
         self.scrollbackLines = scrollbackLines
@@ -111,6 +116,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         accent = (try? c.decodeIfPresent(AccentColor.self, forKey: .accent)) ?? .blue
         terminalFontName = (try? c.decodeIfPresent(String.self, forKey: .terminalFontName)) ?? "Menlo Regular"
         terminalFontSize = (try? c.decodeIfPresent(Double.self, forKey: .terminalFontSize)) ?? 13
+        // 老文件没有这一项；解析不出来时也退回兜底值，绝不能留空串当 TERM 传给子进程。
+        terminalType = TerminalTypes.resolved(
+            (try? c.decodeIfPresent(String.self, forKey: .terminalType)) ?? "",
+            default: TerminalTypes.fallback
+        )
         fileTreeFontSize = (try? c.decodeIfPresent(Double.self, forKey: .fileTreeFontSize)) ?? 12
         fileTreeIconSize = (try? c.decodeIfPresent(Double.self, forKey: .fileTreeIconSize)) ?? 13
         scrollbackLines = (try? c.decodeIfPresent(Int.self, forKey: .scrollbackLines)) ?? 10_000
@@ -125,6 +135,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public func normalized() -> AppSettings {
         var copy = self
         copy.terminalFontSize = min(32, max(9, terminalFontSize))
+        copy.terminalType = TerminalTypes.resolved(terminalType, default: TerminalTypes.fallback)
         copy.fileTreeFontSize = min(20, max(10, fileTreeFontSize))
         copy.fileTreeIconSize = min(24, max(10, fileTreeIconSize))
         copy.scrollbackLines = min(200_000, max(200, scrollbackLines))

@@ -16,7 +16,7 @@ final class ConnectionCoordinator {
 
     /// 返回已启动的会话控制器；返回 nil 表示用户取消或出错，错误已经弹给用户。
     func open(host rawHost: HostProfile, in window: NSWindow?) async -> TerminalController? {
-        let host = environment.hosts.host(id: rawHost.id) ?? rawHost
+        let host = resolved(environment.hosts.host(id: rawHost.id) ?? rawHost)
         guard host.protocolKind.usesHostKey else { return openByteStream(for: host, in: window) }
         do {
             guard try await ensureHostKeyTrusted(host: host, in: window) else { return nil }
@@ -52,6 +52,15 @@ final class ConnectionCoordinator {
         return controller
     }
 
+    /// 主机表单里留空表示“跟随设置里的默认终端类型”，连接前一次性补上，
+    /// 这样启动计划、Telnet 协商和终端模拟器看到的是同一个值。
+    private func resolved(_ host: HostProfile) -> HostProfile {
+        guard host.terminalType.isEmpty else { return host }
+        var copy = host
+        copy.terminalType = environment.settings.settings.terminalType
+        return copy
+    }
+
     private func makeStream(for host: HostProfile) -> (any TerminalStream)? {
         switch host.protocolKind {
         case .telnet:
@@ -70,7 +79,7 @@ final class ConnectionCoordinator {
     /// 主机密钥与凭据按当前配置重新取，主机在列表里被改过也能生效。
     func reconnect(_ controller: TerminalController, in window: NSWindow?) async {
         guard !controller.state.isAlive, let stored = controller.host else { return }
-        let host = environment.hosts.host(id: stored.id) ?? stored
+        let host = resolved(environment.hosts.host(id: stored.id) ?? stored)
         do {
             if host.protocolKind.usesHostKey {
                 // 重连同样走一遍指纹确认：服务器换过密钥时要在这里拦住。

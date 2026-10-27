@@ -26,7 +26,7 @@ public final class TelnetStream: TerminalStream, @unchecked Sendable {
     private var rows: Int
     private var isClosed = false
 
-    public init(host: String, port: Int = 23, terminalType: String = "xterm-256color",
+    public init(host: String, port: Int = 23, terminalType: String = TerminalTypes.fallback,
                 columns: Int = 80, rows: Int = 24, connectTimeout: TimeInterval = 10) {
         self.host = host
         self.port = port

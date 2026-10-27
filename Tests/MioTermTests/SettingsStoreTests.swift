@@ -45,6 +45,8 @@ struct SettingsStoreTests {
         // 配色档位与强调色是后加的，老文件没有这两个键也要退回默认。
         #expect(settings.contrast == .soft)
         #expect(settings.accent == .blue)
+        // 终端类型同理：老文件没这个键，默认值必须是个能直接当 TERM 用的名字。
+        #expect(settings.terminalType == TerminalTypes.fallback)
     }
 
     @Test("存进去的每一项都能读回来")
@@ -56,6 +58,7 @@ struct SettingsStoreTests {
             next.accent = .green
             next.terminalFontName = "Menlo Bold"
             next.terminalFontSize = 18
+            next.terminalType = "vt220"
             next.fileTreeFontSize = 14
             next.fileTreeIconSize = 18
             next.scrollbackLines = 40_000
@@ -87,12 +90,17 @@ struct SettingsStoreTests {
             next.fileTreeIconSize = 999
             next.scrollbackLines = 1
             next.maxConcurrentTransfers = 99
+            next.terminalType = "  screen-256color  "
         }
         #expect(store.settings.terminalFontSize == 32)
         #expect(store.settings.fileTreeFontSize == 10)
         #expect(store.settings.fileTreeIconSize == 24)
         #expect(store.settings.scrollbackLines == 200)
         #expect(store.settings.maxConcurrentTransfers == 8)
+        #expect(store.settings.terminalType == "screen-256color")
+        // 设置里的默认值是所有留空主机的兜底，不能是空串。
+        try store.update { $0.terminalType = "" }
+        #expect(store.settings.terminalType == TerminalTypes.fallback)
         // 落盘的已经是收敛后的值，重读不会再变一次。
         store.load()
         #expect(store.settings.terminalFontSize == 32)

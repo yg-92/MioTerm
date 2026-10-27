@@ -13,6 +13,9 @@ final class PreferencesWindowController: NSWindowController {
     private let accentPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let fontPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let fontSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
+    /// 终端类型既能从常用 TERM 里挑，也能直接输入对端要求的名字。
+    private let terminalTypeCombo = NSComboBox()
+    private let terminalTypeHint = NSTextField(wrappingLabelWithString: "")
     private let treeFontSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
     private let treeIconSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
     private let scrollbackField = NSTextField()
@@ -77,6 +80,10 @@ final class PreferencesWindowController: NSWindowController {
         fontSizePopup.addItems(withTitles: Self.fontSizes.map { "\($0)" })
         treeFontSizePopup.addItems(withTitles: Self.treeFontSizes.map { "\($0)" })
         treeIconSizePopup.addItems(withTitles: Self.treeIconSizes.map { "\($0)" })
+        terminalTypeCombo.addItems(withObjectValues: TerminalTypes.options)
+        terminalTypeCombo.numberOfVisibleItems = 8
+        terminalTypeHint.stringValue =
+            "主机留空时用这个值；远端缺对应 terminfo 会报终端不可用，换回 xterm 即可。本地终端固定 xterm-256color。"
 
         let saveButton = NSButton(title: "保存", target: self, action: #selector(save(_:)))
         saveButton.bezelStyle = .rounded
@@ -98,6 +105,10 @@ final class PreferencesWindowController: NSWindowController {
         accentPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
         fontPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
         fontSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        terminalTypeCombo.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        terminalTypeHint.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        terminalTypeHint.textColor = .secondaryLabelColor
+        terminalTypeHint.widthAnchor.constraint(equalToConstant: 240).isActive = true
         treeFontSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
         treeIconSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
 
@@ -107,6 +118,8 @@ final class PreferencesWindowController: NSWindowController {
             [label("强调色"), accentPopup],
             [label("终端字体"), fontPopup],
             [label("字号"), fontSizePopup],
+            [label("终端类型"), terminalTypeCombo],
+            [NSView(), terminalTypeHint],
             [label("目录树字号"), treeFontSizePopup],
             [label("目录树图标"), treeIconSizePopup],
             [label("回滚行数"), scrollbackField],
@@ -165,6 +178,7 @@ final class PreferencesWindowController: NSWindowController {
             treeIconSizePopup.selectItem(withTitle: "\(nearest)")
         }
         scrollbackField.stringValue = "\(settings.scrollbackLines)"
+        terminalTypeCombo.stringValue = settings.terminalType
         bellCheckbox.state = settings.playBellSound ? .on : .off
         followCheckbox.state = settings.followTerminalDirectory ? .on : .off
         chunkField.stringValue = String(format: "%.1f", Double(settings.uploadChunkBytes) / 1_048_576)
@@ -187,6 +201,9 @@ final class PreferencesWindowController: NSWindowController {
                 settings.accent = selected(accentPopup, AccentColor.allCases)
                 settings.terminalFontName = fontName
                 settings.terminalFontSize = Double(fontSizePopup.titleOfSelectedItem ?? "13") ?? 13
+                // 输入框可以留空，但设置里的默认值必须是能直接当 TERM 用的具体名字。
+                settings.terminalType = TerminalTypes.resolved(terminalTypeCombo.stringValue,
+                                                              default: TerminalTypes.fallback)
                 settings.fileTreeFontSize = Double(treeFontSizePopup.titleOfSelectedItem ?? "12") ?? 12
                 settings.fileTreeIconSize = Double(treeIconSizePopup.titleOfSelectedItem ?? "13") ?? 13
                 settings.scrollbackLines = Int(scrollbackField.stringValue) ?? settings.scrollbackLines

@@ -206,7 +206,7 @@ public enum SSHLaunchPlanner {
         }
         entries.append("PATH=\(inherited["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")")
         if inherited["LANG"] == nil { entries.append("LANG=en_US.UTF-8") }
-        entries.append("TERM=\(host.terminalType.isEmpty ? "xterm-256color" : host.terminalType)")
+        entries.append("TERM=\(TerminalTypes.resolved(host.terminalType, default: TerminalTypes.fallback))")
         entries.append("COLORTERM=truecolor")
         if let askpassFile {
             entries.append("SSH_ASKPASS=\(context.askpassLauncherURL.path)")

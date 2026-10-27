@@ -67,8 +67,8 @@ public struct TelnetNegotiator {
     /// 子协商缓冲区上限：超过它的一定是畸形报文，直接断开而不是无限吃内存。
     static let maximumSubnegotiationLength = 4096
 
-    public init(terminalType: String = "xterm-256color", columns: Int = 80, rows: Int = 24) {
-        self.terminalType = terminalType.isEmpty || terminalType.count > 64 ? "xterm-256color" : terminalType
+    public init(terminalType: String = TerminalTypes.fallback, columns: Int = 80, rows: Int = 24) {
+        self.terminalType = TerminalTypes.resolved(terminalType, default: TerminalTypes.fallback)
         self.columns = columns
         self.rows = rows
     }

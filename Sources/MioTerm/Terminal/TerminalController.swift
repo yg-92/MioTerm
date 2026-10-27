@@ -101,11 +101,11 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         self.host = host
         var options = TerminalOptions()
         options.scrollback = settings.scrollbackLines
-        if let terminalType = host?.terminalType, !terminalType.isEmpty {
-            options.termName = terminalType
-        } else {
-            options.termName = "xterm-256color"
-        }
+        // 主机的终端类型优先，留空则用设置里的默认；本地终端固定 xterm，
+        // 因为 SwiftTerm 模拟的就是 xterm，换 TERM 只会让本地程序按错的能力表输出。
+        options.termName = host == nil
+            ? TerminalTypes.fallback
+            : TerminalTypes.resolved(host?.terminalType ?? "", default: settings.terminalType)
         let frame = NSRect(x: 0, y: 0, width: 800, height: 480)
         let font = TerminalController.font(for: settings)
         // SSH 和本地 shell 有子进程可托管，用 LocalProcessTerminalView；
@@ -195,7 +195,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         resetContextTracking()
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         var entries = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
-        entries.append("TERM=xterm-256color")
+        entries.append("TERM=\(TerminalTypes.fallback)")
         entries.append("COLORTERM=truecolor")
         state = .running
         installOutputWatch(process)

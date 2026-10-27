@@ -23,7 +23,8 @@ final class HostFormWindowController: NSWindowController {
     private let timeoutField = NSTextField()
     private let keepaliveField = NSTextField()
     private let startupDirectoryField = NSTextField()
-    private let terminalTypeField = NSTextField()
+    /// 终端类型可从常用 TERM 里挑，也能直接输入；留空表示跟随设置里的默认值。
+    private let terminalTypeField = NSComboBox()
     private let favoriteCheckbox = NSButton(checkboxWithTitle: "收藏", target: nil, action: nil)
     private let notesView = NSTextView()
     private let fingerprintLabel = NSTextField(labelWithString: "")
@@ -104,7 +105,9 @@ final class HostFormWindowController: NSWindowController {
         portField.placeholderString = "22"
         timeoutField.placeholderString = "10"
         keepaliveField.placeholderString = "30"
-        terminalTypeField.placeholderString = "xterm-256color"
+        terminalTypeField.addItems(withObjectValues: TerminalTypes.options)
+        terminalTypeField.numberOfVisibleItems = 8
+        terminalTypeField.placeholderString = "留空则用默认：\(environment.settings.settings.terminalType)"
         addressField.placeholderString = "host.example.com 或 192.168.1.10"
         usernameField.placeholderString = NSUserName()
         startupDirectoryField.placeholderString = "/var/log"
@@ -388,7 +391,8 @@ final class HostFormWindowController: NSWindowController {
         host.connectTimeout = Int(timeoutField.stringValue) ?? environment.settings.settings.defaultConnectTimeout
         host.keepaliveInterval = Int(keepaliveField.stringValue) ?? environment.settings.settings.defaultKeepaliveInterval
         host.startupDirectory = startupDirectoryField.stringValue
-        host.terminalType = terminalTypeField.stringValue.isEmpty ? "xterm-256color" : terminalTypeField.stringValue
+        // 存空串而不是当场填上默认值：这样以后改设置里的默认，未指定的主机会跟着变。
+        host.terminalType = TerminalTypes.sanitized(terminalTypeField.stringValue)
         host.favorite = favoriteCheckbox.state == .on
         host.notes = notesView.string
         if selectedProtocol == .serial {

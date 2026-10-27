@@ -155,6 +155,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     public var connectTimeout: Int
     public var keepaliveInterval: Int
     public var startupDirectory: String
+    /// 空串表示“跟随设置里的默认终端类型”，连接前由 TerminalTypes.resolved 补上。
     public var terminalType: String
     public var favorite: Bool
     public var notes: String
@@ -178,7 +179,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         connectTimeout: Int = 10,
         keepaliveInterval: Int = 30,
         startupDirectory: String = "",
-        terminalType: String = "xterm-256color",
+        terminalType: String = "",
         favorite: Bool = false,
         notes: String = "",
         hostKeyAlgorithm: String = "",
@@ -243,6 +244,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         copy.startupDirectory = (startupDirectory as NSString).expandingTildeInPath
         copy.tags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         copy.serial.device = serial.device.trimmingCharacters(in: .whitespacesAndNewlines)
+        copy.terminalType = TerminalTypes.sanitized(terminalType)
         if copy.port == 22, copy.protocolKind == .telnet { copy.port = 23 }
         if copy.port <= 0 || copy.port > 65535 { copy.port = copy.protocolKind.defaultPort ?? 22 }
         copy.connectTimeout = max(1, min(300, copy.connectTimeout))
