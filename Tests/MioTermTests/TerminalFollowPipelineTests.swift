@@ -75,6 +75,11 @@ struct TerminalFollowPipelineTests {
             pipeline.userInput(bytes, inAlternateScreen: inAlternateScreen)
         }
 
+        /// 认证提示多半不回显：字节只进通路，屏幕上看不见。
+        func typeBlind(_ text: String) {
+            pipeline.userInput(ArraySlice(Array(text.utf8)), inAlternateScreen: inAlternateScreen)
+        }
+
         /// SSH/本地 shell：按键从窗口事件层旁听，翻译后再进通路。
         func typeKey(_ text: String) {
             for character in text {
@@ -360,6 +365,54 @@ struct TerminalFollowPipelineTests {
         #expect(rig.settle())
         #expect(rig.pipeline.context.followAllowed == false)
         #expect(rig.pipeline.context.directory == nil)
+        rig.pipeline.stop()
+    }
+
+    /// 设备控制台登录：用户名和口令都只是一串字符加回车，攒行器分不出来。
+    /// 口令进了命令库就等于在界面上摆一份能点回终端的明文凭据，日志同理。
+    @Test func consoleCredentialsStayOutOfTheCommandLibrary() {
+        let rig = Rig()
+        var commands: [String] = []
+        rig.pipeline.onCommand = { commands.append($0) }
+
+        // 用户名是回显的：屏幕上已经和提示语连成了一行。
+        rig.remote("134 login: ")
+        rig.type("admin\r")
+        // 口令不回显：回车那一刻屏幕底行还停在提示语上。
+        rig.remote("\r\nInput Password")
+        rig.typeBlind("hunter2\r")
+        #expect(commands == [])
+
+        // 挡掉凭据不能把跟随带偏：登录成功后目录照旧从提示符里读，命令照旧记账。
+        rig.remote("\r\n\r\n[root@134 ~]# ")
+        _ = rig.settle()
+        rig.type("cd /var/log\r")
+        rig.remote("\r\n[root@134 /var/log]# ")
+        #expect(rig.settle())
+        #expect(rig.pipeline.context.directory == "/var/log")
+        #expect(commands == ["cd /var/log"])
+        rig.pipeline.stop()
+    }
+
+    /// shell 里的 sudo 口令同样不进命令库，前后的命令照常记账。
+    @Test func sudoPasswordIsNotRecordedAsACommand() {
+        let rig = Rig()
+        rig.remote("[root@134 ~]# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        var commands: [String] = []
+        rig.pipeline.onCommand = { commands.append($0) }
+
+        rig.type("sudo -i\r")
+        rig.remote("\r\n[sudo] password for root: ")
+        rig.typeBlind("hunter2\r")
+        rig.remote("\r\n[root@134 ~]# ")
+        _ = rig.settle()
+        rig.type("cd /var/log\r")
+        rig.remote("\r\n[root@134 /var/log]# ")
+        #expect(rig.settle())
+        #expect(commands == ["sudo -i", "cd /var/log"])
+        #expect(rig.pipeline.context.directory == "/var/log")
         rig.pipeline.stop()
     }
 }

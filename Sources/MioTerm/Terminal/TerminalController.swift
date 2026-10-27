@@ -356,7 +356,8 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     /// 否则用户接着按回车时，统计里只会剩一个回车。
     func injectInput(_ text: String) {
         guard !text.isEmpty, state.isAlive else { return }
-        FileLogger.shared.info("注入命令：\(text)")
+        // 只记长度：命令库里的条目也可能是用户存进去的口令，日志是要拿出去排障的。
+        FileLogger.shared.info("注入命令：\(text.count) 字符")
         // 先拿焦点再写：写入后立刻按回车时，按键不能再落到命令列表上。
         focus()
         let bytes = ArraySlice(Array(text.utf8))

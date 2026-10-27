@@ -72,7 +72,10 @@ public final class TerminalFollowPipeline {
     public func userInput(_ bytes: ArraySlice<UInt8>, inAlternateScreen: Bool) {
         // consume 只在回车那一刻返回值，拿不到就说明这批字节里没有执行。
         guard let submission = commandTracker.consume(bytes) else { return }
-        log("收到回车（命令 \(submission.command ?? "还原不出")，备用屏 \(inAlternateScreen)）")
+        // 回车前的屏幕底行有两个用处：还原 Tab 补全，以及认出「这行是敲给口令提示的」。
+        let screenBeforeEnter = screenLine()
+        let isSecret = SecretPrompt.isAskingForSecret(screenBeforeEnter)
+        log("收到回车（命令 \(Self.describe(submission.command, missing: "还原不出"))，备用屏 \(inAlternateScreen)）")
         guard !inAlternateScreen else {
             // vim 里敲的是半句话，不能当命令；但退出编辑器之后屏幕上就是新提示符，
             // 所以这次回车仍然要安排一次读屏，否则跟随会停在打开 vim 之前。
@@ -84,12 +87,18 @@ public final class TerminalFollowPipeline {
             submit(command: nil, expectsOutput: true, shellExited: true)
             return
         }
+        if isSecret {
+            // 口令既不进命令库（那里的条目能点回终端），也不参与 cd 预测。
+            log("屏幕在要口令，这一行不进命令库")
+            submit(command: nil, expectsOutput: true)
+            return
+        }
         // Tab 补全后本端记的行是残的，但屏幕回显里留着补全后的完整命令行。
         // 尤其当提示符只报末级目录（PS1 的 `\W`）时，没有这一步就没有 cd 预测可用。
         var command = submission.command
         if command == nil, let partial = submission.partialLine,
-           let recovered = Self.recoverCompletedCommand(from: screenLine(), typed: partial) {
-            log("从屏幕回显还原补全后的命令：\(recovered)")
+           let recovered = Self.recoverCompletedCommand(from: screenBeforeEnter, typed: partial) {
+            log("从屏幕回显还原补全后的命令（\(Self.describe(recovered, missing: "—"))）")
             command = recovered
         }
         if let line = command {
@@ -102,6 +111,19 @@ public final class TerminalFollowPipeline {
             expectsOutput: true,
             assumeFileChanges: submission.isTextUnreliable && command == nil
         )
+    }
+
+    /// 日志一律不写命令原文：敲给认证提示的口令会连着命令行一起被还原出来，
+    /// 而日志是要拿出去排障的。长度已经够判断攒行器还原到了什么。
+    private static func describe(_ command: String?, missing: String) -> String {
+        guard let command, !command.isEmpty else { return missing }
+        return "\(command.count) 字符"
+    }
+
+    /// 读屏日志同理：串口控制台有的会把口令回显在提示语后面，这一行原样写进日志就等于泄漏。
+    private static func screenForLog(_ line: String?) -> String {
+        guard let line else { return "（空）" }
+        return SecretPrompt.isAskingForSecret(line) ? "（口令提示，不记原文）" : "「\(line)」"
     }
 
     /// 回车前的屏幕底行是「提示符 + 命令行」。用用户已键入的前缀在回显里找最后
@@ -176,7 +198,7 @@ public final class TerminalFollowPipeline {
         }
         let line = screenLine()
         let changed = tracker.settle(promptLine: line, inAlternateScreen: false)
-        log("读屏 \(line.map { "「\($0)」" } ?? "（空）") → \(shownDirectory)")
+        log("读屏 \(Self.screenForLog(line)) → \(shownDirectory)")
         if changed {
             emptyReads = 0
             onChange?(context)
@@ -206,7 +228,7 @@ public final class TerminalFollowPipeline {
         }
         self.expectsOutput = expectsOutput
         emptyReads = 0
-        FileLogger.shared.info("跟随：提交 \(command ?? "（空回车）")，等待屏幕安静")
+        FileLogger.shared.info("跟随：提交 \(Self.describe(command, missing: "（空回车）"))，等待屏幕安静")
         guard isLive else { return }
         armSettle()
     }
