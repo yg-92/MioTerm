@@ -26,7 +26,7 @@ final class ConnectionCoordinator {
                 context: .live()
             )
             let controller = TerminalController(host: host, settings: environment.settings.settings)
-            observe(controller, host: host, in: window)
+            observe(controller, host: host)
             environment.register(controller)
             controller.start(launch)
             return controller
@@ -46,7 +46,7 @@ final class ConnectionCoordinator {
             return nil
         }
         let controller = TerminalController(host: host, settings: environment.settings.settings)
-        observe(controller, host: host, in: window)
+        observe(controller, host: host)
         environment.register(controller)
         controller.start(stream)
         return controller
@@ -100,13 +100,14 @@ final class ConnectionCoordinator {
         }
     }
 
-    /// 会话状态统一登记：失败要弹窗，其余只记日志。
-    private func observe(_ controller: TerminalController, host: HostProfile, in window: NSWindow?) {
-        controller.onStateChange = { [weak self] state in
-            if case .failed(let reason) = state {
-                AlertPresenter.fail(title: "无法连接 \(host.displayName)", message: reason, in: window)
-            }
-            self?.environment.logger.info("会话 \(host.displayName) 状态：\(state.label)")
+    /// 会话状态统一登记。
+    ///
+    /// 失败原因已经用红字画在终端里、也浮在断线提示条上，这里不再叠一个模态窗；
+    /// 补的是日志——重连不成时要能从日志看出会话停在哪一步。
+    private func observe(_ controller: TerminalController, host: HostProfile) {
+        let logger = environment.logger
+        controller.addStateObserver { state in
+            logger.info("会话 \(host.displayName) 状态：\(state.label)")
         }
     }
 

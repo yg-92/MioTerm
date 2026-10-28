@@ -21,6 +21,7 @@ final class SessionTabViewController: NSViewController {
     private var order: [TerminalController] = []
     private var tabControllers: [UUID: TerminalTabViewController] = [:]
     private var modeTokens: [UUID: UUID] = [:]
+    private var stateTokens: [UUID: UUID] = [:]
     private var selectedIndex: Int?
 
     private var contentTopToBar: NSLayoutConstraint!
@@ -82,7 +83,7 @@ final class SessionTabViewController: NSViewController {
         tab.onReconnect = { [weak self] controller in self?.onReconnect?(controller) }
         tabControllers[controller.sessionID] = tab
         controller.onTitleChange = { [weak self] _ in self?.refreshTabs() }
-        controller.onStateChange = { [weak self, weak controller] _ in
+        stateTokens[controller.sessionID] = controller.addStateObserver { [weak self, weak controller] _ in
             guard let self else { return }
             self.refreshTabs()
             // 断线提示条跟着状态走：会话一起来就收起，不要等用户切标签。
@@ -99,6 +100,11 @@ final class SessionTabViewController: NSViewController {
         select(order.count - 1)
     }
 
+    /// 重连进行中要在提示条上给出反馈：这条路上要重新确认指纹、读凭据，慢的时候好几秒。
+    func setReconnecting(_ controller: TerminalController, busy: Bool) {
+        tabControllers[controller.sessionID]?.setReconnecting(busy)
+    }
+
     /// 关闭当前选中的会话。主页上没有“当前会话”，所以什么都不做。
     @discardableResult
     func closeSelectedTab() -> Bool {
@@ -111,6 +117,7 @@ final class SessionTabViewController: NSViewController {
         let controller = order[index]
         controller.stop()
         controller.removeContextObserver(modeTokens.removeValue(forKey: controller.sessionID))
+        controller.removeStateObserver(stateTokens.removeValue(forKey: controller.sessionID))
         environment.unregister(controller)
         order.remove(at: index)
         tabControllers[controller.sessionID] = nil
@@ -137,9 +144,11 @@ final class SessionTabViewController: NSViewController {
         for controller in order {
             controller.stop()
             controller.removeContextObserver(modeTokens.removeValue(forKey: controller.sessionID))
+            controller.removeStateObserver(stateTokens.removeValue(forKey: controller.sessionID))
             environment.unregister(controller)
         }
         modeTokens.removeAll()
+        stateTokens.removeAll()
         order.removeAll()
         tabControllers.removeAll()
         select(nil)
@@ -773,6 +782,19 @@ final class TerminalTabViewController: NSViewController {
         }
     }
 
+    /// 点下按钮到会话真的进入「连接中」之间还有一段：重新探指纹、读凭据，慢的时候好几秒。
+    /// 这段时间界面若毫无变化，用户只会以为按钮又没生效。
+    func setReconnecting(_ busy: Bool) {
+        guard isViewLoaded else { return }
+        banner.setBusy(busy)
+        guard busy else {
+            updateConnectionState()
+            return
+        }
+        banner.show(title: "正在重新连接", detail: nil)
+        banner.isHidden = false
+    }
+
     private func refreshAppearance() {
         view.layer?.backgroundColor = Theme.layerColor(Theme.terminalBackground, for: view)
         banner.refreshAppearance()
@@ -853,6 +875,11 @@ private final class ReconnectBannerView: NSView {
         refreshAppearance()
     }
 
+    func setBusy(_ busy: Bool) {
+        action.isEnabled = !busy
+        action.setTitle(busy ? "正在连接" : "重新连接")
+    }
+
     func refreshAppearance() {
         icon.contentTintColor = Theme.warning
         titleLabel.textColor = Theme.textPrimary
@@ -872,10 +899,19 @@ private final class ReconnectBannerView: NSView {
 @MainActor
 private final class ReconnectActionButton: NSView {
     var onTap: (() -> Void)?
+    /// 正在重连时按下也没意义，还会把去重逻辑悄悄吃掉：干脆置灰。
+    var isEnabled = true {
+        didSet {
+            refreshAppearance()
+            // 光标矩形是缓存的，不失效就还是手型，指着置灰的按钮骗人。
+            window?.invalidateCursorRects(for: self)
+        }
+    }
 
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "重新连接")
     private var hovering = false
+    private var pressed = false
     private var trackingAreaRef: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
@@ -911,12 +947,26 @@ private final class ReconnectActionButton: NSView {
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
 
+    func setTitle(_ text: String) {
+        label.stringValue = text
+        setAccessibilityLabel(text)
+    }
+
     func refreshAppearance() {
-        let tint = Theme.accent
+        let tint = isEnabled ? Theme.accent : Theme.textSecondary
         icon.contentTintColor = tint
         label.textColor = tint
-        layer?.backgroundColor = Theme.layerColor(tint.withAlphaComponent(hovering ? 0.24 : 0.14), for: self)
-        layer?.borderColor = Theme.layerColor(tint.withAlphaComponent(hovering ? 0.55 : 0.34), for: self)
+        // 按下要比悬停再实一档，否则点下去没有任何回馈，看着像没生效。
+        let fill: CGFloat
+        let edge: CGFloat
+        switch (isEnabled, pressed, hovering) {
+        case (false, _, _): (fill, edge) = (0.06, 0.18)
+        case (_, true, _): (fill, edge) = (0.34, 0.7)
+        case (_, _, true): (fill, edge) = (0.24, 0.55)
+        default: (fill, edge) = (0.14, 0.34)
+        }
+        layer?.backgroundColor = Theme.layerColor(tint.withAlphaComponent(fill), for: self)
+        layer?.borderColor = Theme.layerColor(tint.withAlphaComponent(edge), for: self)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -926,8 +976,9 @@ private final class ReconnectActionButton: NSView {
 
     /// 图标和文字都是这个按钮的子视图，命中测试直接交还按钮本身，
     /// 否则点在文字上没反应。
+    /// 注意 hitTest 收到的点在横幅坐标系里，只能和 frame 比。
     override func hitTest(_ point: NSPoint) -> NSView? {
-        bounds.contains(point) ? self : nil
+        OverlayHitTesting.contains(point, frame: frame) ? self : nil
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -943,7 +994,7 @@ private final class ReconnectActionButton: NSView {
     }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
+        addCursorRect(bounds, cursor: isEnabled ? .pointingHand : .arrow)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -953,10 +1004,25 @@ private final class ReconnectActionButton: NSView {
 
     override func mouseExited(with event: NSEvent) {
         hovering = false
+        pressed = false
         refreshAppearance()
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        pressed = true
+        refreshAppearance()
+    }
+
+    /// 松手才算点击：按下去再拖走是「取消」，不该顺手把会话重连了。
+    override func mouseUp(with event: NSEvent) {
+        guard pressed else { return }
+        pressed = false
+        refreshAppearance()
+        guard isEnabled else { return }
+        // locationInWindow 要先换算到自己的坐标系，这里比的才是 bounds。
+        let inside = OverlayHitTesting.containsInBounds(convert(event.locationInWindow, from: nil), bounds: bounds)
+        guard inside else { return }
         onTap?()
     }
 }

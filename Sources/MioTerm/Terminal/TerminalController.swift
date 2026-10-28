@@ -43,13 +43,16 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     private var streamTask: Task<Void, Never>?
 
     private(set) var state: State = .idle {
-        didSet { onStateChange?(state) }
+        didSet { notifyStateChange() }
     }
     private(set) var workingDirectory: String?
     private var askpassFile: URL?
     private var remoteTitle: String?
 
-    var onStateChange: ((State) -> Void)?
+    /// 状态变更是多播的：标签容器要据此收放断线提示条，连接编排要写日志。
+    /// 早先这里是单持有者闭包，后订阅的把先订阅的覆盖掉，结果是会话掉线、
+    /// 重连失败在日志里一行都没留下——排查「重新连接点不动」时完全没有线索。
+    private var stateObservers: [UUID: (State) -> Void] = [:]
     var onTitleChange: ((String) -> Void)?
     /// 用户回车提交了一条完整命令。命令库据此记账，界面不参与逐字节输入。
     var onCommand: ((String) -> Void)?
@@ -72,6 +75,23 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     func removeContextObserver(_ token: UUID?) {
         guard let token else { return }
         contextObservers[token] = nil
+    }
+
+    /// 订阅会话状态，返回注销用的令牌。
+    func addStateObserver(_ observer: @escaping (State) -> Void) -> UUID {
+        let token = UUID()
+        stateObservers[token] = observer
+        return token
+    }
+
+    func removeStateObserver(_ token: UUID?) {
+        guard let token else { return }
+        stateObservers[token] = nil
+    }
+
+    private func notifyStateChange() {
+        // 观察者可能在回调里关掉标签（连带注销自己），所以先拷一份再遍历。
+        for observer in Array(stateObservers.values) { observer(state) }
     }
 
     private func notifyContextChange() {

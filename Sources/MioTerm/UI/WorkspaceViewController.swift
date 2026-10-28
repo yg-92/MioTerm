@@ -306,11 +306,20 @@ final class WorkspaceViewController: NSSplitViewController {
             return
         }
         reconnectingSessions.insert(controller.sessionID)
+        sessions.setReconnecting(controller, busy: true)
+        environment.logger.info("重连 \(controller.title)：开始")
         Task { @MainActor [weak self, weak controller] in
             guard let self, let controller else { return }
-            defer { self.reconnectingSessions.remove(controller.sessionID) }
+            defer {
+                self.reconnectingSessions.remove(controller.sessionID)
+                self.sessions.setReconnecting(controller, busy: false)
+            }
             await self.coordinator.reconnect(controller, in: self.view.window)
-            guard controller.state.isAlive else { return }
+            guard controller.state.isAlive else {
+                self.environment.logger.info("重连 \(controller.title)：没连上，状态 \(controller.state.label)")
+                return
+            }
+            self.environment.logger.info("重连 \(controller.title)：已连上，换一条新的文件通道")
             // 旧文件通道挂在已经断开的那条 ssh 上，重连成功后换一条新的。
             self.environment.closeSFTPSession(for: controller)
             self.sidePanel.bind(to: controller)
