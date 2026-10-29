@@ -45,4 +45,21 @@ struct TerminalPromptTests {
             #expect(TerminalPrompt.parse(line) == nil, "\(line) 不该被当成提示符")
         }
     }
+
+    /// 回显行是「提示符 + 命令」。粘贴进来的路径本端一个字节都没收到，
+    /// 只有这一行能说清楚刚才去了哪。
+    @Test func commandIsReadBackFromTheEchoAfterThePrompt() {
+        #expect(TerminalPrompt.commandAfterPrompt(in: "[root@localhost ~]# cd /home/jenkins_home/")
+                == "cd /home/jenkins_home/")
+        #expect(TerminalPrompt.commandAfterPrompt(in: "root@134:/var/log# ls -la") == "ls -la")
+        #expect(TerminalPrompt.commandAfterPrompt(in: "(venv) yanggang@server:/app$ git status") == "git status")
+    }
+
+    /// 光秃秃的提示符后面没有命令，不能凭空编一条出来。
+    @Test func emptyPromptHasNoCommandAfterIt() {
+        #expect(TerminalPrompt.commandAfterPrompt(in: "[root@134 ~]#") == nil)
+        #expect(TerminalPrompt.commandAfterPrompt(in: "[root@134 /var/log]# ") == nil)
+        #expect(TerminalPrompt.commandAfterPrompt(in: "total 12") == nil)
+        #expect(TerminalPrompt.commandAfterPrompt(in: nil) == nil)
+    }
 }

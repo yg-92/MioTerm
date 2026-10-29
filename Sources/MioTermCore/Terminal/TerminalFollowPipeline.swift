@@ -101,6 +101,13 @@ public final class TerminalFollowPipeline {
             log("从屏幕回显还原补全后的命令（\(Self.describe(recovered, missing: "—"))）")
             command = recovered
         }
+        // 粘贴和输入法让本端连半截都不剩，但 shell 的回显还挂在提示符后面。
+        // 实机事故：`cd /home/jenkins_home/` 这类粘贴进来的路径没有被攒行器看到，
+        // 只剩末级名的提示符又定位不了，树就一直停在旧目录。
+        if command == nil, let recovered = TerminalPrompt.commandAfterPrompt(in: screenBeforeEnter) {
+            log("从屏幕回显还原命令行（\(Self.describe(recovered, missing: "—"))）")
+            command = recovered
+        }
         if let line = command {
             onCommand?(line)
         }

@@ -73,4 +73,26 @@ public enum TerminalPrompt {
         guard range.location != NSNotFound, let swiftRange = Range(range, in: text) else { return nil }
         return String(text[swiftRange])
     }
+
+    /// 回显行是「提示符 + 已经敲进去的命令」，比如 `[root@134 ~]# cd /home/jenkins_home/`。
+    ///
+    /// 粘贴、历史回溯、输入法都会让本端攒的行和真实命令行脱节，按键也未必听得全；
+    /// 但 shell 的回显是它自己写的，最可信。这里沿着一行从左往右找第一个能
+    /// 按提示符语法解析出来的前缀，它后面那截就是命令。
+    public static func commandAfterPrompt(in line: String?) -> String? {
+        guard let line, !line.isEmpty else { return nil }
+        var index = line.startIndex
+        while index < line.endIndex {
+            let character = line[index]
+            if character == "#" || character == "$" || character == "%" {
+                if parse(String(line[line.startIndex...index])) != nil {
+                    let command = String(line[line.index(after: index)...])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return command.isEmpty ? nil : command
+                }
+            }
+            index = line.index(after: index)
+        }
+        return nil
+    }
 }

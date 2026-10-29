@@ -361,6 +361,29 @@ struct TerminalFollowPipelineTests {
         rig.pipeline.stop()
     }
 
+    /// 实机回放：粘贴的 `cd /home/jenkins_home/` 一个字节都没进攒行器，
+    /// 而提示符只报末级名 `jenkins_home`，光看新提示符定位不了。回显行里
+    /// 还留着「提示符 + 命令」，跟随得从那里把 cd 捞回来。
+    @Test func pastedCdIsRecoveredFromTheEcho() {
+        let rig = Rig()
+        rig.remote("[root@localhost ~]# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        var commands: [String] = []
+        rig.pipeline.onCommand = { commands.append($0) }
+
+        rig.view.feed(text: "cd /home/jenkins_home/")
+        rig.pipeline.invalidateLine()
+        rig.pressReturn()
+        rig.remote("\r\n[root@localhost jenkins_home]# ")
+
+        #expect(rig.settle())
+        #expect(commands == ["cd /home/jenkins_home/"])
+        #expect(rig.pipeline.context.directory == "/home/jenkins_home")
+        #expect(rig.broadcasts.last?.directory == "/home/jenkins_home")
+        rig.pipeline.stop()
+    }
+
     /// 输出事件把读屏不断往后推：磁盘还在写的时候不读，最后一帧落下 200ms 才读。
     @Test func outputKeepsPushingTheScreenReadBack() async throws {
         let rig = Rig()
