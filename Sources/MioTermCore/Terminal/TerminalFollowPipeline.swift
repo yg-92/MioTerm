@@ -198,7 +198,12 @@ public final class TerminalFollowPipeline {
         }
         let line = screenLine()
         let changed = tracker.settle(promptLine: line, inAlternateScreen: false)
-        log("读屏 \(Self.screenForLog(line)) → \(shownDirectory)")
+        // 丢掉定位这件事本身要留痕：否则日志里只看到「未上报」，看不出是提示符
+        // 只报了末级目录名、和 cd 预测对不上，还是压根没读到提示符。
+        let shown = tracker.lostTrackAtLastSettle
+            ? "\(shownDirectory)（提示符只报了末级目录名，与预测对不上，位置未知）"
+            : shownDirectory
+        log("读屏 \(Self.screenForLog(line)) → \(shown)")
         if changed {
             emptyReads = 0
             onChange?(context)

@@ -32,7 +32,9 @@ public enum SFTPPath {
     public static func join(_ directory: String, _ name: String) -> String {
         if name.hasPrefix(root) { return normalize(name) }
         let base = normalize(directory)
-        if base == root { return root + name }
+        // 结尾斜杠也要收拾干净：`cd ../` 从 `/home` 算出来的 `/` 再拼 `x/`
+        // 会得到 `/x/`，日志和比较里多一个斜杠只是噪音。
+        if base == root { return normalize(root + name) }
         return normalize(base + root + name)
     }
 

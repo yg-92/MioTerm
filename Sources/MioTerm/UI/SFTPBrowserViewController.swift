@@ -585,9 +585,14 @@ final class SFTPBrowserViewController: NSViewController {
             isPausedByTerminal = true
             // 远端 shell 既不报 OSC 7、提示符里也没有路径时，跟随确实无从下手，
             // 与其默默不动，不如把原因说出来。主目录问不出来是另一种情况，别混为一谈。
-            statusLabel.stringValue = homeUnresolvable && context.promptHomeHint != nil
-                ? "问不出远端主目录，`~` 跟随不了（点刷新可重试）"
-                : "终端未上报目录，暂时无法跟随"
+            if homeUnresolvable && context.promptHomeHint != nil {
+                statusLabel.stringValue = "问不出远端主目录，`~` 跟随不了（点刷新可重试）"
+            } else if let name = context.promptBasename {
+                // 提示符只报了末级目录名（PS1 的 `\W`）：名字读到了，但拼不出全路径。
+                statusLabel.stringValue = "终端只报了目录名「\(name)」，定位不到绝对路径"
+            } else {
+                statusLabel.stringValue = "终端未上报目录，暂时无法跟随"
+            }
         case .idle:
             // 从容器里 exit 回来时目录往往没变，但状态行还挂着“暂停跟随”，
             // 必须换回普通状态，否则看起来像列表卡住了。

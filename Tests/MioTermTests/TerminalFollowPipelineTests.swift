@@ -149,6 +149,33 @@ struct TerminalFollowPipelineTests {
         rig.pipeline.stop()
     }
 
+    /// 实机事故回放：PS1 是 `\W` 的机器上，`cd ../` 从 `/home` 预测出 `/`，
+    /// 提示符说的却是 `jenkins_home`。旧实现把“上下文没变”当成“提示符没说话”，
+    /// 采纳了 `/`；之后每个 `cd` 都从这个错路径往下算，树最后停在根本不存在的
+    /// `/project-execute`，左边一片“文件或目录不存在”。
+    @Test func basenamePromptNeverLetsThePredictionWin() {
+        let rig = Rig()
+        rig.remote("[root@134 /home]# ")
+        rig.pipeline.sessionDidOpen()
+        #expect(rig.settle())
+        #expect(rig.pipeline.context.directory == "/home")
+
+        rig.type("cd ../\r")
+        rig.remote("\r\n[root@134 jenkins_home]# ")
+        #expect(rig.settle())
+        #expect(rig.pipeline.context.directory == nil)
+
+        rig.type("cd project-execute\r")
+        rig.remote("\r\n[root@134 project-execute]# ")
+        _ = rig.settle()
+
+        let jumped = rig.broadcasts.compactMap(\.directory)
+        #expect(!jumped.contains("/"))
+        #expect(!jumped.contains("/project-execute"))
+        #expect(rig.pipeline.context.directory == nil)
+        rig.pipeline.stop()
+    }
+
     /// 命令还在刷屏时读屏看到的是旧提示符，得等安静下来。
     @Test func settleWaitsUntilTheScreenGoesQuiet() {
         let rig = Rig()

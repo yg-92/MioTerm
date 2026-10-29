@@ -220,6 +220,9 @@ public struct TerminalContext: Equatable {
     /// 提示符只显示主目录（`~`、`~/logs`）时的相对段：`""` 就是家目录本身。
     /// 本端不知道远端家目录在哪，所以这截要交给文件通道去解析。
     public var promptHomeHint: String?
+    /// 提示符只报了末级目录名（PS1 的 `\W`），而且定位不到绝对路径时记下这个名字。
+    /// 只为把话说清楚：面板据此说明“不是没读到，而是读到了也拼不出全路径”。
+    public var promptBasename: String?
     /// 每次“改动文件系统的命令执行完”加一；面板据此重读，而不必比较内容。
     public var filesystemRevision: Int
     /// 终端是否还停在本机 shell 里。会话里再 ssh 到别处、或进入 Docker 等容器后，
@@ -229,10 +232,12 @@ public struct TerminalContext: Equatable {
     public var mode: TerminalMode
 
     public init(directory: String? = nil, promptHomeHint: String? = nil,
+                promptBasename: String? = nil,
                 filesystemRevision: Int = 0, followAllowed: Bool = true,
                 mode: TerminalMode = .shell) {
         self.directory = directory
         self.promptHomeHint = promptHomeHint
+        self.promptBasename = promptBasename
         self.filesystemRevision = filesystemRevision
         self.followAllowed = followAllowed
         self.mode = mode

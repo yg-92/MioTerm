@@ -129,4 +129,78 @@ struct TerminalContextTrackerTests {
         #expect(trackerAfterTyping(nil, promptLine: "[root@134 /var/log]#").displayDirectory == "/var/log")
         #expect(TerminalContext().displayDirectory == nil)
     }
+
+    // MARK: - 末级目录名与 cd 预测打架
+
+    /// 先让跟踪器确认自己在某个绝对路径上，再模拟一次提交。
+    private func tracker(startingAt directory: String) -> TerminalContextTracker {
+        var tracker = TerminalContextTracker()
+        tracker.submit(command: nil)
+        _ = tracker.settle(promptLine: "[root@134 \(directory)]#", inAlternateScreen: false)
+        return tracker
+    }
+
+    /// 实机事故：PS1 是 `\W` 的机器上，`cd ../` 从 `/home` 预测出 `/`，
+    /// 而提示符明明报的是 `jenkins_home`。旧代码把“上下文没变”当成“提示符没说话”，
+    /// 于是采纳了 `/`；之后每个 `cd` 都从这个错路径往下算，最后停在根本不存在的
+    /// `/project-execute` 上，树上一片“文件或目录不存在”。
+    @Test func basenameThatContradictsThePredictionVoidsIt() {
+        var tracker = tracker(startingAt: "/home")
+        #expect(tracker.context.directory == "/home")
+        tracker.submit(command: "cd ../")
+        _ = tracker.settle(promptLine: "[root@134 jenkins_home]#", inAlternateScreen: false)
+        #expect(tracker.context.directory == nil)
+        #expect(tracker.context.promptBasename == "jenkins_home")
+        #expect(tracker.lostTrackAtLastSettle)
+    }
+
+    /// `cd` 的目标不存在时 shell 留在原地，提示符还是原来那个末级名。
+    /// 这不叫“丢了定位”，已知目录要保住。
+    @Test func failedCdKeepsTheKnownDirectory() {
+        var tracker = tracker(startingAt: "/home")
+        tracker.submit(command: "cd nope")
+        _ = tracker.settle(promptLine: "[root@134 home]#", inAlternateScreen: false)
+        #expect(tracker.context.directory == "/home")
+        #expect(!tracker.lostTrackAtLastSettle)
+    }
+
+    /// 执行的不是 `cd`：没有预测可核对，更不该把已知目录清掉。
+    @Test func ordinaryCommandKeepsTheKnownDirectory() {
+        var tracker = tracker(startingAt: "/home")
+        tracker.submit(command: "ls -la")
+        _ = tracker.settle(promptLine: "[root@134 home]#", inAlternateScreen: false)
+        #expect(tracker.context.directory == "/home")
+        #expect(!tracker.lostTrackAtLastSettle)
+    }
+
+    /// 丢掉定位之后的 `cd` 不再瞎猜：预测需要基底，基底没了就什么都不给。
+    @Test func followingStaysQuietOnceTrackIsLost() {
+        var tracker = tracker(startingAt: "/home")
+        tracker.submit(command: "cd ../")
+        _ = tracker.settle(promptLine: "[root@134 jenkins_home]#", inAlternateScreen: false)
+        tracker.submit(command: "cd project-execute")
+        _ = tracker.settle(promptLine: "[root@134 project-execute]#", inAlternateScreen: false)
+        #expect(tracker.context.directory == nil)
+    }
+
+    /// 末级名只是“说清为什么停住”的线索，一旦读到绝对路径就该收起来。
+    @Test func absolutePromptClearsTheBasenameHint() {
+        var tracker = tracker(startingAt: "/home")
+        tracker.submit(command: "cd ../")
+        _ = tracker.settle(promptLine: "[root@134 jenkins_home]#", inAlternateScreen: false)
+        #expect(tracker.context.promptBasename == "jenkins_home")
+        tracker.submit(command: nil)
+        _ = tracker.settle(promptLine: "[root@134 /home/jenkins_home]#", inAlternateScreen: false)
+        #expect(tracker.context.directory == "/home/jenkins_home")
+        #expect(tracker.context.promptBasename == nil)
+    }
+
+    @Test func oscSevenClearsTheBasenameHint() {
+        var tracker = tracker(startingAt: "/home")
+        tracker.submit(command: "cd ../")
+        _ = tracker.settle(promptLine: "[root@134 jenkins_home]#", inAlternateScreen: false)
+        tracker.reportOSC7("file://134/home/jenkins_home")
+        #expect(tracker.context.directory == "/home/jenkins_home")
+        #expect(tracker.context.promptBasename == nil)
+    }
 }

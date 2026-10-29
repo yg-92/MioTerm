@@ -27,6 +27,9 @@ public struct TerminalContextTracker {
     private var predictedDirectory: String?
     private var pendingFileChange = false
     private var reportedAt = Date.distantPast
+    /// 最近一次读屏时，提示符只报了末级目录名，而且和 cd 预测、原目录都对不上：
+    /// 绝对路径从这一刻起无从得知，只能等 OSC 7 或用户在绝对路径下再 `cd` 一次。
+    public private(set) var lostTrackAtLastSettle = false
 
     public init() {}
 
@@ -101,6 +104,7 @@ public struct TerminalContextTracker {
         if !isNested, containerMode == nil, let path = OSC7.path(from: payload) {
             context.directory = path
             context.promptHomeHint = nil
+            context.promptBasename = nil
         }
         return context != before
     }
@@ -109,14 +113,21 @@ public struct TerminalContextTracker {
     @discardableResult
     public mutating func settle(promptLine: String?, inAlternateScreen: Bool) -> Bool {
         let before = context
+        lostTrackAtLastSettle = false
         if reportedAt < submittedAt, !inAlternateScreen {
-            applyPrompt(promptLine)
-            let promptSaidNothing = context.directory == before.directory
-                && context.promptHomeHint == before.promptHomeHint
-            if promptSaidNothing, let predicted = predictedDirectory,
-               !isNested, containerMode == nil {
-                context.directory = predicted
-                context.promptHomeHint = nil
+            // 只有提示符压根没提目录时才拿 cd 预测兜底。
+            // 以前这里是「上下文没变就兜底」，于是提示符明明报了 `jenkins_home`、
+            // 预测却算出 `/` 的时候，预测照样生效——后面的 `cd` 全从这个错路径往下算，
+            // 最后停在根本不存在的 `/project-execute` 上。
+            switch applyPrompt(promptLine) {
+            case .noEvidence:
+                if let predicted = predictedDirectory, !isNested, containerMode == nil {
+                    context.directory = predicted
+                    context.promptHomeHint = nil
+                    context.promptBasename = nil
+                }
+            case .settled, .lostTrack:
+                break
             }
         }
         if pendingFileChange {
@@ -127,9 +138,19 @@ public struct TerminalContextTracker {
         return context != before
     }
 
+    /// 一次读屏从提示符里拿到的东西，决定要不要退回 cd 预测。
+    private enum PromptReading {
+        /// 提示符没提目录（认不出的提示符、普通输出）：可以退回 cd 预测。
+        case noEvidence
+        /// 已经落定：绝对的路径、`~/x`、核对通过的末级名，或者 `cd` 压根没生效。
+        case settled
+        /// 只报了末级目录名，和预测、原目录都对不上：绝对路径无从得知。
+        case lostTrack
+    }
+
     /// 证据优先级：OSC 7 在命令之后报过就不必兜底，否则提示符 > cd 预测。
-    private mutating func applyPrompt(_ line: String?) {
-        guard let line, let fact = TerminalPrompt.parse(line) else { return }
+    private mutating func applyPrompt(_ line: String?) -> PromptReading {
+        guard let line, let fact = TerminalPrompt.parse(line) else { return .noEvidence }
         if containerMode != nil {
             if !containerPromptSeen {
                 // 进容器后读到的第一个提示符一定来自容器内部。容器常被配置成与宿主
@@ -147,23 +168,42 @@ public struct TerminalContextTracker {
             nestedByPrompt = machine != promptHost
         }
         applyNesting()
-        guard !isNested, containerMode == nil else { return }
+        guard !isNested, containerMode == nil else { return .settled }
         if let directory = fact.absoluteDirectory {
             context.directory = directory
             context.promptHomeHint = nil
-            return
+            context.promptBasename = nil
+            return .settled
         }
         if let relative = fact.homeRelativePath {
             context.directory = nil
             context.promptHomeHint = relative
-            return
+            context.promptBasename = nil
+            return .settled
         }
-        // 只剩末级名字（PS1 里的 `\W`）：够不着定位，只能给 cd 预测盖个章。
-        guard let base = fact.baseName, let predicted = predictedDirectory else { return }
+        // 只剩末级名字（PS1 里的 `\W`）：够不着定位，只能拿来核对预测。
+        guard let base = fact.baseName else { return .noEvidence }
+        guard let predicted = predictedDirectory else {
+            // 没预测可核（执行的不是 cd）：留在原处，别把已知目录清掉。
+            return .settled
+        }
         if (predicted as NSString).lastPathComponent == base {
             context.directory = predicted
             context.promptHomeHint = nil
+            context.promptBasename = nil
+            return .settled
         }
+        // 预测的末级名和提示符对不上。若提示符显示的正是原目录，说明这次 `cd`
+        // 没生效（目标不存在、被拒绝），原地不动就好；两个都对不上才是真丢了定位。
+        if let known = context.directory, (known as NSString).lastPathComponent == base {
+            return .settled
+        }
+        context.directory = nil
+        context.promptHomeHint = nil
+        // 记下这个末级名，状态栏才能说清是“读到了目录名却拼不出全路径”。
+        context.promptBasename = base
+        lostTrackAtLastSettle = true
+        return .lostTrack
     }
 
     private mutating func applyNesting() {
