@@ -36,6 +36,7 @@ final class SFTPBrowserViewController: NSViewController {
     private var currentDirectory: String?
 
     /// 当前目录的位置导航：操作按钮下面一条可点的面包屑。
+    private let pathContainer = NSView()
     private let pathScroll = PathBarScrollView()
     private let pathBar = NSStackView()
     /// 面包屑每段代表的路径，按钮用 tag 索引它（NSButton 没有 representedObject）。
@@ -137,7 +138,7 @@ final class SFTPBrowserViewController: NSViewController {
         transferScroll.drawsBackground = false
         transferScroll.isHidden = true
 
-        let body = NSStackView(views: [actions, pathScroll, treeScroll, statusRow, transferScroll])
+        let body = NSStackView(views: [actions, pathContainer, treeScroll, statusRow, transferScroll])
         body.orientation = .vertical
         body.alignment = .leading
         body.distribution = .fill
@@ -153,8 +154,8 @@ final class SFTPBrowserViewController: NSViewController {
             body.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             // 竖排栈按 leading 对齐时行宽只由内容决定，需要撑满的行要显式钉住。
             actions.widthAnchor.constraint(equalTo: body.widthAnchor),
-            pathScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
-            pathScroll.heightAnchor.constraint(equalToConstant: 30),
+            pathContainer.widthAnchor.constraint(equalTo: body.widthAnchor),
+            pathContainer.heightAnchor.constraint(equalToConstant: 30),
             statusRow.widthAnchor.constraint(equalTo: body.widthAnchor),
             treeScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
             transferScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
@@ -267,12 +268,13 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     /// 面包屑横放在侧栏里可能超宽，允许无滚动条横向滚动，重建后自动对齐到最右端露出当前目录。
+    /// 外层容器左右留出边距，即使路径极长发生裁切也不会紧贴侧栏边缘。
     private func configurePathBar() {
         pathBar.orientation = .horizontal
         pathBar.alignment = .centerY
         pathBar.distribution = .fill
         pathBar.spacing = 2
-        pathBar.edgeInsets = NSEdgeInsets(top: 2, left: 8, bottom: 2, right: 8)
+        pathBar.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
         pathBar.translatesAutoresizingMaskIntoConstraints = false
 
         pathScroll.documentView = pathBar
@@ -282,9 +284,17 @@ final class SFTPBrowserViewController: NSViewController {
         pathScroll.verticalScrollElasticity = .none
         pathScroll.borderType = .noBorder
         pathScroll.drawsBackground = false
-        pathScroll.isHidden = true
+        pathScroll.translatesAutoresizingMaskIntoConstraints = false
+
+        pathContainer.translatesAutoresizingMaskIntoConstraints = false
+        pathContainer.isHidden = true
+        pathContainer.addSubview(pathScroll)
 
         NSLayoutConstraint.activate([
+            pathScroll.leadingAnchor.constraint(equalTo: pathContainer.leadingAnchor, constant: 10),
+            pathScroll.trailingAnchor.constraint(equalTo: pathContainer.trailingAnchor, constant: -10),
+            pathScroll.topAnchor.constraint(equalTo: pathContainer.topAnchor),
+            pathScroll.bottomAnchor.constraint(equalTo: pathContainer.bottomAnchor),
             // 文档视图钉在可视区的左、上、下，高度与可视区一致，宽度由栈的固有尺寸决定并钉死：
             // 路径再长也只是滚出去，不会把每段按钮压成省略号。
             pathBar.leadingAnchor.constraint(equalTo: pathScroll.contentView.leadingAnchor),
@@ -302,10 +312,10 @@ final class SFTPBrowserViewController: NSViewController {
             view.removeFromSuperview()
         }
         guard let directory else {
-            pathScroll.isHidden = true
+            pathContainer.isHidden = true
             return
         }
-        pathScroll.isHidden = false
+        pathContainer.isHidden = false
         let ancestors = SFTPPath.ancestors(directory)
         breadcrumbPaths = ancestors
         for (index, path) in ancestors.enumerated() {
@@ -1238,6 +1248,10 @@ extension SFTPBrowserViewController: NSTableViewDataSource, NSTableViewDelegate,
         tableView === transferTable ? transferOrder.count : entries.count
     }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        tableView === fileTable ? FileTableRowView() : nil
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         if tableView === transferTable {
             guard tableColumn?.identifier == Self.jobColumn,
@@ -1559,6 +1573,83 @@ private final class TransferDismissButton: NSButton {
 
     override func mouseExited(with event: NSEvent) {
         contentTintColor = Theme.textTertiary
+    }
+}
+
+/// 文件树行视图：鼠标移入未选中行时给一层圆角加深底色，悬停指向一目了然。
+@MainActor
+private final class FileTableRowView: NSTableRowView {
+    private let hoverBackground = NSView()
+    private var hoverArea: NSTrackingArea?
+    private var hovering = false {
+        didSet { updateHoverAppearance() }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        hoverBackground.wantsLayer = true
+        hoverBackground.layer?.cornerRadius = 5
+        hoverBackground.layer?.cornerCurve = .continuous
+        hoverBackground.layer?.backgroundColor = Theme.layerColor(Theme.border, for: self)
+        hoverBackground.isHidden = true
+        addSubview(hoverBackground, positioned: .below, relativeTo: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override var isSelected: Bool {
+        didSet { updateHoverAppearance() }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        hovering = false
+    }
+
+    override func layout() {
+        super.layout()
+        let cellMinX = subviews.first { $0 is NSTableCellView }?.frame.minX ?? 10
+        let dx = max(2, min(6, cellMinX - 4))
+        hoverBackground.frame = bounds.insetBy(dx: dx, dy: 1)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea {
+            removeTrackingArea(hoverArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverArea = area
+        if let window {
+            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            hovering = bounds.contains(point)
+        } else {
+            hovering = false
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+    }
+
+    private func updateHoverAppearance() {
+        hoverBackground.isHidden = !hovering || isSelected
+        hoverBackground.layer?.backgroundColor = Theme.layerColor(Theme.border, for: self)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateHoverAppearance()
     }
 }
 
