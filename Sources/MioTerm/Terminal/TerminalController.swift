@@ -136,7 +136,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         } else {
             process = nil
         }
-        terminalView = process ?? TerminalView(frame: frame, font: font, options: options)
+        terminalView = process ?? StreamTerminalView(frame: frame, font: font, options: options)
         processView = process
         super.init()
         applyTheme()
@@ -540,13 +540,26 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     func programStatusChanged(source: TerminalView, records: [TerminalProgramStatus]) {}
 }
 
-/// 补齐 `LocalProcessTerminalView` 不对外广播的两类输入事件：
+/// 补齐 `LocalProcessTerminalView` 不对外广播的两类输入事件，并接入双击整段路径选中：
 /// 1. 输入法开始预编辑（`setMarkedText`）：第一下按键就会进这里，立即把攒行器标为不可信；
-/// 2. 粘贴（`paste`）：菜单栏与右键粘贴不经过 `keyDown`，自带换行的粘贴也不会再按回车。
+/// 2. 粘贴（`paste`）：菜单栏与右键粘贴不经过 `keyDown`，自带换行的粘贴也不会再按回车；
+/// 3. 双击选词（`mouseDown` + `selectionChanged`）：把 `/`、`~` 等路径字符连成整段选中。
 @MainActor
 private final class ProcessTerminalView: LocalProcessTerminalView {
     var onMarkedText: (() -> Void)?
     var onPaste: ((String) -> Void)?
+    private let doubleClickTracker = DoubleClickSelectionTracker()
+
+    override func mouseDown(with event: NSEvent) {
+        doubleClickTracker.pendingDoubleClick = event.clickCount == 2
+        super.mouseDown(with: event)
+        doubleClickTracker.pendingDoubleClick = false
+    }
+
+    nonisolated override func selectionChanged(source: Terminal) {
+        doubleClickTracker.expandIfNeeded(in: self, terminal: source)
+        super.selectionChanged(source: source)
+    }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         onMarkedText?()
@@ -560,6 +573,42 @@ private final class ProcessTerminalView: LocalProcessTerminalView {
             onMarkedText?()
         }
         super.paste(sender)
+    }
+}
+
+/// Telnet / 串口会话使用的终端视图：与 `ProcessTerminalView` 共享同一套双击整段路径选中规则。
+@MainActor
+private final class StreamTerminalView: TerminalView {
+    private let doubleClickTracker = DoubleClickSelectionTracker()
+
+    override func mouseDown(with event: NSEvent) {
+        doubleClickTracker.pendingDoubleClick = event.clickCount == 2
+        super.mouseDown(with: event)
+        doubleClickTracker.pendingDoubleClick = false
+    }
+
+    nonisolated override func selectionChanged(source: Terminal) {
+        doubleClickTracker.expandIfNeeded(in: self, terminal: source)
+        super.selectionChanged(source: source)
+    }
+}
+
+/// 在 `mouseDown(clickCount == 2)` 触发 `selectionChanged` 的同一把 `terminalLock` 内，
+/// 将 SwiftTerm 默认的单段单词选区扩展为整条路径或完整令牌。
+private final class DoubleClickSelectionTracker: @unchecked Sendable {
+    var pendingDoubleClick = false
+    weak var selectionService: SelectionService?
+
+    func expandIfNeeded(in view: TerminalView, terminal: Terminal) {
+        guard pendingDoubleClick else { return }
+        pendingDoubleClick = false
+        let selection = selectionService ?? {
+            let resolved = TerminalWordSelection.selectionService(in: view)
+            selectionService = resolved
+            return resolved
+        }()
+        guard let selection else { return }
+        TerminalWordSelection.expandSelection(in: terminal, selection: selection)
     }
 }
 
