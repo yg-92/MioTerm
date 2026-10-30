@@ -82,17 +82,25 @@ public enum TerminalPrompt {
     public static func commandAfterPrompt(in line: String?) -> String? {
         guard let line, !line.isEmpty else { return nil }
         var index = line.startIndex
+        var matchedEnd: String.Index?
         while index < line.endIndex {
             let character = line[index]
             if character == "#" || character == "$" || character == "%" {
                 if parse(String(line[line.startIndex...index])) != nil {
-                    let command = String(line[line.index(after: index)...])
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    return command.isEmpty ? nil : command
+                    matchedEnd = index
+                    let next = line.index(after: index)
+                    // 提示符的结尾符后面通常紧跟空格；若后面还连着非空白字符（例如目录名本身含 `#`：`root@134:/a#1# cmd`），
+                    // 继续往同一词的末尾找，避免把路径后半截当成命令。
+                    if next == line.endIndex || line[next].isWhitespace {
+                        break
+                    }
                 }
             }
             index = line.index(after: index)
         }
-        return nil
+        guard let end = matchedEnd else { return nil }
+        let command = String(line[line.index(after: end)...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return command.isEmpty ? nil : command
     }
 }

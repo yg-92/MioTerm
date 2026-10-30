@@ -23,11 +23,19 @@ public struct TerminalKeyStroke: Equatable, Sendable {
     /// AppKit 的虚拟键码，纯文本用不到，回车/退格/方向键靠它识别。
     public var keyCode: UInt16
     public var modifiers: Modifiers
+    /// 输入法是否正处于预编辑（marked text）状态：此时按键与回车都归输入法消费，不能当成 shell 输入。
+    public var hasMarkedText: Bool
 
-    public init(characters: String?, keyCode: UInt16, modifiers: Modifiers = []) {
+    public init(
+        characters: String?,
+        keyCode: UInt16,
+        modifiers: Modifiers = [],
+        hasMarkedText: Bool = false
+    ) {
         self.characters = characters
         self.keyCode = keyCode
         self.modifiers = modifiers
+        self.hasMarkedText = hasMarkedText
     }
 }
 
@@ -47,6 +55,10 @@ public enum TerminalKeyTranslator {
     private static let functionKeyRange: ClosedRange<UInt32> = 0xF700...0xF8FF
 
     public static func translate(_ stroke: TerminalKeyStroke) -> TerminalKeyEffect {
+        // 输入法正在合成候选词：字母键是拼音/字根，空格/回车是选词上屏，都不能当成直接发给终端的命令。
+        if stroke.hasMarkedText {
+            return .invalidatesLine
+        }
         // Command 组合是应用快捷键，不是终端输入。只有粘贴会悄悄改写命令行。
         if stroke.modifiers.contains(.command) {
             return stroke.keyCode == 9 ? .invalidatesLine : .ignored
@@ -74,7 +86,7 @@ public enum TerminalKeyTranslator {
             if functionKeyRange.contains(value) { return .ignored }
             if value < 0x20 {
                 switch value {
-                case 0x03, 0x04, 0x0C, 0x15, 0x09:
+                case 0x03, 0x04, 0x08, 0x0C, 0x15, 0x09:
                     return .bytes([UInt8(value)])
                 default:
                     return .invalidatesLine

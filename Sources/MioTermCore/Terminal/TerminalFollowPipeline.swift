@@ -38,6 +38,8 @@ public final class TerminalFollowPipeline {
     private var emptyReads = 0
     /// 用户提交的命令必然有回显或输出；见到输出之前读屏读到的是旧提示符。
     private var expectsOutput = false
+    /// 最近一次粘贴的单行文本：SSH 高延迟下用户粘贴完立刻按回车时，远端回显可能还没到屏幕，用它兜底。
+    private var pendingPastedLine: String?
     private var screenLine: () -> String? = { nil }
 
     public init() {}
@@ -54,6 +56,7 @@ public final class TerminalFollowPipeline {
         commandTracker = ShellCommandTracker()
         warmupTries = 0
         emptyReads = 0
+        pendingPastedLine = nil
     }
 
     public func stop() {
@@ -70,8 +73,13 @@ public final class TerminalFollowPipeline {
 
     /// 逐字节攒行在 ShellCommandTracker 里，这里只管「这一下算不算执行了命令」。
     public func userInput(_ bytes: ArraySlice<UInt8>, inAlternateScreen: Bool) {
+        if bytes.contains(where: { $0 == 0x03 || $0 == 0x15 || $0 == 0x7F || $0 == 0x08 }) {
+            pendingPastedLine = nil
+        }
         // consume 只在回车那一刻返回值，拿不到就说明这批字节里没有执行。
         guard let submission = commandTracker.consume(bytes) else { return }
+        let pastedFallback = pendingPastedLine
+        pendingPastedLine = nil
         // 回车前的屏幕底行有两个用处：还原 Tab 补全，以及认出「这行是敲给口令提示的」。
         let screenBeforeEnter = screenLine()
         let isSecret = SecretPrompt.isAskingForSecret(screenBeforeEnter)
@@ -108,6 +116,10 @@ public final class TerminalFollowPipeline {
             log("从屏幕回显还原命令行（\(Self.describe(recovered, missing: "—"))）")
             command = recovered
         }
+        if command == nil, let pastedFallback {
+            log("从粘贴缓冲还原命令行（\(Self.describe(pastedFallback, missing: "—"))）")
+            command = pastedFallback
+        }
         if let line = command {
             onCommand?(line)
         }
@@ -118,6 +130,46 @@ public final class TerminalFollowPipeline {
             expectsOutput: true,
             assumeFileChanges: submission.isTextUnreliable && command == nil
         )
+    }
+
+    /// 用户通过快捷键、右键或菜单粘贴了一段文本。
+    /// 若粘贴内容自带换行，终端不会再收到回车键事件，需要当场按提交处理；
+    /// 若是单行文本，先记下兜底，防止用户秒按回车时远端回显还没到屏幕。
+    public func userPaste(_ text: String, inAlternateScreen: Bool) {
+        invalidateLine()
+        guard !text.isEmpty else { return }
+        let hasNewline = text.contains("\r") || text.contains("\n")
+        guard hasNewline else {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            pendingPastedLine = trimmed.isEmpty ? nil : trimmed
+            return
+        }
+        guard !inAlternateScreen else {
+            armSettle()
+            return
+        }
+        let isSecret = SecretPrompt.isAskingForSecret(screenLine())
+        guard !isSecret else {
+            submit(command: nil, expectsOutput: true)
+            return
+        }
+        let segments = text.components(separatedBy: CharacterSet.newlines)
+        let trailingEndsWithNewline = text.last == "\r" || text.last == "\n"
+        let executedSlices = trailingEndsWithNewline ? segments[...] : segments.dropLast()
+        let executedCommands = executedSlices
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !trailingEndsWithNewline, let tail = segments.last?.trimmingCharacters(in: .whitespacesAndNewlines), !tail.isEmpty {
+            pendingPastedLine = tail
+        }
+        guard !executedCommands.isEmpty else {
+            submit(command: nil, expectsOutput: true, assumeFileChanges: true)
+            return
+        }
+        for line in executedCommands {
+            onCommand?(line)
+            submit(command: line, expectsOutput: true, assumeFileChanges: true)
+        }
     }
 
     /// 日志一律不写命令原文：敲给认证提示的口令会连着命令行一起被还原出来，
@@ -136,15 +188,17 @@ public final class TerminalFollowPipeline {
     /// 回车前的屏幕底行是「提示符 + 命令行」。用用户已键入的前缀在回显里找最后
     /// 一次出现的位置，把它之后的部分当作命令：补全插入的那一段也就一起拿回来了。
     static func recoverCompletedCommand(from screen: String?, typed: String) -> String? {
-        guard let screen, !typed.isEmpty,
-              let range = screen.range(of: typed, options: .backwards) else { return nil }
-        let tail = screen[range.lowerBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let screen, !typed.isEmpty else { return nil }
+        let subject = TerminalPrompt.commandAfterPrompt(in: screen) ?? screen
+        guard let range = subject.range(of: typed, options: .backwards) else { return nil }
+        let tail = subject[range.lowerBound...].trimmingCharacters(in: .whitespacesAndNewlines)
         return tail.isEmpty ? nil : tail
     }
 
     /// 命令行被粘贴、历史或输入法改了，本端记的文本作废；回车仍会安排读屏。
     public func invalidateLine() {
         commandTracker.markLineUnreliable()
+        pendingPastedLine = nil
     }
 
     /// OSC 7 是主动上报，不用等屏幕安静：立刻更新并广播。

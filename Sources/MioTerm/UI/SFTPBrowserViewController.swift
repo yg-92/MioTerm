@@ -450,6 +450,10 @@ final class SFTPBrowserViewController: NSViewController {
     @objc private func settingsDidChange() {
         guard isViewLoaded else { return }
         applyTreeMetrics()
+        refreshFollowToggle()
+        if let context = contextController?.context {
+            applyTerminalContext(context)
+        }
     }
 
     // MARK: - 绑定会话
@@ -517,11 +521,13 @@ final class SFTPBrowserViewController: NSViewController {
         if let id = boundController?.sessionID {
             followOverrides[id] = enabled
         }
-        lastFollowSetting = enabled
-        guard enabled, let context = contextController?.context, context.followAllowed,
-              let directory = terminalTarget(context) else { return }
-        // 刚打开就跟着终端此刻的目录走，不必等用户再敲一条 cd。
-        followTerminal(directory)
+        guard let context = contextController?.context else {
+            lastFollowSetting = enabled
+            return
+        }
+        // 统一走 applyTerminalContext：提示符在 `~` 时能先触发解析远端主目录，
+        // 停在容器或嵌套 ssh 里时也能给出暂停提示。
+        applyTerminalContext(context)
     }
 
     /// 决策结果写成一句人话，日志里看得懂列表为什么没动。

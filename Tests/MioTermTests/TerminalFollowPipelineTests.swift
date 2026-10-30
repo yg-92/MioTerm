@@ -465,4 +465,42 @@ struct TerminalFollowPipelineTests {
         #expect(rig.pipeline.context.directory == "/var/log")
         rig.pipeline.stop()
     }
+
+    /// 粘贴自带换行符的命令时不会再产生回车键事件，直接由 userPaste 提交并触发跟随。
+    @Test func pastedCommandWithTrailingNewlineDrivesFollowAndCommandLibrary() {
+        let rig = Rig()
+        rig.remote("[root@localhost ~]# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        var commands: [String] = []
+        rig.pipeline.onCommand = { commands.append($0) }
+
+        rig.pipeline.userPaste("cd /home/jenkins_home/\n", inAlternateScreen: false)
+        rig.remote("cd /home/jenkins_home/\r\n[root@localhost jenkins_home]# ")
+
+        #expect(rig.settle())
+        #expect(commands == ["cd /home/jenkins_home/"])
+        #expect(rig.pipeline.context.directory == "/home/jenkins_home")
+        rig.pipeline.stop()
+    }
+
+    /// 高延迟 SSH 下粘贴完立刻按回车，远端回显还没到屏幕时，用粘贴缓冲兜底还原命令。
+    @Test func pastedCommandFollowedByImmediateEnterBeforeEchoStillRecovers() {
+        let rig = Rig()
+        rig.remote("[root@localhost ~]# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        var commands: [String] = []
+        rig.pipeline.onCommand = { commands.append($0) }
+
+        rig.pipeline.userPaste("cd /home/jenkins_home/", inAlternateScreen: false)
+        // 回车按下时远端尚未回显刚粘贴的字符串，屏幕上只有旧提示符。
+        rig.pressReturn()
+        rig.remote("cd /home/jenkins_home/\r\n[root@localhost jenkins_home]# ")
+
+        #expect(rig.settle())
+        #expect(commands == ["cd /home/jenkins_home/"])
+        #expect(rig.pipeline.context.directory == "/home/jenkins_home")
+        rig.pipeline.stop()
+    }
 }

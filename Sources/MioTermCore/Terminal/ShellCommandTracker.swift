@@ -64,9 +64,10 @@ public struct ShellCommandTracker {
     }
 
     /// 宿主看到一个改写命令行却还原不出内容的动作（粘贴、历史、输入法）时调用：
-    /// 下一次回车仍然算一次执行，只是命令文本不再采信。
+    /// 下一次回车仍然算一次执行，只是命令文本不再采信，之前攒下的半截字节也一并作废。
     public mutating func markLineUnreliable() {
         isUnreliable = true
+        line.removeAll(keepingCapacity: true)
     }
 
     @discardableResult
@@ -117,12 +118,18 @@ public struct ShellCommandTracker {
             }
             return ShellSubmission(command: typed.isEmpty ? nil : typed)
         case 0x7F, 0x08:
-            if !line.isEmpty { line.removeLast() }
+            if isUnreliable {
+                // Tab 补全之后再退格，可能已经删进了补全前的前缀，这段前缀不再可信。
+                line.removeAll(keepingCapacity: true)
+            } else if !line.isEmpty {
+                line.removeLast()
+            }
             return nil
         case 0x04:
             // Ctrl+D：空行上是 EOF，当前这层 shell 结束；行内有内容时是删字符，还原不出来。
             guard line.isEmpty, !isUnreliable else {
                 isUnreliable = true
+                line.removeAll(keepingCapacity: true)
                 return nil
             }
             return ShellSubmission(endedShell: true)
@@ -144,7 +151,11 @@ public struct ShellCommandTracker {
         case let value where value < 0x20:
             return nil
         default:
-            line.append(byte)
+            // 一旦出现过 Tab 补全，后续敲入的字符隔着一段未知的补全结果，
+            // 不能再拼到前缀后面，否则 `cd /var/lo<Tab>ng<Tab>` 会拼成不存在的 `cd /var/long`。
+            if !isUnreliable {
+                line.append(byte)
+            }
             return nil
         }
     }
@@ -182,9 +193,9 @@ public enum ShellCommandClassifier {
         let words = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
         // 重定向与追加一定落了盘，即使命令本身不在白名单里。
         var effect = ShellCommandEffect(mayChangeFiles: line.contains(">") || isMutating(words))
-        guard let command = words.first, command == "cd", words.count == 2, !containsUnpredictable(line) else { return effect }
+        guard !containsUnpredictable(line), let target = extractCDArgument(from: line) else { return effect }
         // `cd` 是唯一能从输入预测目录的命令；`sudo cd` 之类不成立，其余场景等 OSC 7 报真实目录。
-        effect.predictedDirectory = resolveCD(words[1], from: currentDirectory)
+        effect.predictedDirectory = resolveCD(target, from: currentDirectory)
         return effect
     }
 
@@ -198,12 +209,55 @@ public enum ShellCommandClassifier {
         unpredictableMarkers.contains { line.contains($0) }
     }
 
-    /// `cd` 的目标只有这几种写法能本地算准：绝对路径、相对当前目录、`..`、`.`。
-    private static func resolveCD(_ argument: String, from currentDirectory: String?) -> String? {
-        var target = argument
-        if let quote = target.first, quote == "'" || quote == "\"", target.hasSuffix(String(quote)), target.count > 1 {
-            target = String(target.dropFirst().dropLast())
+    /// 提取 `cd` 的单一路径参数，支持引号包裹与反斜杠转义空格，以及 `cd -- /path`。
+    private static func extractCDArgument(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("cd") else { return nil }
+        let afterCD = trimmed.dropFirst(2)
+        guard let firstChar = afterCD.first, firstChar.isWhitespace else { return nil }
+        var rest = afterCD.drop(while: \.isWhitespace)
+        if rest.hasPrefix("--") {
+            let afterDash = rest.dropFirst(2)
+            if afterDash.isEmpty { return nil }
+            if let next = afterDash.first, next.isWhitespace {
+                rest = afterDash.drop(while: \.isWhitespace)
+            }
         }
+        guard !rest.isEmpty else { return nil }
+        var result = ""
+        var activeQuote: Character?
+        var escaped = false
+        var index = rest.startIndex
+        while index < rest.endIndex {
+            let ch = rest[index]
+            if escaped {
+                result.append(ch)
+                escaped = false
+            } else if ch == "\\" && activeQuote != "'" {
+                escaped = true
+            } else if let quote = activeQuote {
+                if ch == quote {
+                    activeQuote = nil
+                } else {
+                    result.append(ch)
+                }
+            } else if ch == "'" || ch == "\"" {
+                activeQuote = ch
+            } else if ch.isWhitespace {
+                // 第一个参数结束后还有别的非空内容（比如 `cd a b`），不作静态预测。
+                let trailing = rest[index...].drop(while: \.isWhitespace)
+                return trailing.isEmpty && !result.isEmpty ? result : nil
+            } else {
+                result.append(ch)
+            }
+            index = rest.index(after: index)
+        }
+        guard activeQuote == nil, !escaped, !result.isEmpty else { return nil }
+        return result
+    }
+
+    /// `cd` 的目标只有这几种写法能本地算准：绝对路径、相对当前目录、`..`、`.`。
+    private static func resolveCD(_ target: String, from currentDirectory: String?) -> String? {
         guard !target.isEmpty, target != "-", target != "--" else { return nil }
         // `~` 与 `$HOME` 要服务端解析，本地算不出来，交给 OSC 7 或“打开目录”。
         guard !target.hasPrefix("~") else { return nil }

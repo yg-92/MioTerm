@@ -28,8 +28,11 @@ public final class TerminalKeyboardMonitor {
                 guard let self, let view = self.view,
                       event.window === view.window,
                       view.window?.firstResponder === view,
-                      let stroke = event.terminalKeyStroke
+                      var stroke = event.terminalKeyStroke
                 else { return }
+                if let inputClient = view as? NSTextInputClient, inputClient.hasMarkedText() {
+                    stroke.hasMarkedText = true
+                }
                 onStroke(stroke)
             }
             return event

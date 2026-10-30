@@ -115,6 +115,33 @@ struct ContainerModeTests {
         #expect(tracker.context.followAllowed)
     }
 
+    @Test func nonInteractiveOrOneShotDockerExecDoesNotFreeze() {
+        var tracker = trackerOnHost()
+        tracker.submit(command: "docker exec web ls /app")
+        #expect(tracker.context.mode == .shell)
+        #expect(tracker.context.followAllowed)
+
+        tracker.submit(command: "docker exec -it web ls -la")
+        #expect(tracker.context.mode == .shell)
+        #expect(tracker.context.followAllowed)
+
+        tracker.submit(command: "docker exec -it web bash -c \"echo ok\"")
+        #expect(tracker.context.mode == .shell)
+        #expect(tracker.context.followAllowed)
+    }
+
+    @Test func exitingContainerDoesNotFlashRemoteShellMode() {
+        var tracker = trackerOnHost()
+        tracker.submit(command: "docker exec -it web bash")
+        _ = tracker.settle(promptLine: "[root@web /app]#", inAlternateScreen: false)
+        #expect(tracker.context.mode == .docker(container: "web"))
+
+        // 敲下 exit 立刻回到普通 Shell，不能因为容器提示符主机名是 web 就误判成远程 Shell。
+        tracker.submit(command: "exit")
+        #expect(tracker.context.mode == .shell)
+        #expect(tracker.context.followAllowed)
+    }
+
     @Test func dockerPSIsNotAnEntry() {
         var tracker = trackerOnHost()
         tracker.submit(command: "docker ps -a")

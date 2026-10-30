@@ -58,6 +58,12 @@ public enum ContainerCommandDetector {
         "--network", "--net", "--entrypoint", "--platform", "-m", "--memory",
         "--cpus", "--dns", "--add-host", "--label", "-l", "--restart",
         "--hostname", "-h", "--pid", "--ipc", "--uts", "--mount",
+        "-c", "--container", "-n", "--namespace",
+    ]
+
+    /// 交互式容器会话里常见的壳与登录入口；若 `exec` 跑的是 `ls`/`cat` 这类单次命令，跑完即退，不该冻结跟随。
+    private static let interactiveShells: Set<String> = [
+        "sh", "bash", "zsh", "ash", "dash", "fish", "ksh", "csh", "tcsh", "su", "login",
     ]
 
     public static func enteringContainer(_ line: String) -> TerminalMode? {
@@ -70,11 +76,18 @@ public enum ContainerCommandDetector {
         case "docker-compose":
             return composeMode(verb: args.first, rest: Array(args.dropFirst()))
         case "kubectl", "oc":
-            guard args.first == "exec" || args.first == "attach" else { return nil }
-            return .container(runtime: "Kubernetes", name: firstOperand(Array(args.dropFirst())))
+            guard let verb = args.first else { return nil }
+            let rest = Array(args.dropFirst())
+            if verb == "attach" {
+                return .container(runtime: "Kubernetes", name: firstOperand(rest))
+            }
+            guard verb == "exec", isInteractive(rest), executesShellOrDefault(rest) else { return nil }
+            return .container(runtime: "Kubernetes", name: firstOperand(rest))
         case "lxc", "lxd":
             guard let verb = args.first, ["exec", "shell", "attach"].contains(verb) else { return nil }
-            return .container(runtime: "LXC", name: firstOperand(Array(args.dropFirst())))
+            let rest = Array(args.dropFirst())
+            if verb == "exec", !executesShellOrDefault(rest) { return nil }
+            return .container(runtime: "LXC", name: firstOperand(rest))
         case "lxc-attach":
             return .container(runtime: "LXC", name: nil)
         case "nsenter":
@@ -108,7 +121,11 @@ public enum ContainerCommandDetector {
         let verb = first == "container" && args.count > 1 ? args[1] : first
         let rest = first == "container" ? Array(args.dropFirst(2)) : Array(args.dropFirst())
         switch verb {
-        case "exec", "attach":
+        case "attach":
+            return .docker(container: firstOperand(rest))
+        case "exec":
+            // `docker exec web ls` 或 `docker exec -it web ls` 都是跑完即退的单次命令，不能把跟随冻死。
+            guard isInteractive(rest), executesShellOrDefault(rest) else { return nil }
             return .docker(container: firstOperand(rest))
         case "run", "start":
             // 只有交互式启动才会留在一个可操作的容器 shell 里；
@@ -122,7 +139,10 @@ public enum ContainerCommandDetector {
     private static func composeMode(verb: String?, rest: [String]) -> TerminalMode? {
         guard let verb else { return nil }
         switch verb {
-        case "exec", "attach":
+        case "attach":
+            return .docker(container: firstOperand(rest))
+        case "exec":
+            guard !rest.contains("-T"), !rest.contains("--no-TTY"), executesShellOrDefault(rest) else { return nil }
             return .docker(container: firstOperand(rest))
         case "run":
             return isInteractive(rest) ? .docker(container: firstOperand(rest)) : nil
@@ -144,16 +164,44 @@ public enum ContainerCommandDetector {
     }
 
     private static func firstOperand(_ tokens: [String]) -> String? {
+        operands(tokens).first
+    }
+
+    /// 提取去掉选项后的位置参数：到了容器内命令（第二个位置参数）或 `--` 之后，后续的 `-c` 等参数原样保留。
+    private static func operands(_ tokens: [String]) -> [String] {
+        var result: [String] = []
         var index = 0
+        var literal = false
         while index < tokens.count {
             let token = tokens[index]
-            if token.hasPrefix("-") {
-                index += optionsWithValue.contains(token) ? 2 : 1
-                continue
+            if !literal {
+                if token == "--" {
+                    literal = true
+                    index += 1
+                    continue
+                }
+                if token.hasPrefix("-") {
+                    index += optionsWithValue.contains(token) ? 2 : 1
+                    continue
+                }
             }
-            return token
+            result.append(token)
+            if result.count >= 2 {
+                literal = true
+            }
+            index += 1
         }
-        return nil
+        return result
+    }
+
+    /// 位置参数里若显式给出了容器内要跑的程序，只有它是交互式 shell（且不带 `-c`）才算进入容器会话。
+    private static func executesShellOrDefault(_ tokens: [String]) -> Bool {
+        let positional = operands(tokens)
+        guard positional.count >= 2 else { return true }
+        let executable = (positional[1] as NSString).lastPathComponent
+        guard interactiveShells.contains(executable) else { return false }
+        let shellArgs = positional.dropFirst(2)
+        return !shellArgs.contains("-c")
     }
 
     private static func isInteractive(_ tokens: [String]) -> Bool {

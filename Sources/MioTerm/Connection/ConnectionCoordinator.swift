@@ -106,7 +106,7 @@ final class ConnectionCoordinator {
     /// 补的是日志——重连不成时要能从日志看出会话停在哪一步。
     private func observe(_ controller: TerminalController, host: HostProfile) {
         let logger = environment.logger
-        controller.addStateObserver { state in
+        _ = controller.addStateObserver { state in
             logger.info("会话 \(host.displayName) 状态：\(state.label)")
         }
     }

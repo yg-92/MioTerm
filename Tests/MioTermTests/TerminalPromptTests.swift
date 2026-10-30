@@ -52,6 +52,7 @@ struct TerminalPromptTests {
         #expect(TerminalPrompt.commandAfterPrompt(in: "[root@localhost ~]# cd /home/jenkins_home/")
                 == "cd /home/jenkins_home/")
         #expect(TerminalPrompt.commandAfterPrompt(in: "root@134:/var/log# ls -la") == "ls -la")
+        #expect(TerminalPrompt.commandAfterPrompt(in: "root@134:/var/log/build#1# cd /opt") == "cd /opt")
         #expect(TerminalPrompt.commandAfterPrompt(in: "(venv) yanggang@server:/app$ git status") == "git status")
     }
 

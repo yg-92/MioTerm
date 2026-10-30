@@ -163,7 +163,7 @@ public struct TerminalContextTracker {
                 leaveContainer()
             }
         }
-        if let machine = fact.host {
+        if containerMode == nil, let machine = fact.host {
             if promptHost == nil { promptHost = machine }
             nestedByPrompt = machine != promptHost
         }

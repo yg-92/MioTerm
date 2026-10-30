@@ -68,6 +68,30 @@ struct ShellCommandTrackerTests {
         #expect(submission?.isTextUnreliable == true)
     }
 
+    /// 连续两次 Tab（`cd /var/lo<Tab>ng<Tab>`）：第一次 Tab 之后敲的 `ng` 隔着补全结果，
+    /// 不能直接拼到 `cd /var/lo` 后面，否则会变成屏幕上根本不存在的 `cd /var/long`。
+    @Test func multiStageTabCompletionPreservesInitialPrefix() {
+        var tracker = ShellCommandTracker()
+        _ = tracker.consume(Array("cd /var/lo".utf8))
+        _ = tracker.consume([0x09])
+        _ = tracker.consume(Array("ng".utf8))
+        _ = tracker.consume([0x09])
+        let submission = tracker.consume([0x0D])
+        #expect(submission?.command == nil)
+        #expect(submission?.partialLine == "cd /var/lo")
+        #expect(submission?.isTextUnreliable == true)
+    }
+
+    @Test func markLineUnreliableClearsStalePrefix() {
+        var tracker = ShellCommandTracker()
+        _ = tracker.consume(Array("cd z".utf8))
+        tracker.markLineUnreliable()
+        let submission = tracker.consume([0x0D])
+        #expect(submission?.command == nil)
+        #expect(submission?.partialLine == nil)
+        #expect(submission?.isTextUnreliable == true)
+    }
+
     @Test("括号粘贴的标记不进命令，粘贴内容照常记账")
     func bracketedPasteKeepsOnlyThePastedText() {
         var tracker = ShellCommandTracker()
@@ -128,6 +152,9 @@ struct ShellCommandTrackerTests {
         #expect(ShellCommandClassifier.classify("cd /var/log", currentDirectory: "/home/user").predictedDirectory == "/var/log")
         #expect(ShellCommandClassifier.classify("cd ..", currentDirectory: "/var/log").predictedDirectory == "/var")
         #expect(ShellCommandClassifier.classify("cd projects", currentDirectory: "/home/user").predictedDirectory == "/home/user/projects")
+        #expect(ShellCommandClassifier.classify("cd \"/var/log/my app\"", currentDirectory: "/home/user").predictedDirectory == "/var/log/my app")
+        #expect(ShellCommandClassifier.classify("cd /var/log/my\\ app", currentDirectory: "/home/user").predictedDirectory == "/var/log/my app")
+        #expect(ShellCommandClassifier.classify("cd -- /var/log", currentDirectory: "/home/user").predictedDirectory == "/var/log")
         // 这些写法本地算不出来，只能等 OSC 7 报真实目录。
         #expect(ShellCommandClassifier.classify("cd", currentDirectory: "/home/user").predictedDirectory == nil)
         #expect(ShellCommandClassifier.classify("cd -", currentDirectory: "/home/user").predictedDirectory == nil)

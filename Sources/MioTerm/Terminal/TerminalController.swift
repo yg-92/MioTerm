@@ -130,9 +130,9 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         let font = TerminalController.font(for: settings)
         // SSH 和本地 shell 有子进程可托管，用 LocalProcessTerminalView；
         // Telnet/串口只有一头 socket，视图不需要进程生命周期，用基类即可。
-        let process: LocalProcessTerminalView?
+        let process: ProcessTerminalView?
         if host?.protocolKind.usesHostKey ?? true {
-            process = LocalProcessTerminalView(frame: frame, font: font, options: options)
+            process = ProcessTerminalView(frame: frame, font: font, options: options)
         } else {
             process = nil
         }
@@ -158,6 +158,13 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         follow.onChange = { [weak self] _ in self?.notifyContextChange() }
         if let process {
             process.processDelegate = self
+            process.onMarkedText = { [weak self] in
+                self?.follow.invalidateLine()
+            }
+            process.onPaste = { [weak self] text in
+                guard let self, self.state.isAlive else { return }
+                self.follow.userPaste(text, inAlternateScreen: self.isInAlternateScreen)
+            }
             // 键盘字节由 SwiftTerm 直接写进 pty，委托看不到；在窗口事件层旁听。
             keyboardMonitor = TerminalKeyboardMonitor(view: process) { [weak self] stroke in
                 self?.handleKeyStroke(stroke)
@@ -437,10 +444,15 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         onTitleChange?(title)
     }
 
-    /// 屏幕最下面一行非空文本：命令跑完、输出安静下来之后，它就是当前提示符。
+    /// 屏幕当前光标处（或向上最近）的一行非空文本：命令跑完、输出安静下来之后，它就是当前提示符。
+    /// 优先只看光标所在行及之上，避免 `Ctrl+L` 或全屏程序残留的底部旧文本挡住真正的提示符。
     private func lastScreenLine() -> String? {
         guard let snapshot = terminalView.terminalContentSnapshot(region: .history(maximumScrollbackRows: -1)) else {
             return nil
+        }
+        for row in snapshot.rows.reversed() where row.absoluteRow <= snapshot.cursorRow {
+            let text = row.text.trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { return text }
         }
         for row in snapshot.rows.reversed() {
             let text = row.text.trimmingCharacters(in: .whitespaces)
@@ -526,6 +538,29 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     func kittyClipboardRequestPermission(source: TerminalView, request: KittyClipboardPermissionRequest) -> KittyClipboardPermissionResult { .deny }
 
     func programStatusChanged(source: TerminalView, records: [TerminalProgramStatus]) {}
+}
+
+/// 补齐 `LocalProcessTerminalView` 不对外广播的两类输入事件：
+/// 1. 输入法开始预编辑（`setMarkedText`）：第一下按键就会进这里，立即把攒行器标为不可信；
+/// 2. 粘贴（`paste`）：菜单栏与右键粘贴不经过 `keyDown`，自带换行的粘贴也不会再按回车。
+@MainActor
+private final class ProcessTerminalView: LocalProcessTerminalView {
+    var onMarkedText: (() -> Void)?
+    var onPaste: ((String) -> Void)?
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        onMarkedText?()
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
+    override func paste(_ sender: Any) {
+        if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
+            onPaste?(text)
+        } else {
+            onMarkedText?()
+        }
+        super.paste(sender)
+    }
 }
 
 /// 一次性开关：解析线程与主线程共用，因此需要加锁。

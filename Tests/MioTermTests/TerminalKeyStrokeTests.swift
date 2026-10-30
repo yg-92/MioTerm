@@ -29,10 +29,25 @@ struct TerminalKeyStrokeTests {
 
     @Test func editingKeysKeepTheLineInSync() {
         #expect(key("\u{7F}", code: 51) == .bytes([0x7F]))
+        #expect(key("\u{08}", code: 51, modifiers: [.control]) == .bytes([0x08]))
         #expect(key("\u{09}", code: 48) == .bytes([0x09]))
         #expect(key("\u{03}", code: 8, modifiers: [.control]) == .bytes([0x03]))
         #expect(key("\u{0C}", code: 37, modifiers: [.control]) == .bytes([0x0C]))
         #expect(key("\u{15}", code: 32, modifiers: [.control]) == .bytes([0x15]))
+    }
+
+    @Test func markedTextDuringIMECompositionInvalidatesAndNeverSubmits() {
+        #expect(
+            TerminalKeyTranslator.translate(
+                TerminalKeyStroke(characters: "z", keyCode: 6, hasMarkedText: true)
+            ) == .invalidatesLine
+        )
+        // 输入法预编辑状态下按回车只是把英文串上屏，不能当成 shell 回车提交。
+        #expect(
+            TerminalKeyTranslator.translate(
+                TerminalKeyStroke(characters: "\r", keyCode: 36, hasMarkedText: true)
+            ) == .invalidatesLine
+        )
     }
 
     @Test func lineRewritingActionsInvalidateTheLine() {
