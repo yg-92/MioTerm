@@ -36,7 +36,7 @@ final class SFTPBrowserViewController: NSViewController {
     private var currentDirectory: String?
 
     /// 当前目录的位置导航：操作按钮下面一条可点的面包屑。
-    private let pathScroll = NSScrollView()
+    private let pathScroll = PathBarScrollView()
     private let pathBar = NSStackView()
     /// 面包屑每段代表的路径，按钮用 tag 索引它（NSButton 没有 representedObject）。
     private var breadcrumbPaths: [String] = []
@@ -154,7 +154,7 @@ final class SFTPBrowserViewController: NSViewController {
             // 竖排栈按 leading 对齐时行宽只由内容决定，需要撑满的行要显式钉住。
             actions.widthAnchor.constraint(equalTo: body.widthAnchor),
             pathScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
-            pathScroll.heightAnchor.constraint(equalToConstant: 22),
+            pathScroll.heightAnchor.constraint(equalToConstant: 30),
             statusRow.widthAnchor.constraint(equalTo: body.widthAnchor),
             treeScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
             transferScroll.widthAnchor.constraint(equalTo: body.widthAnchor),
@@ -266,30 +266,31 @@ final class SFTPBrowserViewController: NSViewController {
         noticeStack.isHidden = !visible
     }
 
-    /// 面包屑横放在侧栏里必然超宽，交给横向滚动，重建后滚到最右端露出当前目录。
+    /// 面包屑横放在侧栏里可能超宽，允许无滚动条横向滚动，重建后自动对齐到最右端露出当前目录。
     private func configurePathBar() {
         pathBar.orientation = .horizontal
         pathBar.alignment = .centerY
         pathBar.distribution = .fill
-        pathBar.spacing = 1
-        pathBar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        pathBar.spacing = 2
+        pathBar.edgeInsets = NSEdgeInsets(top: 2, left: 8, bottom: 2, right: 8)
         pathBar.translatesAutoresizingMaskIntoConstraints = false
 
         pathScroll.documentView = pathBar
-        pathScroll.hasHorizontalScroller = true
+        pathScroll.hasHorizontalScroller = false
         pathScroll.hasVerticalScroller = false
-        pathScroll.autohidesScrollers = true
+        pathScroll.horizontalScrollElasticity = .allowed
+        pathScroll.verticalScrollElasticity = .none
         pathScroll.borderType = .noBorder
         pathScroll.drawsBackground = false
-        pathScroll.scrollerStyle = .overlay
         pathScroll.isHidden = true
 
         NSLayoutConstraint.activate([
-            // 文档视图钉在可视区的左、上、下，宽度由栈的固有尺寸决定并钉死：
+            // 文档视图钉在可视区的左、上、下，高度与可视区一致，宽度由栈的固有尺寸决定并钉死：
             // 路径再长也只是滚出去，不会把每段按钮压成省略号。
             pathBar.leadingAnchor.constraint(equalTo: pathScroll.contentView.leadingAnchor),
             pathBar.topAnchor.constraint(equalTo: pathScroll.contentView.topAnchor),
             pathBar.bottomAnchor.constraint(equalTo: pathScroll.contentView.bottomAnchor),
+            pathBar.heightAnchor.constraint(equalTo: pathScroll.contentView.heightAnchor),
         ])
         pathBar.setContentHuggingPriority(.required, for: .horizontal)
     }
@@ -313,18 +314,19 @@ final class SFTPBrowserViewController: NSViewController {
             }
             let button = NSButton(title: SFTPPath.lastComponent(path), target: self, action: #selector(selectBreadcrumb(_:)))
             button.bezelStyle = .recessed
-            button.controlSize = .mini
-            button.font = .systemFont(ofSize: 11, weight: .medium)
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 12, weight: .medium)
             // 能点的层级用强调色，当前目录用次要色：一眼看出导航条不是静态文字。
             button.attributedTitle = NSAttributedString(
                 string: SFTPPath.lastComponent(path),
                 attributes: [
-                    .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                    .font: NSFont.systemFont(ofSize: 12, weight: .medium),
                     .foregroundColor: path == directory ? Theme.textSecondary : Theme.accent,
                 ]
             )
             button.lineBreakMode = .byTruncatingMiddle
             button.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            button.heightAnchor.constraint(equalToConstant: 24).isActive = true
             button.toolTip = path
             // 每一级都能点，包括正在看的这一级：读取失败后点它就是一个就地重试。
             button.tag = index
@@ -341,7 +343,7 @@ final class SFTPBrowserViewController: NSViewController {
     private func separator() -> NSTextField {
         // 分隔符不用 “/”：根目录那一段本身就叫 “/”，两种斜杠混在一排读不出层次。
         let mark = NSTextField(labelWithString: "›")
-        mark.font = .systemFont(ofSize: 11)
+        mark.font = .systemFont(ofSize: 12)
         mark.textColor = .tertiaryLabelColor
         return mark
     }
@@ -1557,5 +1559,22 @@ private final class TransferDismissButton: NSButton {
 
     override func mouseExited(with event: NSEvent) {
         contentTintColor = Theme.textTertiary
+    }
+}
+
+/// 面包屑不展示横向滚动条，但路径超宽时仍允许用触控板横滑或鼠标滚轮左右翻看。
+@MainActor
+private final class PathBarScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        let clip = contentView
+        let maxX = max(0, (documentView?.frame.width ?? 0) - clip.bounds.width)
+        guard maxX > 0 else { return super.scrollWheel(with: event) }
+        let delta = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY)
+            ? event.scrollingDeltaX
+            : event.scrollingDeltaY
+        guard delta != 0 else { return super.scrollWheel(with: event) }
+        let x = min(max(clip.bounds.origin.x - delta, 0), maxX)
+        clip.scroll(to: NSPoint(x: x, y: 0))
+        reflectScrolledClipView(clip)
     }
 }
