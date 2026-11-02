@@ -2,16 +2,19 @@ import Testing
 import Foundation
 @testable import MioTermCore
 
-private func makeContext(knownHosts: URL = URL(fileURLWithPath: "/tmp/mio test/known_hosts")) -> SSHLaunchPlanner.Context {
-    SSHLaunchPlanner.Context(
+private func makeContext(knownHosts: URL = URL(fileURLWithPath: "/tmp/mio test/known_hosts"),
+                         display: String? = nil) -> SSHLaunchPlanner.Context {
+    var inherited = [
+        "HOME": "/Users/yanggang",
+        "USER": "yanggang",
+        "PATH": "/usr/bin:/bin",
+        "SSH_AUTH_SOCK": "/tmp/ssh-agent/sock",
+    ]
+    if let display { inherited["DISPLAY"] = display }
+    return SSHLaunchPlanner.Context(
         knownHostsURL: knownHosts,
         askpassLauncherURL: URL(fileURLWithPath: "/tmp/mio test/askpass.sh"),
-        inheritedEnvironment: [
-            "HOME": "/Users/yanggang",
-            "USER": "yanggang",
-            "PATH": "/usr/bin:/bin",
-            "SSH_AUTH_SOCK": "/tmp/ssh-agent/sock",
-        ]
+        inheritedEnvironment: inherited
     )
 }
 
@@ -145,5 +148,109 @@ struct SSHLaunchPlannerTests {
         #expect(dictionary["TERM"] == "xterm-256color")
         // 值里含等号时只能按第一个等号切分，否则 agent 路径会被截断。
         #expect(dictionary["WEIRD"] == "a=b")
+    }
+
+    // MARK: - X11 转发
+
+    /// 受限档就是 `ssh -X`：只要求 ForwardX11，不带 Trusted。
+    @Test func restrictedX11RequestsUntrustedForwarding() throws {
+        var host = HostProfile(name: "x", address: "h", username: "u")
+        host.x11Forwarding = .restricted
+        let launch = try SSHLaunchPlanner.terminalLaunch(host: host, secrets: nil, context: makeContext())
+        #expect(launch.arguments.contains("ForwardX11=yes"))
+        #expect(!launch.arguments.contains("ForwardX11Trusted=yes"))
+    }
+
+    @Test func trustedX11AddsTheTrustedOption() throws {
+        var host = HostProfile(name: "x", address: "h", username: "u")
+        host.x11Forwarding = .trusted
+        let launch = try SSHLaunchPlanner.terminalLaunch(host: host, secrets: nil, context: makeContext())
+        #expect(launch.arguments.contains("ForwardX11=yes"))
+        #expect(launch.arguments.contains("ForwardX11Trusted=yes"))
+    }
+
+    @Test func x11IsOffByDefaultAndLeavesNoTrace() throws {
+        let host = HostProfile(name: "x", address: "h", username: "u")
+        let launch = try SSHLaunchPlanner.terminalLaunch(host: host, secrets: nil, context: makeContext())
+        #expect(!launch.arguments.contains { $0.hasPrefix("ForwardX11") })
+    }
+
+    /// 文件面板那条 `ssh -T -s` 不转 X11：否则每次开面板都会在远端 ~/.Xauthority
+    /// 里多塞一枚没人用的 cookie；连通性测试同理。
+    @Test func otherChannelsNeverForwardX11() throws {
+        var host = HostProfile(name: "x", address: "h", username: "u")
+        host.x11Forwarding = .trusted
+        let sftp = try SSHLaunchPlanner.sftpLaunch(host: host, secrets: nil, context: makeContext())
+        let probe = try SSHLaunchPlanner.probeLaunch(host: host, secrets: nil, context: makeContext())
+        #expect(!sftp.arguments.contains { $0.hasPrefix("ForwardX11") })
+        #expect(!probe.arguments.contains { $0.hasPrefix("ForwardX11") })
+        #expect(!sftp.environment.contains { $0.hasPrefix("DISPLAY=") })
+    }
+
+    /// 环境是按白名单重建的，转发时 DISPLAY 必须一起给，否则 ssh 只能造假 cookie。
+    @Test func displayIsPassedThroughOnlyWhenForwarding() throws {
+        var host = HostProfile(name: "x", address: "h", username: "u")
+        host.x11Forwarding = .restricted
+        let context = makeContext(display: "/tmp/.X11-unix/X0")
+        let launch = try SSHLaunchPlanner.terminalLaunch(host: host, secrets: nil, context: context)
+        #expect(launch.environment.contains("DISPLAY=/tmp/.X11-unix/X0"))
+
+        host.x11Forwarding = .off
+        let plain = try SSHLaunchPlanner.terminalLaunch(host: host, secrets: nil, context: context)
+        #expect(!plain.environment.contains { $0.hasPrefix("DISPLAY=") })
+    }
+
+    /// 本机没有 X 服务时 ssh 不报错，只是窗口永远连不上，所以要在连接前说明白。
+    @Test func preflightNamesTheMissingLocalPiece() {
+        var host = HostProfile(name: "x", address: "h", username: "u")
+        host.x11Forwarding = .restricted
+        let noDisplay = makeContext()
+        let missingDisplay = SSHLaunchPlanner.x11PreflightWarning(host: host, context: noDisplay,
+                                                                  xauthExists: { _ in true })
+        #expect(missingDisplay?.contains("DISPLAY") ?? false)
+        let missingXauth = SSHLaunchPlanner.x11PreflightWarning(host: host, context: makeContext(display: ":0"),
+                                                                xauthExists: { _ in false })
+        #expect(missingXauth?.contains("XQuartz") ?? false)
+        // 条件齐了就不该再唠叨；没开转发的会话更与此无关。
+        #expect(SSHLaunchPlanner.x11PreflightWarning(host: host, context: makeContext(display: ":0"),
+                                                     xauthExists: { _ in true }) == nil)
+        host.x11Forwarding = .off
+        #expect(SSHLaunchPlanner.x11PreflightWarning(host: host, context: noDisplay,
+                                                     xauthExists: { _ in false }) == nil)
+    }
+
+    /// 老 hosts.json 里没有 x11Forwarding 这一键：整份列表不能因此被判废。
+    @Test func legacyHostFileWithoutX11KeyStillLoads() throws {
+        let legacy = """
+        {"id":"h1","name":"老机器","group":"","tags":[],"protocolKind":"ssh","address":"10.0.0.9",\
+        "port":22,"username":"root","authMethod":"password","identityFile":"","connectTimeout":10,\
+        "keepaliveInterval":30,"startupDirectory":"","terminalType":"xterm-256color","favorite":false,\
+        "notes":"","hostKeyAlgorithm":"ssh-ed25519","hostKeyFingerprint":"AAAA",\
+        "serial":{"device":"","baudRate":115200},"createdAt":"2026-01-01T00:00:00Z",\
+        "updatedAt":"2026-01-01T00:00:00Z"}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let host = try decoder.decode(HostProfile.self, from: Data(legacy.utf8))
+        #expect(host.name == "老机器")
+        #expect(host.x11Forwarding == .off)
+
+        var modern = host
+        modern.x11Forwarding = .trusted
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let roundTrip = try decoder.decode(HostProfile.self, from: encoder.encode(modern))
+        #expect(roundTrip == modern)
+    }
+
+    /// Telnet/串口没有 ssh 可以转发，档位规范化时必须归零。
+    @Test func nonSSHProtocolsDropTheForwardingSetting() {
+        var telnet = HostProfile(name: "t", protocolKind: .telnet, address: "h", username: "u")
+        telnet.x11Forwarding = .trusted
+        #expect(telnet.normalized().x11Forwarding == .off)
+
+        var ssh = HostProfile(name: "s", address: "h", username: "u")
+        ssh.x11Forwarding = .trusted
+        #expect(ssh.normalized().x11Forwarding == .trusted)
     }
 }

@@ -44,6 +44,30 @@ public enum AuthMethod: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// 远端跑 X11 程序、窗口显示在本机。转发由系统 ssh 完成，窗口归 XQuartz 管，
+/// 本端不解析 X 协议，所以这里只决定 ssh 的命令行参数。
+public enum X11Forwarding: String, Codable, CaseIterable, Sendable {
+    /// 不转发。SFTP 通道永远走这一档，否则每次开文件面板都会在远端
+    /// `~/.Xauthority` 里多塞一枚没人用的 cookie。
+    case off
+    /// `ssh -X`：非可信转发。cookie 20 分钟过期，且远端拿不到本机剪贴板、
+    /// 截不了别的窗口 —— 日常首选。
+    case restricted
+    /// `ssh -Y`：可信转发。Java/AWT 与老 Motif 程序只认这一档，
+    /// 代价是远端那个用户对本机 X 服务有完整权限（能截屏、能注入按键）。
+    case trusted
+
+    public var displayName: String {
+        switch self {
+        case .off: return "关闭"
+        case .restricted: return "受限（-X，推荐）"
+        case .trusted: return "可信（-Y，远端可访问本机 X）"
+        }
+    }
+
+    public var isEnabled: Bool { self != .off }
+}
+
 public enum LineEnding: String, Codable, CaseIterable, Sendable {
     case cr = "CR"
     case lf = "LF"
@@ -157,6 +181,8 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     public var startupDirectory: String
     /// 空串表示“跟随设置里的默认终端类型”，连接前由 TerminalTypes.resolved 补上。
     public var terminalType: String
+    /// X11 转发档位；非 SSH 协议没有 X11 概念，规范化时一律回到 off。
+    public var x11Forwarding: X11Forwarding
     public var favorite: Bool
     public var notes: String
     public var hostKeyAlgorithm: String
@@ -180,6 +206,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         keepaliveInterval: Int = 30,
         startupDirectory: String = "",
         terminalType: String = "",
+        x11Forwarding: X11Forwarding = .off,
         favorite: Bool = false,
         notes: String = "",
         hostKeyAlgorithm: String = "",
@@ -202,6 +229,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         self.keepaliveInterval = keepaliveInterval
         self.startupDirectory = startupDirectory
         self.terminalType = terminalType
+        self.x11Forwarding = x11Forwarding
         self.favorite = favorite
         self.notes = notes
         self.hostKeyAlgorithm = hostKeyAlgorithm
@@ -209,6 +237,37 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         self.serial = serial
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    /// 逐字段解码，只为给新增的 `x11Forwarding` 留一条退路。
+    ///
+    /// 合成的解码器把缺键当成整条记录损坏，而整份 hosts.json 是一起判废的：
+    /// 老文件里没有这一键，用合成解码就等于升级一次、主机列表清零一次。
+    /// 其余字段的严格程度和合成解码器保持一致，不放宽。
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        group = try container.decode(String.self, forKey: .group)
+        tags = try container.decode([String].self, forKey: .tags)
+        protocolKind = try container.decode(ConnectionProtocol.self, forKey: .protocolKind)
+        address = try container.decode(String.self, forKey: .address)
+        port = try container.decode(Int.self, forKey: .port)
+        username = try container.decode(String.self, forKey: .username)
+        authMethod = try container.decode(AuthMethod.self, forKey: .authMethod)
+        identityFile = try container.decode(String.self, forKey: .identityFile)
+        connectTimeout = try container.decode(Int.self, forKey: .connectTimeout)
+        keepaliveInterval = try container.decode(Int.self, forKey: .keepaliveInterval)
+        startupDirectory = try container.decode(String.self, forKey: .startupDirectory)
+        terminalType = try container.decode(String.self, forKey: .terminalType)
+        x11Forwarding = try container.decodeIfPresent(X11Forwarding.self, forKey: .x11Forwarding) ?? .off
+        favorite = try container.decode(Bool.self, forKey: .favorite)
+        notes = try container.decode(String.self, forKey: .notes)
+        hostKeyAlgorithm = try container.decode(String.self, forKey: .hostKeyAlgorithm)
+        hostKeyFingerprint = try container.decode(String.self, forKey: .hostKeyFingerprint)
+        serial = try container.decode(SerialConfig.self, forKey: .serial)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 
     public static func newSSH(name: String, address: String, username: String) -> HostProfile {
@@ -245,6 +304,8 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         copy.tags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         copy.serial.device = serial.device.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.terminalType = TerminalTypes.sanitized(terminalType)
+        // Telnet/串口没有 ssh 可以转发，档位留着只会让人以为窗口会出来。
+        if copy.protocolKind != .ssh { copy.x11Forwarding = .off }
         if copy.port == 22, copy.protocolKind == .telnet { copy.port = 23 }
         if copy.port <= 0 || copy.port > 65535 { copy.port = copy.protocolKind.defaultPort ?? 22 }
         copy.connectTimeout = max(1, min(300, copy.connectTimeout))

@@ -20,11 +20,13 @@ final class ConnectionCoordinator {
         guard host.protocolKind.usesHostKey else { return openByteStream(for: host, in: window) }
         do {
             guard try await ensureHostKeyTrusted(host: host, in: window) else { return nil }
+            let context = SSHLaunchPlanner.Context.live()
             let launch = try SSHLaunchPlanner.terminalLaunch(
                 host: host,
                 secrets: environment.secrets(for: host),
-                context: .live()
+                context: context
             )
+            logX11Preflight(host, context: context)
             let controller = TerminalController(host: host, settings: environment.settings.settings)
             observe(controller, host: host)
             environment.register(controller)
@@ -61,6 +63,13 @@ final class ConnectionCoordinator {
         return copy
     }
 
+    /// 本机没有 X 服务时，ssh 不会失败也不报错，只是远端窗口永远连不上——
+    /// 这种“参数全对但没效果”事后翻日志也看不出来，所以在连接这一刻说明白。
+    private func logX11Preflight(_ host: HostProfile, context: SSHLaunchPlanner.Context) {
+        guard let warning = SSHLaunchPlanner.x11PreflightWarning(host: host, context: context) else { return }
+        environment.logger.warning("X11 转发：\(warning)")
+    }
+
     private func makeStream(for host: HostProfile) -> (any TerminalStream)? {
         switch host.protocolKind {
         case .telnet:
@@ -84,11 +93,13 @@ final class ConnectionCoordinator {
             if host.protocolKind.usesHostKey {
                 // 重连同样走一遍指纹确认：服务器换过密钥时要在这里拦住。
                 guard try await ensureHostKeyTrusted(host: host, in: window) else { return }
+                let context = SSHLaunchPlanner.Context.live()
                 let launch = try SSHLaunchPlanner.terminalLaunch(
                     host: host,
                     secrets: environment.secrets(for: host),
-                    context: .live()
+                    context: context
                 )
+                logX11Preflight(host, context: context)
                 controller.start(launch)
             } else if let stream = makeStream(for: host) {
                 controller.start(stream)

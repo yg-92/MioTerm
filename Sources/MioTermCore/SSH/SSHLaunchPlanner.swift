@@ -88,7 +88,7 @@ public enum SSHLaunchPlanner {
 
     /// 交互式终端：强制分配远端 PTY。
     public static func terminalLaunch(host: HostProfile, secrets: TerminalSecrets?, context: Context) throws -> ProcessLaunch {
-        var arguments = commonOptions(for: host, context: context)
+        var arguments = commonOptions(for: host, context: context, x11Forwarding: host.x11Forwarding)
         arguments.append("-tt")
         arguments.append(contentsOf: destinationArguments(for: host))
         // 指定启动目录时改用 “带命令的登录”：先 cd 再执行登录 shell，
@@ -96,7 +96,8 @@ public enum SSHLaunchPlanner {
         if !host.startupDirectory.isEmpty {
             arguments.append(startupCommand(directory: host.startupDirectory))
         }
-        return try make(arguments: arguments, host: host, secrets: secrets, context: context)
+        return try make(arguments: arguments, host: host, secrets: secrets, context: context,
+                        x11Forwarding: host.x11Forwarding)
     }
 
     /// SFTP 子系统通道：`ssh -T -s host sftp`，无 PTY、纯二进制管道，
@@ -122,7 +123,8 @@ public enum SSHLaunchPlanner {
         return try make(arguments: arguments, host: host, secrets: secrets, context: context)
     }
 
-    private static func make(arguments: [String], host: HostProfile, secrets: TerminalSecrets?, context: Context) throws -> ProcessLaunch {
+    private static func make(arguments: [String], host: HostProfile, secrets: TerminalSecrets?,
+                             context: Context, x11Forwarding: X11Forwarding = .off) throws -> ProcessLaunch {
         var askpassFile: URL?
         if let secrets, secrets.hasContent {
             try validateIdentity(host: host)
@@ -131,12 +133,13 @@ public enum SSHLaunchPlanner {
         return ProcessLaunch(
             executable: sshPath,
             arguments: arguments,
-            environment: environment(for: host, context: context, askpassFile: askpassFile),
+            environment: environment(for: host, context: context, askpassFile: askpassFile, x11Forwarding: x11Forwarding),
             askpassFile: askpassFile
         )
     }
 
-    static func commonOptions(for host: HostProfile, context: Context) -> [String] {
+    static func commonOptions(for host: HostProfile, context: Context,
+                              x11Forwarding: X11Forwarding = .off) -> [String] {
         var options: [String] = [
             "-o", "LogLevel=ERROR",
             // ~/.ssh/config 里的 EscapeChar 会截获 “~”，会话里输入波浪号时
@@ -154,6 +157,15 @@ public enum SSHLaunchPlanner {
         ]
         if host.keepaliveInterval > 0 {
             options.append(contentsOf: ["-o", "ServerAliveInterval=\(host.keepaliveInterval)", "-o", "ServerAliveCountMax=3"])
+        }
+        // X11 转发只在终端通道开：SFTP 那条 `ssh -T -s` 不需要窗口，跟着转每次都会
+        // 在远端 ~/.Xauthority 里多塞一枚没人用的 cookie。
+        // 顺带确认过（OpenSSH 10.5 实测）上面那句 ClearAllForwardings 只管端口转发，
+        // 不会把这里的 ForwardX11 或 ~/.ssh/config 里的转发一起清掉。
+        switch x11Forwarding {
+        case .off: break
+        case .restricted: options.append(contentsOf: ["-o", "ForwardX11=yes"])
+        case .trusted: options.append(contentsOf: ["-o", "ForwardX11=yes", "-o", "ForwardX11Trusted=yes"])
         }
         options.append(contentsOf: authOptions(for: host))
         if host.port != 22 {
@@ -196,13 +208,20 @@ public enum SSHLaunchPlanner {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    static func environment(for host: HostProfile, context: Context, askpassFile: URL?) -> [String] {
+    static func environment(for host: HostProfile, context: Context, askpassFile: URL?,
+                           x11Forwarding: X11Forwarding = .off) -> [String] {
         let inherited = context.inheritedEnvironment
         var entries: [String] = []
         // SSH_AUTH_SOCK 决定 agent 认证能否复用，HOME 决定 ssh_config 与
         // ~/.ssh 里的默认密钥能否读到，必须透传。
         for key in ["HOME", "USER", "LOGNAME", "LANG", "LC_CTYPE", "SSH_AUTH_SOCK"] {
             if let value = inherited[key], !value.isEmpty { entries.append("\(key)=\(value)") }
+        }
+        // 转发 X11 时 DISPLAY 也必须带上：ssh 要靠它找本机 X 服务取真 cookie。
+        // 环境是按白名单重建的，少了这一项 ssh 只会生成一份假 cookie，
+        // 远端 `echo $DISPLAY` 有值但程序一律 “Cannot open display”。
+        if x11Forwarding.isEnabled, let display = inherited["DISPLAY"], !display.isEmpty {
+            entries.append("DISPLAY=\(display)")
         }
         entries.append("PATH=\(inherited["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")")
         if inherited["LANG"] == nil { entries.append("LANG=en_US.UTF-8") }
@@ -214,6 +233,26 @@ public enum SSHLaunchPlanner {
             entries.append("\(AskpassHelper.fileEnvironmentKey)=\(askpassFile.path)")
         }
         return entries
+    }
+
+    /// 本机 X11 服务用的 xauth。系统 ssh 的 XAuthLocation 也指向这里
+    /// （`ssh -G` 实测），XQuartz 没装时这个文件就不存在。
+    public static let xauthPath = "/opt/X11/bin/xauth"
+
+    /// 开了转发但本机条件不齐时，ssh 只会拿一份假 cookie：参数看着全对，
+    /// 远端窗口却必然连不上。这种“全都按你说的做了但没生效”最难查，
+    /// 所以在连接前把缺的那一环说出来。
+    public static func x11PreflightWarning(host: HostProfile, context: Context,
+                                           xauthExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) -> String? {
+        guard host.protocolKind == .ssh, host.x11Forwarding.isEnabled else { return nil }
+        if !xauthExists(xauthPath) {
+            return "已开 X11 转发，但本机没有 \(xauthPath)（XQuartz 未安装？）：远端窗口连不上本机 X 服务"
+        }
+        let display = context.inheritedEnvironment["DISPLAY"] ?? ""
+        guard !display.isEmpty else {
+            return "已开 X11 转发，但本机没有 DISPLAY（XQuartz 大概还没运行）：先打开一次 XQuartz 再重连"
+        }
+        return nil
     }
 
     private static func validateIdentity(host: HostProfile) throws {

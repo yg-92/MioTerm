@@ -25,6 +25,8 @@ final class HostFormWindowController: NSWindowController {
     private let startupDirectoryField = NSTextField()
     /// 终端类型可从常用 TERM 里挑，也能直接输入；留空表示跟随设置里的默认值。
     private let terminalTypeField = NSComboBox()
+    /// X11 转发：远端跑图形程序，窗口由本机 XQuartz 显示。
+    private let x11Popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let favoriteCheckbox = NSButton(checkboxWithTitle: "收藏", target: nil, action: nil)
     private let notesView = NSTextView()
     private let fingerprintLabel = NSTextField(labelWithString: "")
@@ -69,12 +71,13 @@ final class HostFormWindowController: NSWindowController {
     private var selectedStopBits: String { selected(stopBitsPopup, Self.formStopBits) }
     private var selectedParity: Parity { selected(parityPopup, Parity.allCases) }
     private var selectedLineEnding: LineEnding { selected(lineEndingPopup, LineEnding.allCases) }
+    private var selectedX11Forwarding: X11Forwarding { selected(x11Popup, X11Forwarding.allCases) }
 
     init(host: HostProfile, environment: AppEnvironment) {
         self.original = host
         self.environment = environment
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 650),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
@@ -101,6 +104,12 @@ final class HostFormWindowController: NSWindowController {
 
         clearSecretCheckbox.target = self
         clearSecretCheckbox.action = #selector(clearSecretChanged(_:))
+
+        x11Popup.addItems(withTitles: X11Forwarding.allCases.map { $0.displayName })
+        x11Popup.toolTip = """
+        远端运行图形程序、窗口显示在本机。需要本机装有 XQuartz 并在运行，\
+        且远端 sshd 开了 X11Forwarding、装了 xauth。文件面板的 SFTP 通道不受这一档影响。
+        """
 
         portField.placeholderString = "22"
         timeoutField.placeholderString = "10"
@@ -164,6 +173,7 @@ final class HostFormWindowController: NSWindowController {
             [label("保活 (秒)"), keepaliveField],
             [label("启动目录"), startupDirectoryField],
             [label("终端类型"), terminalTypeField],
+            [label("X11 转发"), x11Popup],
             [NSView(), favoriteCheckbox],
             [label("备注"), notesScroll],
             [label("已记录指纹"), fingerprintLabel],
@@ -279,6 +289,7 @@ final class HostFormWindowController: NSWindowController {
         identityField.stringValue = host.identityFile
         startupDirectoryField.stringValue = host.startupDirectory
         terminalTypeField.stringValue = host.terminalType
+        x11Popup.selectItem(at: X11Forwarding.allCases.firstIndex(of: host.x11Forwarding) ?? 0)
         timeoutField.stringValue = "\(host.connectTimeout)"
         keepaliveField.stringValue = "\(host.keepaliveInterval)"
         notesView.string = host.notes
@@ -345,6 +356,7 @@ final class HostFormWindowController: NSWindowController {
         setRowHidden(authPopup, hidden: !isSSH)
         setRowHidden(keepaliveField, hidden: !isSSH)
         setRowHidden(startupDirectoryField, hidden: !isSSH)
+        setRowHidden(x11Popup, hidden: !isSSH)
         setRowHidden(fingerprintLabel, hidden: !isSSH)
 
         let method = selectedMethod
@@ -393,6 +405,7 @@ final class HostFormWindowController: NSWindowController {
         host.startupDirectory = startupDirectoryField.stringValue
         // 存空串而不是当场填上默认值：这样以后改设置里的默认，未指定的主机会跟着变。
         host.terminalType = TerminalTypes.sanitized(terminalTypeField.stringValue)
+        host.x11Forwarding = selectedX11Forwarding
         host.favorite = favoriteCheckbox.state == .on
         host.notes = notesView.string
         if selectedProtocol == .serial {
