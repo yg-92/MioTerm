@@ -27,4 +27,10 @@ final class ContainerViewController: NSViewController {
         ])
         current = viewController
     }
+
+    func clear() {
+        current?.view.removeFromSuperview()
+        current?.removeFromParent()
+        current = nil
+    }
 }

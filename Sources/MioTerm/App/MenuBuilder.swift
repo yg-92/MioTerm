@@ -124,6 +124,9 @@ enum MenuBuilder {
     private static func viewMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "显示")
+        menu.addItem(withTitle: "左右分屏…", action: Selector(("configureTerminalSplit:")), keyEquivalent: "d")
+            .keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
         let bigger = menu.addItem(withTitle: "放大字号", action: Selector(("adjustTerminalFontSize:")), keyEquivalent: "+")
         bigger.tag = 1
         let smaller = menu.addItem(withTitle: "缩小字号", action: Selector(("adjustTerminalFontSize:")), keyEquivalent: "-")

@@ -14,15 +14,23 @@ final class SessionTabViewController: NSViewController {
     var onSessionsChange: ((TerminalController?) -> Void)?
     /// 断线后的“重新连接”：工作区负责重建传输，标签这边只负责把入口露出来。
     var onReconnect: ((TerminalController) -> Void)?
+    /// 新建远端连接仍由工作区处理认证；保留用户发起分屏时的基准会话。
+    var onSplitHost: ((HostProfile, UUID) -> Void)?
     private let tabBar = SessionTabBarView()
     private let content = ContainerViewController()
     private let statusBar = TerminalStatusBarView()
+    private let terminalSplit = TerminalSplitViewController()
+    private var paneLayout = TerminalPaneLayout()
     private let welcome = WelcomeViewController()
     private var order: [TerminalController] = []
     private var tabControllers: [UUID: TerminalTabViewController] = [:]
     private var modeTokens: [UUID: UUID] = [:]
     private var stateTokens: [UUID: UUID] = [:]
-    private var selectedIndex: Int?
+    private var selectedIndex: Int? {
+        order.firstIndex { $0.sessionID == paneLayout.selected }
+    }
+
+    var isSplit: Bool { paneLayout.isSplit }
 
     private var contentTopToBar: NSLayoutConstraint!
     private var contentTopToRoot: NSLayoutConstraint!
@@ -73,12 +81,25 @@ final class SessionTabViewController: NSViewController {
         tabBar.onSelect = { [weak self] index in self?.select(index) }
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
         tabBar.onNew = { [weak self] in self?.newLocalTerminal() }
+        tabBar.onSplit = { [weak self] in self?.showSplitChooser() }
+        tabBar.onTabContextMenu = { [weak self] index, event, anchor in
+            self?.showTabContextMenu(at: index, event: event, anchor: anchor)
+        }
         content.show(welcome)
         updateChrome()
     }
 
-    func append(_ controller: TerminalController) {
+    func append(_ controller: TerminalController, beside baseID: UUID? = nil) {
         order.append(controller)
+        controller.onFocus = { [weak self, weak controller] in
+            guard let self, let controller, !self.isShowingHome,
+                  self.paneLayout.selected != controller.sessionID,
+                  self.paneLayout.primary == controller.sessionID || self.paneLayout.secondary == controller.sessionID
+            else { return }
+            self.paneLayout.select(controller.sessionID)
+            self.updateChrome()
+            self.onSessionsChange?(controller)
+        }
         let tab = TerminalTabViewController(controller: controller)
         tab.onReconnect = { [weak self] controller in self?.onReconnect?(controller) }
         tabControllers[controller.sessionID] = tab
@@ -93,11 +114,18 @@ final class SessionTabViewController: NSViewController {
         }
         // 顶部模式徽标跟着“当前选中标签”走：别的标签在后台进出容器不该改这里的显示。
         modeTokens[controller.sessionID] = controller.addContextObserver { [weak self, weak controller] context in
-            guard let self, let controller, self.selectedController === controller else { return }
+            guard let self, let controller else { return }
+            self.tabControllers[controller.sessionID]?.updatePaneHeader()
+            guard self.selectedController === controller else { return }
             self.tabBar.update(mode: context.mode)
             self.updateStatusBar()
         }
-        select(order.count - 1)
+        if let baseID, order.contains(where: { $0.sessionID == baseID && $0 !== controller }) {
+            paneLayout.pair(baseID, with: controller.sessionID)
+            presentSelection()
+        } else {
+            select(order.count - 1)
+        }
     }
 
     /// 重连进行中要在提示条上给出反馈：这条路上要重新确认指纹、读凭据，慢的时候好几秒。
@@ -114,39 +142,37 @@ final class SessionTabViewController: NSViewController {
 
     func closeTab(at index: Int) -> Bool {
         guard order.indices.contains(index) else { return false }
+        let wasShowingHome = isShowingHome
         let controller = order[index]
         controller.stop()
         controller.removeContextObserver(modeTokens.removeValue(forKey: controller.sessionID))
         controller.removeStateObserver(stateTokens.removeValue(forKey: controller.sessionID))
         environment.unregister(controller)
+        controller.onFocus = nil
+        paneLayout.remove(controller.sessionID)
         order.remove(at: index)
-        tabControllers[controller.sessionID] = nil
-
+        // 从父容器摘下之后才释放标签。
         if order.isEmpty {
-            select(nil)
-            return true
+            paneLayout = TerminalPaneLayout()
+        } else if paneLayout.primary == nil {
+            // 非主页关闭最后一个可见槽位时，继续显示相邻标签。
+            paneLayout.select(order[min(index, order.count - 1)].sessionID)
         }
-        if let selectedIndex {
-            if index < selectedIndex {
-                select(selectedIndex - 1)
-            } else if index == selectedIndex {
-                select(min(index, order.count - 1))
-            } else {
-                refreshTabs()
-            }
-        } else {
-            refreshTabs()
-        }
+        if wasShowingHome { paneLayout.showHome() }
+        presentSelection()
+        tabControllers[controller.sessionID] = nil
         return true
     }
 
     func closeAll() {
         for controller in order {
+            controller.onFocus = nil
             controller.stop()
             controller.removeContextObserver(modeTokens.removeValue(forKey: controller.sessionID))
             controller.removeStateObserver(stateTokens.removeValue(forKey: controller.sessionID))
             environment.unregister(controller)
         }
+        paneLayout = TerminalPaneLayout()
         modeTokens.removeAll()
         stateTokens.removeAll()
         order.removeAll()
@@ -181,12 +207,23 @@ final class SessionTabViewController: NSViewController {
     }
 
     private func select(_ index: Int?) {
-        selectedIndex = index
         if let index, order.indices.contains(index) {
-            let controller = order[index]
-            if let tab = tabControllers[controller.sessionID] {
-                content.show(tab)
-            }
+            paneLayout.select(order[index].sessionID)
+        } else {
+            paneLayout.showHome()
+        }
+        presentSelection()
+    }
+
+    private func presentSelection() {
+        if let primaryID = paneLayout.primary,
+           let primary = tabControllers[primaryID] {
+            terminalSplit.show(primary: primary, secondary: paneLayout.secondary.flatMap { tabControllers[$0] })
+        } else {
+            terminalSplit.clear()
+        }
+        if let controller = selectedController {
+            content.show(terminalSplit)
             updateChrome()
             controller.focus()
             onSessionsChange?(controller)
@@ -195,6 +232,148 @@ final class SessionTabViewController: NSViewController {
             content.show(welcome)
             updateChrome()
             onSessionsChange?(nil)
+        }
+    }
+
+    /// 用户明确选择两个已存在的会话，保留连接、滚动历史与原有标签。
+    func split(with other: TerminalController, beside baseID: UUID) {
+        guard other.sessionID != baseID,
+              order.contains(where: { $0.sessionID == baseID }),
+              order.contains(where: { $0 === other }) else { return }
+        paneLayout.pair(baseID, with: other.sessionID)
+        presentSelection()
+    }
+
+    func exitSplit() {
+        paneLayout.unsplit()
+        presentSelection()
+    }
+
+    func showSplitChooser() {
+        guard let selected = selectedController else { return }
+        let menu = splitMenu(beside: selected)
+        let anchor = tabBar.splitMenuAnchor
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.minY), in: anchor)
+    }
+
+    private enum SplitAction {
+        case existing(UUID, beside: UUID)
+        case host(HostProfile, beside: UUID)
+        case local(beside: UUID)
+        case choose(UUID)
+        case close(UUID)
+        case exit
+    }
+
+    /// 菜单按会话 ID 绑定动作，显示相同名称的连接也能通过序号和地址区分。
+    func splitMenu(beside base: TerminalController) -> NSMenu {
+        let menu = NSMenu(title: "左右分屏")
+        menu.autoenablesItems = false
+        let caption = NSMenuItem(title: "与「\(base.title)」组合分屏", action: nil, keyEquivalent: "")
+        caption.isEnabled = false
+        menu.addItem(caption)
+        let candidates = order.enumerated().filter { $0.element !== base }
+        if candidates.isEmpty {
+            let empty = NSMenuItem(title: "暂无其他已打开的终端", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        }
+        for (index, controller) in candidates {
+            let detail = controller.host?.address ?? "本地"
+            let item = addSplitItem(to: menu, title: "\(index + 1). \(controller.title) · \(detail)",
+                                    action: .existing(controller.sessionID, beside: base.sessionID))
+            item.toolTip = controller.tooltip
+            item.state = paneLayout.isSplit && (controller.sessionID == paneLayout.primary || controller.sessionID == paneLayout.secondary) ? .on : .off
+        }
+        menu.addItem(.separator())
+        let hostsItem = NSMenuItem(title: "连接主机到另一侧", action: nil, keyEquivalent: "")
+        let hostsMenu = NSMenu(title: "选择主机")
+        hostsMenu.autoenablesItems = false
+        for group in environment.hosts.groups() {
+            let groupItem = NSMenuItem(title: group.name, action: nil, keyEquivalent: "")
+            let groupMenu = NSMenu(title: group.name)
+            groupMenu.autoenablesItems = false
+            for host in group.hosts {
+                let item = addSplitItem(to: groupMenu, title: "\(host.displayName) · \(host.subtitle)",
+                                       action: .host(host, beside: base.sessionID))
+                item.toolTip = "新建连接，不影响已有会话"
+            }
+            groupItem.submenu = groupMenu
+            hostsMenu.addItem(groupItem)
+        }
+        if hostsMenu.items.isEmpty {
+            let empty = NSMenuItem(title: "暂无已保存的主机，请先在主机列表新增", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            hostsMenu.addItem(empty)
+        }
+        hostsItem.submenu = hostsMenu
+        menu.addItem(hostsItem)
+        if let host = base.host {
+            addSplitItem(to: menu, title: "新建「\(host.displayName)」连接到另一侧",
+                         action: .host(host, beside: base.sessionID))
+        }
+        addSplitItem(to: menu, title: "新建本地终端到另一侧", action: .local(beside: base.sessionID))
+        if paneLayout.isSplit {
+            menu.addItem(.separator())
+            addSplitItem(to: menu, title: "退出分屏（保留会话）", action: .exit)
+        }
+        return menu
+    }
+
+    private func showTabContextMenu(at index: Int, event: NSEvent, anchor: NSView) {
+        guard let menu = tabContextMenu(at: index) else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: anchor)
+    }
+
+    func tabContextMenu(at index: Int) -> NSMenu? {
+        guard order.indices.contains(index) else { return nil }
+        let controller = order[index]
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        if let selected = selectedController, selected !== controller {
+            addSplitItem(to: menu, title: "与「\(selected.title)」左右分屏",
+                         action: .existing(controller.sessionID, beside: selected.sessionID))
+        } else {
+            addSplitItem(to: menu, title: "选择终端进行分屏…", action: .choose(controller.sessionID))
+        }
+        menu.addItem(.separator())
+        addSplitItem(to: menu, title: "关闭标签", action: .close(controller.sessionID))
+        return menu
+    }
+
+    @discardableResult
+    private func addSplitItem(to menu: NSMenu, title: String, action: SplitAction) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(performSplitAction(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = action
+        menu.addItem(item)
+        return item
+    }
+
+    @objc private func performSplitAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? SplitAction else { return }
+        switch action {
+        case .existing(let id, let baseID):
+            guard let other = order.first(where: { $0.sessionID == id }) else { return }
+            split(with: other, beside: baseID)
+        case .host(let host, let baseID):
+            guard order.contains(where: { $0.sessionID == baseID }) else { return }
+            onSplitHost?(host, baseID)
+        case .local(let baseID):
+            guard order.contains(where: { $0.sessionID == baseID }) else { return }
+            let controller = TerminalController(host: nil, settings: environment.settings.settings)
+            environment.register(controller)
+            controller.startLocalShell()
+            append(controller, beside: baseID)
+        case .choose(let id):
+            guard let controller = order.first(where: { $0.sessionID == id }) else { return }
+            select(controller: controller)
+            showSplitChooser()
+        case .close(let id):
+            guard let index = order.firstIndex(where: { $0.sessionID == id }) else { return }
+            _ = closeTab(at: index)
+        case .exit:
+            exitSplit()
         }
     }
 
@@ -219,6 +398,10 @@ final class SessionTabViewController: NSViewController {
             )
         }
         tabBar.update(tabs: entries, selected: selectedIndex)
+        tabBar.updateSplit(isSplit: paneLayout.isSplit, enabled: selectedController != nil)
+        for (id, tab) in tabControllers {
+            tab.setPanePresentation(split: paneLayout.isSplit, active: id == paneLayout.selected)
+        }
         // 主页没有“终端环境”，徽标收起来；选中会话时显示它此刻在哪种 shell 里。
         tabBar.update(mode: selectedController?.context.mode)
         let hasTabs = !order.isEmpty
@@ -285,11 +468,15 @@ final class SessionTabBarView: NSView {
     var onSelect: ((Int?) -> Void)?
     var onClose: ((Int) -> Void)?
     var onNew: (() -> Void)?
+    var onSplit: (() -> Void)?
+    var onTabContextMenu: ((Int, NSEvent, NSView) -> Void)?
+    var splitMenuAnchor: NSView { splitButton }
 
     private let scrollView = TabBarScrollView()
     private let documentView = NSView()
     private let stack = NSStackView()
     private let plusButton = NSButton()
+    private let splitButton = NSButton()
     private let modeBadge = TerminalModeBadge()
     private let rightStack = NSStackView()
     private let leftStack = NSStackView()
@@ -374,6 +561,13 @@ final class SessionTabBarView: NSView {
         rightStack.translatesAutoresizingMaskIntoConstraints = false
         rightStack.addArrangedSubview(rightScrollButton)
         rightStack.addArrangedSubview(modeBadge)
+        splitButton.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "左右分屏")
+        splitButton.isBordered = false
+        splitButton.contentTintColor = Theme.textSecondary
+        splitButton.target = self
+        splitButton.action = #selector(toggleSplit(_:))
+        splitButton.translatesAutoresizingMaskIntoConstraints = false
+        rightStack.addArrangedSubview(splitButton)
         rightStack.addArrangedSubview(plusButton)
         addSubview(rightStack)
 
@@ -397,6 +591,8 @@ final class SessionTabBarView: NSView {
             rightStack.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
             rightScrollButton.widthAnchor.constraint(equalToConstant: 22),
             rightScrollButton.heightAnchor.constraint(equalToConstant: 26),
+            splitButton.widthAnchor.constraint(equalToConstant: 24),
+            splitButton.heightAnchor.constraint(equalToConstant: 24),
             plusButton.widthAnchor.constraint(equalToConstant: 24),
             plusButton.heightAnchor.constraint(equalToConstant: 24),
 
@@ -492,9 +688,13 @@ final class SessionTabBarView: NSView {
                 title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
                 closable: true, fixedWidth: nil
             )
-            chip.toolTip = "\(tab.tooltip)\n单击切换，× 关闭"
+            chip.toolTip = "\(tab.tooltip)\n单击切换，右键可与当前终端分屏，× 关闭"
             chip.onSelect = { [weak self] in self?.onSelect?(index) }
             chip.onClose = { [weak self] in self?.onClose?(index) }
+            chip.onContextMenu = { [weak self, weak chip] event in
+                guard let chip else { return }
+                self?.onTabContextMenu?(index, event, chip)
+            }
             chip.setSelected(index == selected)
             stack.addArrangedSubview(chip)
             return chip
@@ -510,6 +710,15 @@ final class SessionTabBarView: NSView {
             self.updateScrollButtons()
         }
     }
+
+    func updateSplit(isSplit: Bool, enabled: Bool) {
+        splitButton.isEnabled = enabled
+        splitButton.contentTintColor = isSplit ? Theme.accent : Theme.textSecondary
+        splitButton.toolTip = "选择已有终端或连接主机进行分屏 · ⌘⇧D"
+        splitButton.setAccessibilityLabel(isSplit ? "配置分屏" : "选择终端进行分屏")
+    }
+
+    @objc private func toggleSplit(_ sender: Any?) { onSplit?() }
 
     @objc private func newTab(_ sender: Any?) {
         onNew?()
@@ -558,6 +767,7 @@ final class StatusDotView: NSView {
 /// 单个标签：状态点或图标 + 标题 + 关闭按钮。选中与悬停各有自己的底色。
 @MainActor
 final class SessionTabChip: NSView {
+    var onContextMenu: ((NSEvent) -> Void)?
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
 
@@ -698,6 +908,16 @@ final class SessionTabChip: NSView {
         onSelect?()
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        // 标题与状态点统一交给标签处理，确保右键不会被文字控件吞掉。
+        return hit.isDescendant(of: closeButton) ? hit : self
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onContextMenu?(event)
+    }
+
     @objc private func closeTapped(_ sender: Any?) {
         onClose?()
     }
@@ -718,6 +938,11 @@ final class TerminalTabViewController: NSViewController {
     var onReconnect: ((TerminalController) -> Void)?
 
     private let banner = ReconnectBannerView()
+    private let paneHeader = TerminalPaneHeaderView()
+    private var paneActive = false
+    private var paneSplit = false
+    private var headerHeight: NSLayoutConstraint!
+    private var terminalInsets: [NSLayoutConstraint] = []
 
     init(controller: TerminalController) {
         self.controller = controller
@@ -731,9 +956,24 @@ final class TerminalTabViewController: NSViewController {
         container.wantsLayer = true
         container.layer?.backgroundColor = Theme.layerColor(Theme.terminalBackground, for: container)
         container.onAppearanceChange = { [weak self] in self?.refreshAppearance() }
-        controller.terminalView.frame = container.bounds
-        controller.terminalView.autoresizingMask = [.width, .height]
+        controller.terminalView.translatesAutoresizingMaskIntoConstraints = false
+        paneHeader.translatesAutoresizingMaskIntoConstraints = false
+        paneHeader.onActivate = { [weak self] in self?.controller.focus() }
         container.addSubview(controller.terminalView)
+        container.addSubview(paneHeader)
+        headerHeight = paneHeader.heightAnchor.constraint(equalToConstant: 0)
+        terminalInsets = [
+            controller.terminalView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: controller.terminalView.trailingAnchor),
+            controller.terminalView.topAnchor.constraint(equalTo: paneHeader.bottomAnchor),
+            container.bottomAnchor.constraint(equalTo: controller.terminalView.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(terminalInsets + [
+            paneHeader.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            paneHeader.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            paneHeader.topAnchor.constraint(equalTo: container.topAnchor),
+            headerHeight,
+        ])
 
         banner.translatesAutoresizingMaskIntoConstraints = false
         banner.isHidden = true
@@ -746,20 +986,39 @@ final class TerminalTabViewController: NSViewController {
         let preferredWidth = banner.widthAnchor.constraint(equalToConstant: 360)
         preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            banner.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
+            banner.topAnchor.constraint(equalTo: controller.terminalView.topAnchor, constant: 10),
             banner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             preferredWidth,
             banner.heightAnchor.constraint(equalToConstant: 38),
             banner.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -24),
         ])
         view = container
+        setPanePresentation(split: paneSplit, active: paneActive)
         updateConnectionState()
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        controller.focus()
         updateConnectionState()
+    }
+
+    func setPanePresentation(split: Bool, active: Bool) {
+        paneSplit = split
+        paneActive = active
+        guard isViewLoaded else { return }
+        paneHeader.isHidden = !split
+        headerHeight.constant = split ? 30 : 0
+        for (index, constraint) in terminalInsets.enumerated() {
+            constraint.constant = split ? (index < 2 ? 12 : 8) : 0
+        }
+        updatePaneHeader()
+    }
+
+    func updatePaneHeader() {
+        guard isViewLoaded else { return }
+        paneHeader.update(title: controller.title,
+                          directory: controller.context.displayDirectory ?? controller.workingDirectory,
+                          active: paneActive)
     }
 
     /// 只在主机会话结束时提示；本地 shell 的 `exit` 是用户主动结束，不该劝人重连。
@@ -798,6 +1057,7 @@ final class TerminalTabViewController: NSViewController {
     private func refreshAppearance() {
         view.layer?.backgroundColor = Theme.layerColor(Theme.terminalBackground, for: view)
         banner.refreshAppearance()
+        paneHeader.refreshAppearance()
         controller.applyTheme()
     }
 }

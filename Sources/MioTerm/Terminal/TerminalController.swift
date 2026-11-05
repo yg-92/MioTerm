@@ -54,6 +54,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     /// 重连失败在日志里一行都没留下——排查「重新连接点不动」时完全没有线索。
     private var stateObservers: [UUID: (State) -> Void] = [:]
     var onTitleChange: ((String) -> Void)?
+    var onFocus: (() -> Void)?
     /// 用户回车提交了一条完整命令。命令库据此记账，界面不参与逐字节输入。
     var onCommand: ((String) -> Void)?
 
@@ -139,6 +140,8 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         terminalView = process ?? StreamTerminalView(frame: frame, font: font, options: options)
         processView = process
         super.init()
+        process?.onFocus = { [weak self] in self?.onFocus?() }
+        (terminalView as? StreamTerminalView)?.onFocus = { [weak self] in self?.onFocus?() }
         applyTheme()
         // 解析线程只负责戳时间戳，主线程据此把读屏往后推；不轮询。
         outputClock.onActivity = { [weak self] in
@@ -280,7 +283,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     }
 
     func focus() {
-        terminalView.window?.makeFirstResponder(terminalView)
+        if terminalView.window?.makeFirstResponder(terminalView) == true { onFocus?() }
     }
 
     /// 收到第一帧远端输出即认为握手完成；回调在解析线程上执行，
@@ -546,11 +549,13 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
 /// 3. 双击选词（`mouseDown` + `selectionChanged`）：把 `/`、`~` 等路径字符连成整段选中。
 @MainActor
 private final class ProcessTerminalView: LocalProcessTerminalView {
+    var onFocus: (() -> Void)?
     var onMarkedText: (() -> Void)?
     var onPaste: ((String) -> Void)?
     private let doubleClickTracker = DoubleClickSelectionTracker()
 
     override func mouseDown(with event: NSEvent) {
+        onFocus?()
         doubleClickTracker.pendingDoubleClick = event.clickCount == 2
         super.mouseDown(with: event)
         doubleClickTracker.pendingDoubleClick = false
@@ -579,9 +584,11 @@ private final class ProcessTerminalView: LocalProcessTerminalView {
 /// Telnet / 串口会话使用的终端视图：与 `ProcessTerminalView` 共享同一套双击整段路径选中规则。
 @MainActor
 private final class StreamTerminalView: TerminalView {
+    var onFocus: (() -> Void)?
     private let doubleClickTracker = DoubleClickSelectionTracker()
 
     override func mouseDown(with event: NSEvent) {
+        onFocus?()
         doubleClickTracker.pendingDoubleClick = event.clickCount == 2
         super.mouseDown(with: event)
         doubleClickTracker.pendingDoubleClick = false

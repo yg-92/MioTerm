@@ -63,6 +63,9 @@ final class WorkspaceViewController: NSSplitViewController {
         sessions.onReconnect = { [weak self] controller in
             self?.reconnect(controller)
         }
+        sessions.onSplitHost = { [weak self] host, baseID in
+            self?.connect(host: host, beside: baseID)
+        }
         // 标签栏与主页都归会话控制器管：没有选中会话时它自己显示欢迎页。
         mainArea.show(sessions)
     }
@@ -282,6 +285,10 @@ final class WorkspaceViewController: NSSplitViewController {
         sessions.selectedController?.sendBreak()
     }
 
+    @objc func configureTerminalSplit(_ sender: Any?) {
+        sessions.showSplitChooser()
+    }
+
     @objc func closeTerminalTab(_ sender: Any?) {
         sessions.closeSelectedTab()
     }
@@ -326,14 +333,14 @@ final class WorkspaceViewController: NSSplitViewController {
         }
     }
 
-    private func connect(host: HostProfile) {
+    private func connect(host: HostProfile, beside baseID: UUID? = nil) {
         guard !pendingConnects.contains(host.id) else { return }
         pendingConnects.insert(host.id)
         Task { @MainActor [weak self] in
             defer { self?.pendingConnects.remove(host.id) }
             guard let self else { return }
             if let controller = await self.coordinator.open(host: host, in: self.view.window) {
-                self.sessions.append(controller)
+                self.sessions.append(controller, beside: baseID)
             }
         }
     }
@@ -484,6 +491,10 @@ extension WorkspaceViewController: NSMenuItemValidation {
         case #selector(reconnectTerminal(_:)):
             // 只有在跑完了才给重连；运行中的会话不该被 ⌘R 悄悄换掉。
             return sessions.selectedController.map { !$0.state.isAlive } ?? false
+        case #selector(configureTerminalSplit(_:)):
+            menuItem.title = sessions.isSplit ? "配置分屏…" : "左右分屏…"
+            menuItem.state = sessions.isSplit ? .on : .off
+            return sessions.selectedController != nil
         case #selector(closeTerminalTab(_:)):
             return sessions.selectedController != nil
         case #selector(selectNextTerminalTab(_:)), #selector(selectPreviousTerminalTab(_:)):
