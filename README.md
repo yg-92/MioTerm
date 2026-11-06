@@ -2,7 +2,32 @@
 
 **面向 macOS 的轻量原生终端工具。**
 
-把本地命令行、远程连接、设备调试和文件管理放进一个简洁的窗口。MioTerm 使用 Swift 与 AppKit 构建，基于 [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) 提供终端模拟，SSH 连接使用系统 OpenSSH。
+把本地命令行、远程连接、设备调试和文件管理放进一个简洁的窗口。
+
+## 使用前需要准备什么
+
+### 系统要求
+
+- **macOS 14 Sonoma 或更新版本**。
+- **Apple Silicon Mac（M 系列芯片）**：当前发行包为 arm64 版本。
+
+### 本机环境
+
+日常使用无需另外安装 Swift、Xcode、Homebrew、Java、Node.js 或 Python，也无需额外安装 Telnet、SFTP 客户端。
+
+| 使用功能 | 需要准备的内容 |
+| --- | --- |
+| 本地终端 | 使用本机 Shell，未指定时默认使用 macOS 自带的 `/bin/zsh`。 |
+| SSH / SFTP | 使用 macOS 自带的 `/usr/bin/ssh`、`/usr/bin/ssh-keyscan` 和 `/usr/bin/ssh-keygen`，无需额外安装 OpenSSH。本机还需能够访问目标主机的 SSH 端口；SFTP 文件管理要求远端启用 SFTP 子系统。 |
+| 私钥登录 | 准备私钥文件；使用 ssh-agent 认证时，需要先把密钥加入本机 agent。 |
+| 串口终端 | 连接串口设备或 USB 转串口适配器；设备若需要厂商驱动，先安装对应的 macOS 驱动，确认系统中能看到 `/dev/cu.*` 或 `/dev/tty.*` 设备。 |
+| X11 图形转发 | 按需安装并启动 [XQuartz](https://www.xquartz.org/)，本机需有 `/opt/X11/bin/xauth` 和有效的 `DISPLAY` 环境变量，远端 SSH 服务也需允许 X11 转发。普通终端和文件管理不需要 XQuartz。 |
+
+### 安装与首次打开
+
+1. 解压发行包，把 `MioTerm.app` 拖入“应用程序”文件夹。
+2. 打开应用。当前发行包未经过 Apple 公证；如 macOS 提示无法验证开发者，可在“系统设置 → 隐私与安全性”中选择“仍要打开”。
+3. 首次保存或读取登录凭据时，如果系统询问钥匙串访问权限，按提示授权。
 
 ## 主要功能
 
@@ -49,7 +74,7 @@ SSH 会话内提供独立的文件面板，支持目录浏览、隐藏文件显�
 
 ### 轻量设计
 
-采用原生 AppKit 界面，无需 Electron 或浏览器运行时。新配置默认保留每个终端 2000 行回滚历史，可在设置中调整并立即生效；已有配置保留原值。样式预览直接绘制，不额外创建终端会话。
+采用原生 macOS 界面，无需浏览器运行时。新配置默认保留每个终端 2000 行回滚历史，可在设置中调整并立即生效；已有配置保留原值。样式预览直接绘制，不额外创建终端会话。
 
 ## 快速使用
 
@@ -73,31 +98,9 @@ SSH 会话内提供独立的文件面板，支持目录浏览、隐藏文件显�
 | `⌘K` | 打开命令库 |
 | `⌘,` | 打开设置 |
 
-## 从源码构建
+## 使用反馈
 
-需要 macOS 14 或更新版本，以及支持 Swift Testing 的 Swift 工具链，建议使用 Swift 6 或更新版本的 Xcode / Command Line Tools。
-
-```bash
-git clone https://gitee.com/yg92/mio-term.git
-cd mio-term
-
-# 构建 Release 应用
-make app
-
-# 构建并打开应用
-make run
-
-# 运行测试
-make test
-```
-
-生成的应用位于 `build/MioTerm.app`。首次构建会通过 Swift Package Manager 获取依赖。
-
-执行 `make dist` 可生成发行压缩包，当前发行打包脚本面向 Apple Silicon（arm64）Mac。
-
-## 反馈与贡献
-
-欢迎通过 Issue 反馈问题或提出功能建议，也欢迎提交 Pull Request。反馈问题时，请尽量附上 macOS 版本、连接类型、复现步骤和必要的截图；提供日志前请移除敏感信息。
+欢迎通过 Issue 反馈问题或提出功能建议。反馈问题时，请尽量附上 macOS 版本、连接类型、复现步骤和必要的截图；提供日志前请移除敏感信息。
 
 ## 许可证
 
