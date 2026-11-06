@@ -67,6 +67,16 @@ public enum TerminalPrompt {
         return nil
     }
 
+    /// 命令回显和删除确认不是完成提示符。无路径的常见 PS1（如 bash-5.2#）
+    /// 只能判断命令已结束，不能用它推断当前目录。
+    public static func isReadyForCommand(_ line: String?) -> Bool {
+        guard let line else { return false }
+        if parse(line) != nil { return true }
+        guard commandAfterPrompt(in: line) == nil,
+              let last = line.trimmingCharacters(in: .whitespacesAndNewlines).last else { return false }
+        return "#$%❯➜".contains(last)
+    }
+
     private static func capture(_ match: NSTextCheckingResult, at index: Int, in text: String) -> String? {
         guard index < match.numberOfRanges else { return nil }
         let range = match.range(at: index)

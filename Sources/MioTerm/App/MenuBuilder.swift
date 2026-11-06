@@ -127,6 +127,8 @@ enum MenuBuilder {
         menu.addItem(withTitle: "左右分屏…", action: Selector(("configureTerminalSplit:")), keyEquivalent: "d")
             .keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(.separator())
+        menu.addItem(withTitle: "页面样式…", action: Selector(("showStylePreferences:")), keyEquivalent: "")
+        menu.addItem(.separator())
         let bigger = menu.addItem(withTitle: "放大字号", action: Selector(("adjustTerminalFontSize:")), keyEquivalent: "+")
         bigger.tag = 1
         let smaller = menu.addItem(withTitle: "缩小字号", action: Selector(("adjustTerminalFontSize:")), keyEquivalent: "-")

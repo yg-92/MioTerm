@@ -368,6 +368,11 @@ final class WorkspaceViewController: NSSplitViewController {
         delete(host: host)
     }
 
+    @objc func showStylePreferences(_ sender: Any?) {
+        if preferences == nil { preferences = PreferencesWindowController(store: environment.settings) }
+        preferences?.showStyles()
+    }
+
     @objc func showPreferences(_ sender: Any?) {
         if preferences == nil {
             preferences = PreferencesWindowController(store: environment.settings)

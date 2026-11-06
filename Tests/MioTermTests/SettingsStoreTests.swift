@@ -113,4 +113,13 @@ struct SettingsStoreTests {
         #expect(!FileManager.default.fileExists(atPath: url.path))
         #expect(store.settings == .default)
     }
+
+    @Test("轻量默认值不覆盖已有回滚配置")
+    func lightweightScrollbackDefaultPreservesSavedValues() throws {
+        #expect(AppSettings.default.scrollbackLines == 2_000)
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(missing.scrollbackLines == 2_000)
+        let saved = try JSONDecoder().decode(AppSettings.self, from: Data("{\"scrollbackLines\":10000}".utf8))
+        #expect(saved.scrollbackLines == 10_000)
+    }
 }

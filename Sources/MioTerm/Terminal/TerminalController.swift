@@ -47,6 +47,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     }
     private(set) var workingDirectory: String?
     private var askpassFile: URL?
+    private var appliedScrollbackLines: Int
     private var remoteTitle: String?
 
     /// 状态变更是多播的：标签容器要据此收放断线提示条，连接编排要写日志。
@@ -120,6 +121,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
 
     init(host: HostProfile?, settings: AppSettings) {
         self.host = host
+        appliedScrollbackLines = settings.scrollbackLines
         var options = TerminalOptions()
         options.scrollback = settings.scrollbackLines
         // 主机的终端类型优先，留空则用设置里的默认；本地终端固定 xterm，
@@ -184,7 +186,12 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     }
 
     func apply(_ settings: AppSettings) {
-        terminalView.font = TerminalController.font(for: settings)
+        let font = TerminalController.font(for: settings)
+        if !terminalView.font.isEqual(font) { terminalView.font = font }
+        if appliedScrollbackLines != settings.scrollbackLines {
+            terminalView.changeScrollback(settings.scrollbackLines)
+            appliedScrollbackLines = settings.scrollbackLines
+        }
         terminalView.bellStyle = settings.playBellSound ? .sound : .none
     }
 
@@ -196,6 +203,9 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         let dark = Theme.isDark(terminalView.window?.effectiveAppearance)
         terminalView.nativeBackgroundColor = Theme.terminalBackground(dark: dark)
         terminalView.nativeForegroundColor = Theme.terminalForeground(dark: dark)
+        terminalView.selectedTextBackgroundColor = Theme.terminalColor(.selectionBackground, dark: dark)
+        terminalView.selectedTextForegroundColor = Theme.terminalColor(.selectionForeground, dark: dark)
+        terminalView.caretColor = Theme.terminalColor(.cursor, dark: dark)
         terminalView.installColors(Theme.terminalPalette(dark: dark))
         terminalView.needsDisplay = true
     }
@@ -280,6 +290,15 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
             Task { await closing.close() }
         }
         destroyAskpass()
+        processView?.setProcessOutputHandler(nil)
+        // stop 只用于永久关闭会话；断线和重连不能关闭仍需保留的视图。
+        if !terminalView.updateUiClosed() {
+            Task { @MainActor [view = terminalView] in
+                repeat {
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                } while !view.updateUiClosed()
+            }
+        }
     }
 
     func focus() {

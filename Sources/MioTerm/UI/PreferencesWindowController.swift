@@ -7,6 +7,7 @@ import MioTermCore
 @MainActor
 final class PreferencesWindowController: NSWindowController {
     private let store: SettingsStore
+    private var styleWindow: StylePreferencesWindowController?
 
     private let appearancePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let contrastPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
@@ -75,6 +76,7 @@ final class PreferencesWindowController: NSWindowController {
         appearancePopup.addItems(withTitles: AppearanceMode.allCases.map { $0.displayName })
         contrastPopup.addItems(withTitles: UIContrast.allCases.map { $0.displayName })
         accentPopup.addItems(withTitles: AccentColor.allCases.map { $0.displayName })
+        accentPopup.toolTip = "自定义页面样式的强调色优先；在页面样式中还原该颜色后，跟随这里的选项。"
         fontPopup.addItems(withTitles: availableFonts)
         if fontPopup.itemTitles.isEmpty { fontPopup.addItem(withTitle: "Menlo Regular") }
         fontSizePopup.addItems(withTitles: Self.fontSizes.map { "\($0)" })
@@ -112,10 +114,13 @@ final class PreferencesWindowController: NSWindowController {
         treeFontSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
         treeIconSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
 
+        let styleButton = NSButton(title: "页面样式…", target: self, action: #selector(openStyles(_:)))
+        styleButton.bezelStyle = .rounded
         let grid = NSGridView(views: [
             [label("外观"), appearancePopup],
             [label("对比度"), contrastPopup],
             [label("强调色"), accentPopup],
+            [label("自定义配色"), styleButton],
             [label("终端字体"), fontPopup],
             [label("字号"), fontSizePopup],
             [label("终端类型"), terminalTypeCombo],
@@ -178,6 +183,7 @@ final class PreferencesWindowController: NSWindowController {
             treeIconSizePopup.selectItem(withTitle: "\(nearest)")
         }
         scrollbackField.stringValue = "\(settings.scrollbackLines)"
+        scrollbackField.toolTip = "每个终端默认保留 2000 行历史；调小后立即生效，会舍弃超出上限的旧历史，当前屏幕保留。"
         terminalTypeCombo.stringValue = settings.terminalType
         bellCheckbox.state = settings.playBellSound ? .on : .off
         followCheckbox.state = settings.followTerminalDirectory ? .on : .off
@@ -219,6 +225,27 @@ final class PreferencesWindowController: NSWindowController {
             AlertPresenter.fail(title: "无法保存设置", message: error.localizedDescription, in: window)
         }
     }
+
+    func showStyles() {
+        if styleWindow == nil {
+            let editor = StylePreferencesWindowController(store: store)
+            editor.onApply = { [weak self] settings in
+                guard let self else { return }
+                // 页面样式中的字体变更回填到普通设置，保留其它尚未保存的输入。
+                if !self.fontPopup.itemTitles.contains(settings.terminalFontName) {
+                    self.fontPopup.addItem(withTitle: settings.terminalFontName)
+                }
+                self.fontPopup.selectItem(withTitle: settings.terminalFontName)
+                let size = "\(settings.terminalFontSize)"
+                if !self.fontSizePopup.itemTitles.contains(size) { self.fontSizePopup.addItem(withTitle: size) }
+                self.fontSizePopup.selectItem(withTitle: size)
+            }
+            styleWindow = editor
+        }
+        styleWindow?.show()
+    }
+
+    @objc private func openStyles(_ sender: Any?) { showStyles() }
 
     @objc private func cancel(_ sender: NSButton) {
         close()

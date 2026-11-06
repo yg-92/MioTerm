@@ -11,6 +11,7 @@ enum Theme {
     private struct Scheme {
         var dark: ThemePalette
         var light: ThemePalette
+        var customization = ThemeCustomization()
     }
 
     private static let lock = NSLock()
@@ -20,11 +21,12 @@ enum Theme {
     )
 
     /// 由设置在启动与保存时调用；调用方随后要让已经画好的视图重绘一次。
-    static func configure(contrast: UIContrast, accent: AccentColor) {
+    static func configure(contrast: UIContrast, accent: AccentColor, customization: ThemeCustomization = ThemeCustomization()) {
         lock.lock()
         scheme = Scheme(
-            dark: ThemePalette.palette(dark: true, contrast: contrast, accent: accent),
-            light: ThemePalette.palette(dark: false, contrast: contrast, accent: accent)
+            dark: customization.applying(to: ThemePalette.palette(dark: true, contrast: contrast, accent: accent), dark: true),
+            light: customization.applying(to: ThemePalette.palette(dark: false, contrast: contrast, accent: accent), dark: false),
+            customization: customization
         )
         lock.unlock()
     }
@@ -79,6 +81,13 @@ enum Theme {
     static let hoverFill = dynamic("hoverFill") { color($0.overlay, alpha: $0.hoverAlpha) }
     static let terminalBackground = dynamic("terminalBackground") { color($0.terminalBackground) }
     static let terminalForeground = dynamic("terminalForeground") { color($0.terminalForeground) }
+
+    static func terminalColor(_ role: ThemeColorRole, dark: Bool) -> NSColor {
+        lock.lock()
+        let current = scheme
+        lock.unlock()
+        return color(current.customization.resolved(role, palette: dark ? current.dark : current.light, dark: dark))
+    }
 
     static let border = dynamic("border") { color($0.overlay, alpha: $0.borderAlpha) }
     static let borderStrong = dynamic("borderStrong") { color($0.overlay, alpha: $0.borderStrongAlpha) }

@@ -78,7 +78,7 @@ final class AppEnvironment {
     /// 所以要跟着深浅模式一起换掉。
     func applyAppearance() {
         let current = settings.settings
-        Theme.configure(contrast: current.contrast, accent: current.accent)
+        Theme.configure(contrast: current.contrast, accent: current.accent, customization: current.themeCustomization)
         switch current.appearance {
         case .system: NSApp.appearance = nil
         case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)

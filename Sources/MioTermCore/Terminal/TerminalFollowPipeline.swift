@@ -252,12 +252,21 @@ public final class TerminalFollowPipeline {
         let waited = Date().timeIntervalSince(tracker.submittedAt)
         guard waited >= outputFallback || idleFor >= quietWindow else { return .waiting }
         // 回车之后还没见到任何回显/输出，屏幕上还是命令执行前的旧提示符。
+        if expectsOutput, tracker.hasPendingFileChanges,
+           !outputSinceSubmit, !tracker.hasDirectoryReportSinceSubmission { return .waiting }
         guard !expectsOutput || outputSinceSubmit || waited >= outputFallback else { return .waiting }
         if inAlternateScreen {
             // 编辑器还开着，屏幕上根本没有提示符可读。等它的退出输出把读屏推回来。
             return .waiting
         }
         let line = screenLine()
+        // rm -rf 可能长时间不输出；回显后的静默窗口不能当成删除完成。
+        // 保留待刷新标记，直到提示符返回（或 shell 主动上报执行后的目录）。
+        if tracker.hasPendingFileChanges,
+           !tracker.hasDirectoryReportSinceSubmission,
+           !TerminalPrompt.isReadyForCommand(line) {
+            return .waiting
+        }
         let changed = tracker.settle(promptLine: line, inAlternateScreen: false)
         // 丢掉定位这件事本身要留痕：否则日志里只看到「未上报」，看不出是提示符
         // 只报了末级目录名、和 cd 预测对不上，还是压根没读到提示符。
@@ -342,8 +351,12 @@ public final class TerminalFollowPipeline {
                 // 编辑器里的光标移动也会触发输出；留一个兜底，免得彻底睡死。
                 scheduleCheck(after: 10)
             } else if expectsOutput, !probe.hasOutputSince(tracker.submittedAt) {
+                if tracker.hasPendingFileChanges { break }
                 let remaining = outputFallback - Date().timeIntervalSince(tracker.submittedAt)
                 scheduleCheck(after: max(0.25, remaining))
+            } else if tracker.hasPendingFileChanges, probe.idleFor() >= quietWindow {
+                // 命令仍在执行/等待确认，不轮询静止画面；下一帧输出会通过 noteOutput 唤醒。
+                break
             } else {
                 scheduleCheck(after: max(0.05, quietWindow - probe.idleFor()))
             }

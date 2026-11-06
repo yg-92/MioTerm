@@ -240,6 +240,102 @@ struct TerminalFollowPipelineTests {
         rig.pipeline.stop()
     }
 
+    /// 删除还未结束时，命令回显不能被当成完成提示符。
+    @Test func recursiveRemovalWaitsForThePromptBeforeRefreshing() {
+        let rig = Rig()
+        rig.remote("root@target:/tmp/work# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        rig.type("rm -rf ./*\r")
+        // rm 没有输出，屏幕最后一行仍是命令回显；安静不等于删除结束。
+        #expect(!rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 0)
+        rig.remote("\r\nroot@target:/tmp/work# ")
+        #expect(rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 1)
+        rig.pipeline.stop()
+    }
+
+    @Test func removalConfirmationDoesNotConsumeThePendingRefresh() {
+        let rig = Rig()
+        rig.remote("root@target:/tmp/work# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        rig.type("rm -r ./*\r")
+        rig.remote("\r\nrm: remove directory 'cache'? ")
+        #expect(!rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 0)
+        rig.type("y\r")
+        rig.remote("\r\nremoved 'cache/a'\r\n")
+        #expect(!rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 0)
+        rig.remote("\r\nroot@target:/tmp/work# ")
+        #expect(rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 1)
+        rig.pipeline.stop()
+    }
+
+    @Test func mutationDoesNotRefreshFromAStalePromptWithoutNewOutput() {
+        let rig = Rig()
+        rig.remote("root@target:/tmp/work# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        rig.pipeline.userInput(ArraySlice("rm -rf ./*\r".utf8), inAlternateScreen: false)
+        #expect(!rig.pipeline.settleNow(idleFor: 20, inAlternateScreen: false, outputSinceSubmit: false))
+        #expect(rig.pipeline.context.filesystemRevision == 0)
+        rig.remote("\r\nroot@target:/tmp/work# ")
+        #expect(rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 1)
+        rig.pipeline.stop()
+    }
+
+    @Test func removalWithCustomPromptRefreshesWithoutInventingADirectory() {
+        let rig = Rig()
+        _ = rig.pipeline.reportOSC7("file://target/tmp/work")
+        rig.remote("bash-5.2# ")
+        rig.type("rm -rf ./*\r")
+        #expect(!rig.settle())
+        rig.remote("\r\nbash-5.2# ")
+        #expect(rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 1)
+        #expect(rig.pipeline.context.directory == "/tmp/work")
+        rig.pipeline.stop()
+    }
+
+    @Test func invalidDirectoryReportDoesNotFinishAnInProgressRemoval() {
+        let rig = Rig()
+        rig.remote("root@target:/tmp/work# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        rig.type("rm -rf ./*\r")
+        _ = rig.pipeline.reportOSC7(nil)
+        #expect(!rig.settle())
+        #expect(rig.pipeline.context.filesystemRevision == 0)
+        rig.pipeline.stop()
+    }
+
+    @Test func promptOutputWakesTheRefreshAfterASilentRemoval() async throws {
+        let rig = Rig()
+        rig.remote("root@target:/tmp/work# ")
+        rig.pipeline.sessionDidOpen()
+        _ = rig.settle()
+        rig.type("rm -rf ./*\r")
+        try await Task.sleep(nanoseconds: 350_000_000)
+        #expect(rig.pipeline.isWaitingForScreen)
+        #expect(rig.pipeline.context.filesystemRevision == 0)
+        rig.remote("\r\nroot@target:/tmp/work# ")
+        rig.touchOutput()
+        try await Task.sleep(nanoseconds: 350_000_000)
+        #expect(rig.pipeline.context.filesystemRevision == 1)
+        #expect(!rig.pipeline.isWaitingForScreen)
+        #expect(rig.broadcasts.filter { $0.filesystemRevision == 1 }.count == 1)
+        #expect(DirectoryFollowPlanner.decide(PanelFollowFacts(
+            terminal: rig.pipeline.context, followEnabled: true, channelReady: true,
+            targetBefore: "/tmp/work", filesystemRevisionBefore: 0, hasAligned: true, isBusy: true
+        )) == .reload)
+        rig.pipeline.stop()
+    }
+
     /// vim 里新建文件后退出：屏幕回到普通缓冲，面板要重读当前目录。
     @Test func closingTheEditorMarksTheFilesystemChanged() {
         let rig = Rig()

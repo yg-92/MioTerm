@@ -26,6 +26,9 @@ public struct TerminalContextTracker {
     public private(set) var submittedAt = Date.distantPast
     private var predictedDirectory: String?
     private var pendingFileChange = false
+    public var hasPendingFileChanges: Bool { pendingFileChange }
+    public var hasDirectoryReportSinceSubmission: Bool { validDirectoryReportedAt >= submittedAt }
+    private var validDirectoryReportedAt = Date.distantPast
     private var reportedAt = Date.distantPast
     /// 最近一次读屏时，提示符只报了末级目录名，而且和 cd 预测、原目录都对不上：
     /// 绝对路径从这一刻起无从得知，只能等 OSC 7 或用户在绝对路径下再 `cd` 一次。
@@ -102,6 +105,7 @@ public struct TerminalContextTracker {
         }
         applyNesting()
         if !isNested, containerMode == nil, let path = OSC7.path(from: payload) {
+            validDirectoryReportedAt = date
             context.directory = path
             context.promptHomeHint = nil
             context.promptBasename = nil

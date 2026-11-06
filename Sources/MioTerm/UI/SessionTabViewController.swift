@@ -80,6 +80,7 @@ final class SessionTabViewController: NSViewController {
 
         tabBar.onSelect = { [weak self] index in self?.select(index) }
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
+        tabBar.onMove = { [weak self] id, destination in self?.moveSession(id: id, to: destination) }
         tabBar.onNew = { [weak self] in self?.newLocalTerminal() }
         tabBar.onSplit = { [weak self] in self?.showSplitChooser() }
         tabBar.onTabContextMenu = { [weak self] index, event, anchor in
@@ -144,6 +145,9 @@ final class SessionTabViewController: NSViewController {
         guard order.indices.contains(index) else { return false }
         let wasShowingHome = isShowingHome
         let controller = order[index]
+        if view.window?.firstResponder === controller.terminalView {
+            view.window?.makeFirstResponder(nil)
+        }
         controller.stop()
         controller.removeContextObserver(modeTokens.removeValue(forKey: controller.sessionID))
         controller.removeStateObserver(stateTokens.removeValue(forKey: controller.sessionID))
@@ -165,6 +169,7 @@ final class SessionTabViewController: NSViewController {
     }
 
     func closeAll() {
+        clearTerminalFocus()
         for controller in order {
             controller.onFocus = nil
             controller.stop()
@@ -178,6 +183,15 @@ final class SessionTabViewController: NSViewController {
         order.removeAll()
         tabControllers.removeAll()
         select(nil)
+    }
+
+    /// 按稳定 ID 换序，选择与分屏仍按原会话保留，不重新挂载终端视图。
+    func moveSession(id: UUID, to destination: Int) {
+        guard let source = order.firstIndex(where: { $0.sessionID == id }),
+              order.indices.contains(destination), source != destination else { return }
+        let controller = order.remove(at: source)
+        order.insert(controller, at: destination)
+        updateChrome()
     }
 
     func selectNextTab() {
@@ -392,6 +406,7 @@ final class SessionTabViewController: NSViewController {
     private func updateChrome() {
         let entries = order.map { controller in
             SessionTabBarView.Tab(
+                id: controller.sessionID,
                 title: controller.state.isAlive ? controller.title : "\(controller.title) — \(controller.state.label)",
                 state: controller.state,
                 tooltip: controller.tooltip
@@ -457,7 +472,8 @@ private final class TabBarScrollView: NSScrollView {
 /// 顶部标签栏：主页 + 会话标签 + 新建按钮。标签多时可以横向滚动。
 @MainActor
 final class SessionTabBarView: NSView {
-    struct Tab {
+    struct Tab: Equatable {
+        let id: UUID
         let title: String
         let state: TerminalController.State
         let tooltip: String
@@ -467,6 +483,7 @@ final class SessionTabBarView: NSView {
 
     var onSelect: ((Int?) -> Void)?
     var onClose: ((Int) -> Void)?
+    var onMove: ((UUID, Int) -> Void)?
     var onNew: (() -> Void)?
     var onSplit: (() -> Void)?
     var onTabContextMenu: ((Int, NSEvent, NSView) -> Void)?
@@ -489,12 +506,19 @@ final class SessionTabBarView: NSView {
         closable: false, fixedWidth: 84
     )
     private var chips: [SessionTabChip] = []
+    private var tabIDs: [UUID] = []
+    private var renderedTabs: [Tab] = []
+    private var renderedSelection: Int?
+    private let dragOwner = UUID()
+    private let dropIndicator = NSView()
+    private static let dragType = NSPasteboard.PasteboardType("com.mio.term.session-tab")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = Theme.layerColor(Theme.tabBar, for: self)
         build()
+        registerForDraggedTypes([Self.dragType])
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
@@ -543,6 +567,10 @@ final class SessionTabBarView: NSView {
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         documentView.addSubview(stack)
+        dropIndicator.wantsLayer = true
+        dropIndicator.layer?.cornerRadius = 1
+        dropIndicator.isHidden = true
+        documentView.addSubview(dropIndicator)
 
         homeChip.onSelect = { [weak self] in self?.onSelect?(nil) }
 
@@ -679,6 +707,18 @@ final class SessionTabBarView: NSView {
     }
 
     func update(tabs: [Tab], selected: Int?) {
+        if tabs == renderedTabs {
+            for (index, chip) in chips.enumerated() { chip.setSelected(index == selected) }
+            homeChip.setSelected(selected == nil)
+            if renderedSelection != selected, let selected, chips.indices.contains(selected) {
+                chips[selected].scrollToVisible(chips[selected].bounds)
+            }
+            renderedSelection = selected
+            return
+        }
+        renderedTabs = tabs
+        renderedSelection = selected
+        tabIDs = tabs.map(\.id)
         for chip in chips {
             stack.removeArrangedSubview(chip)
             chip.removeFromSuperview()
@@ -688,7 +728,12 @@ final class SessionTabBarView: NSView {
                 title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
                 closable: true, fixedWidth: nil
             )
-            chip.toolTip = "\(tab.tooltip)\n单击切换，右键可与当前终端分屏，× 关闭"
+            chip.toolTip = "\(tab.tooltip)\n拖动可调整顺序，右键可与当前终端分屏，× 关闭"
+            chip.dragOwner = dragOwner
+            chip.onDrag = { [weak self, weak chip] event in
+                guard let self, let chip else { return }
+                self.beginDrag(id: tab.id, chip: chip, event: event)
+            }
             chip.onSelect = { [weak self] in self?.onSelect?(index) }
             chip.onClose = { [weak self] in self?.onClose?(index) }
             chip.onContextMenu = { [weak self, weak chip] event in
@@ -710,6 +755,57 @@ final class SessionTabBarView: NSView {
             self.updateScrollButtons()
         }
     }
+
+    private func beginDrag(id: UUID, chip: SessionTabChip, event: NSEvent) {
+        let pasteboard = NSPasteboardItem()
+        pasteboard.setString(id.uuidString, forType: Self.dragType)
+        let item = NSDraggingItem(pasteboardWriter: pasteboard)
+        let image = NSImage(size: chip.bounds.size)
+        if let bitmap = chip.bitmapImageRepForCachingDisplay(in: chip.bounds) {
+            chip.cacheDisplay(in: chip.bounds, to: bitmap)
+            image.addRepresentation(bitmap)
+        }
+        item.setDraggingFrame(chip.bounds, contents: image)
+        chip.beginDraggingSession(with: [item], event: event, source: chip)
+    }
+
+    private func dragPlacement(_ sender: NSDraggingInfo) -> (id: UUID, boundary: Int, destination: Int)? {
+        guard let source = sender.draggingSource as? SessionTabChip, source.dragOwner == dragOwner,
+              let raw = sender.draggingPasteboard.string(forType: Self.dragType), let id = UUID(uuidString: raw),
+              let sourceIndex = tabIDs.firstIndex(of: id) else { return nil }
+        let point = stack.convert(sender.draggingLocation, from: nil)
+        let boundary = chips.firstIndex(where: { point.x < $0.frame.midX }) ?? chips.count
+        return (id, boundary, boundary > sourceIndex ? boundary - 1 : boundary)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let placement = dragPlacement(sender), !chips.isEmpty else {
+            dropIndicator.isHidden = true
+            return []
+        }
+        if let event = NSApp.currentEvent { documentView.autoscroll(with: event) }
+        let x = placement.boundary < chips.count ? chips[placement.boundary].frame.minX - 2 : chips[chips.count - 1].frame.maxX + 2
+        let point = documentView.convert(NSPoint(x: x, y: 0), from: stack)
+        dropIndicator.layer?.backgroundColor = Theme.layerColor(Theme.accent, for: self)
+        dropIndicator.frame = NSRect(x: point.x, y: 8, width: 2, height: max(0, documentView.bounds.height - 16))
+        dropIndicator.isHidden = false
+        return .move
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { dropIndicator.isHidden = true }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { dragPlacement(sender) != nil }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dropIndicator.isHidden = true
+        guard let placement = dragPlacement(sender) else { return false }
+        onMove?(placement.id, placement.destination)
+        return true
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { dropIndicator.isHidden = true }
 
     func updateSplit(isSplit: Bool, enabled: Bool) {
         splitButton.isEnabled = enabled
@@ -766,7 +862,11 @@ final class StatusDotView: NSView {
 
 /// 单个标签：状态点或图标 + 标题 + 关闭按钮。选中与悬停各有自己的底色。
 @MainActor
-final class SessionTabChip: NSView {
+final class SessionTabChip: NSView, NSDraggingSource {
+    var dragOwner: UUID?
+    var onDrag: ((NSEvent) -> Void)?
+    private var mouseDownLocation: NSPoint?
+    private var didBeginDrag = false
     var onContextMenu: ((NSEvent) -> Void)?
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
@@ -905,7 +1005,36 @@ final class SessionTabChip: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onSelect?()
+        if event.modifierFlags.contains(.control) {
+            rightMouseDown(with: event)
+            return
+        }
+        mouseDownLocation = event.locationInWindow
+        didBeginDrag = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin = mouseDownLocation, onDrag != nil, !didBeginDrag,
+              hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) >= 4 else { return }
+        didBeginDrag = true
+        onDrag?(event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let shouldSelect = mouseDownLocation != nil && !didBeginDrag
+        mouseDownLocation = nil
+        if shouldSelect { onSelect?() }
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+
+    func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        mouseDownLocation = nil
+        didBeginDrag = false
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {

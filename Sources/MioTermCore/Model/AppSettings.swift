@@ -52,6 +52,8 @@ public enum AccentColor: String, Codable, CaseIterable, Sendable {
 /// 界面与连接的可调项。除监听/路径类配置外，这里的改动即时生效，
 /// 对齐 webterm “页面配置热更新” 的行为。
 public struct AppSettings: Codable, Equatable, Sendable {
+    public static let defaultScrollbackLines = 2_000
+    public var themeCustomization: ThemeCustomization
     public var appearance: AppearanceMode
     public var contrast: UIContrast
     public var accent: AccentColor
@@ -72,6 +74,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var defaultKeepaliveInterval: Int
 
     public init(
+        themeCustomization: ThemeCustomization = ThemeCustomization(),
         appearance: AppearanceMode = .system,
         contrast: UIContrast = .soft,
         accent: AccentColor = .blue,
@@ -80,7 +83,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         terminalType: String = TerminalTypes.fallback,
         fileTreeFontSize: Double = 12,
         fileTreeIconSize: Double = 13,
-        scrollbackLines: Int = 10_000,
+        scrollbackLines: Int = AppSettings.defaultScrollbackLines,
         playBellSound: Bool = false,
         followTerminalDirectory: Bool = true,
         uploadChunkBytes: Int = 8 * 1024 * 1024,
@@ -88,6 +91,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         defaultConnectTimeout: Int = 10,
         defaultKeepaliveInterval: Int = 30
     ) {
+        self.themeCustomization = themeCustomization.normalized()
         self.appearance = appearance
         self.contrast = contrast
         self.accent = accent
@@ -111,6 +115,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// 合成解码器会把缺键当成整份失败，等于用户改过的字体、主题一起清零。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        themeCustomization = ((try? c.decodeIfPresent(ThemeCustomization.self, forKey: .themeCustomization)) ?? ThemeCustomization()).normalized()
         appearance = (try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearance)) ?? .system
         contrast = (try? c.decodeIfPresent(UIContrast.self, forKey: .contrast)) ?? .soft
         accent = (try? c.decodeIfPresent(AccentColor.self, forKey: .accent)) ?? .blue
@@ -123,7 +128,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         )
         fileTreeFontSize = (try? c.decodeIfPresent(Double.self, forKey: .fileTreeFontSize)) ?? 12
         fileTreeIconSize = (try? c.decodeIfPresent(Double.self, forKey: .fileTreeIconSize)) ?? 13
-        scrollbackLines = (try? c.decodeIfPresent(Int.self, forKey: .scrollbackLines)) ?? 10_000
+        scrollbackLines = (try? c.decodeIfPresent(Int.self, forKey: .scrollbackLines)) ?? Self.defaultScrollbackLines
         playBellSound = (try? c.decodeIfPresent(Bool.self, forKey: .playBellSound)) ?? false
         followTerminalDirectory = (try? c.decodeIfPresent(Bool.self, forKey: .followTerminalDirectory)) ?? true
         uploadChunkBytes = (try? c.decodeIfPresent(Int.self, forKey: .uploadChunkBytes)) ?? 8 * 1024 * 1024
@@ -134,6 +139,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     public func normalized() -> AppSettings {
         var copy = self
+        copy.themeCustomization = themeCustomization.normalized()
         copy.terminalFontSize = min(32, max(9, terminalFontSize))
         copy.terminalType = TerminalTypes.resolved(terminalType, default: TerminalTypes.fallback)
         copy.fileTreeFontSize = min(20, max(10, fileTreeFontSize))
