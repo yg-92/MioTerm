@@ -8,20 +8,41 @@ cd "$ROOT"
 
 CONFIG="${CONFIG:-release}"
 APP_NAME="${APP_NAME:-MioTerm}"
-BUILD_DIR="$ROOT/build"
+BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 APP="$BUILD_DIR/$APP_NAME.app"
 TRASH="${HOME}/.Trash"
+
+ARCH="${ARCH:-$(uname -m)}"
+case "$ARCH" in
+  arm64|aarch64) ARCH=arm64 ;;
+  x64|amd64|x86_64) ARCH=x86_64 ;;
+  *) echo "不支持的架构：$ARCH（可选 arm64、x86_64）" >&2; exit 1 ;;
+esac
+if [[ -z "${BUILD_SYSTEM:-}" ]]; then
+  BUILD_SYSTEM=swiftbuild
+  if [[ "$ARCH" != "$(uname -m)" ]]; then
+    # native 后端分别构建宿主辅助工具与目标程序，适用于跨架构发行构建。
+    BUILD_SYSTEM=native
+  fi
+fi
+if [[ "$BUILD_SYSTEM" == "native" ]]; then
+  MINIMUM_OS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$ROOT/Resources/Info.plist")"
+  ARCH_FLAGS=(--build-system native --triple "${ARCH}-apple-macosx${MINIMUM_OS}")
+else
+  ARCH_FLAGS=(--build-system "$BUILD_SYSTEM" --arch "$ARCH")
+fi
+
+if [[ "$ARCH" == "x86_64" ]]; then
+  # 发行版最低 macOS 14 已包含 Swift 5.6 运行时；避免链接仅有 ARM 的回部署兼容库。
+  ARCH_FLAGS+=(-Xswiftc -runtime-compatibility-version -Xswiftc none)
+fi
 
 if [[ -e "$APP" ]]; then
   # 构建产物不直接删除，先挪进系统垃圾桶，避免误覆盖上一次可运行的版本。
   mkdir -p "$TRASH"
-  mv "$APP" "$TRASH/${APP_NAME}-$(date +%Y%m%d-%H%M%S).app"
+  mv "$APP" "$TRASH/${APP_NAME}-$(date +%Y%m%d-%H%M%S)-$RANDOM.app"
 fi
 
-ARCH_FLAGS=()
-if [[ "$(uname -m)" == "arm64" ]]; then
-  ARCH_FLAGS=(--arch arm64)
-fi
 
 swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
 
