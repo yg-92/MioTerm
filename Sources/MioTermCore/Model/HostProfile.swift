@@ -183,6 +183,9 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     public var terminalType: String
     /// X11 转发档位；非 SSH 协议没有 X11 概念，规范化时一律回到 off。
     public var x11Forwarding: X11Forwarding
+    /// 是否为此主机启用 SFTP 文件通道；旧配置默认保持启用。
+    public var sftpEnabled: Bool
+    public var supportsSFTP: Bool { protocolKind.supportsSFTP && sftpEnabled }
     public var favorite: Bool
     public var notes: String
     public var hostKeyAlgorithm: String
@@ -207,6 +210,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         startupDirectory: String = "",
         terminalType: String = "",
         x11Forwarding: X11Forwarding = .off,
+        sftpEnabled: Bool = true,
         favorite: Bool = false,
         notes: String = "",
         hostKeyAlgorithm: String = "",
@@ -230,6 +234,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         self.startupDirectory = startupDirectory
         self.terminalType = terminalType
         self.x11Forwarding = x11Forwarding
+        self.sftpEnabled = sftpEnabled
         self.favorite = favorite
         self.notes = notes
         self.hostKeyAlgorithm = hostKeyAlgorithm
@@ -239,7 +244,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         self.updatedAt = updatedAt
     }
 
-    /// 逐字段解码，只为给新增的 `x11Forwarding` 留一条退路。
+    /// 逐字段解码，为新增的可选功能保留旧配置兼容。
     ///
     /// 合成的解码器把缺键当成整条记录损坏，而整份 hosts.json 是一起判废的：
     /// 老文件里没有这一键，用合成解码就等于升级一次、主机列表清零一次。
@@ -261,6 +266,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         startupDirectory = try container.decode(String.self, forKey: .startupDirectory)
         terminalType = try container.decode(String.self, forKey: .terminalType)
         x11Forwarding = try container.decodeIfPresent(X11Forwarding.self, forKey: .x11Forwarding) ?? .off
+        sftpEnabled = try container.decodeIfPresent(Bool.self, forKey: .sftpEnabled) ?? true
         favorite = try container.decode(Bool.self, forKey: .favorite)
         notes = try container.decode(String.self, forKey: .notes)
         hostKeyAlgorithm = try container.decode(String.self, forKey: .hostKeyAlgorithm)

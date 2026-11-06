@@ -24,6 +24,7 @@ final class SidePanelViewController: NSViewController {
     }()
     private let content = ContainerViewController()
     private let divider = NSView()
+    private var filesAvailable = false
     private var autoSwitchedFor: UUID?
     private(set) var mode: Mode = .hosts
 
@@ -81,11 +82,12 @@ final class SidePanelViewController: NSViewController {
 
     /// 当前标签是否是能用文件面板的 SSH 会话。
     static func supportsFiles(_ controller: TerminalController?) -> Bool {
-        controller?.host?.protocolKind.supportsSFTP == true
+        controller?.host?.supportsSFTP == true
     }
 
     func bind(to controller: TerminalController?) {
         let canBrowse = Self.supportsFiles(controller)
+        filesAvailable = canBrowse
         modeSwitcher.setEnabled(canBrowse, at: Mode.files.rawValue)
         if !canBrowse {
             autoSwitchedFor = nil
@@ -108,6 +110,7 @@ final class SidePanelViewController: NSViewController {
     }
 
     func select(_ mode: Mode) {
+        guard mode != .files || filesAvailable else { return }
         guard mode != self.mode else { return }
         self.mode = mode
         modeSwitcher.selectedIndex = mode.rawValue

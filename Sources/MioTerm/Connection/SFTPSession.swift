@@ -37,9 +37,11 @@ final class SFTPSession {
 
     enum SessionError: LocalizedError {
         case notSupported(ConnectionProtocol)
+        case disabled
 
         var errorDescription: String? {
             switch self {
+            case .disabled: return "此主机已关闭 SFTP。请在主机配置中勾选连接 SFTP。"
             case .notSupported(let kind): return "\(kind.displayName) 连接不提供 SFTP 文件通道。"
             }
         }
@@ -125,6 +127,7 @@ final class SFTPSession {
 
     private func open() async throws -> SFTPClient {
         guard host.protocolKind.supportsSFTP else { throw SessionError.notSupported(host.protocolKind) }
+        guard host.sftpEnabled else { throw SessionError.disabled }
         let launch = try SSHLaunchPlanner.sftpLaunch(
             host: host,
             secrets: environment.secrets(for: host),

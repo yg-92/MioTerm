@@ -688,7 +688,7 @@ final class SFTPBrowserViewController: NSViewController {
     private func applyBinding() {
         guard let controller = boundController,
               let host = controller.host,
-              host.protocolKind.supportsSFTP,
+              host.supportsSFTP,
               let next = environment.sftpSession(for: controller) else {
             detach()
             entries = []

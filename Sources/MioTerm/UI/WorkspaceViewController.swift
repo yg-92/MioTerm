@@ -171,7 +171,7 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc func showFilePanel(_ sender: Any?) {
         guard SidePanelViewController.supportsFiles(sessions.selectedController) else {
-            AlertPresenter.notify(title: "没有可用的文件通道", message: "先连接一台 SSH 主机，再打开文件树。", in: view.window)
+            AlertPresenter.notify(title: "没有可用的文件通道", message: "请连接已启用 SFTP 的 SSH 主机；可在主机配置中勾选“连接 SFTP”。", in: view.window)
             return
         }
         mainArea.show(sessions)

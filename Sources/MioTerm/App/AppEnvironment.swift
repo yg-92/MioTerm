@@ -63,7 +63,7 @@ final class AppEnvironment {
 
     /// 懒建文件通道；非 SSH 主机返回 nil，文件面板据此显示占位文案。
     func sftpSession(for controller: TerminalController) -> SFTPSession? {
-        guard let host = controller.host, host.protocolKind.supportsSFTP else { return nil }
+        guard let host = controller.host, host.supportsSFTP else { return nil }
         if let existing = sftpSessions[controller.sessionID] { return existing }
         let session = SFTPSession(host: host, environment: self)
         sftpSessions[controller.sessionID] = session

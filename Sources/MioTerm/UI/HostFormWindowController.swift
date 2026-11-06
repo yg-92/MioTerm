@@ -27,6 +27,7 @@ final class HostFormWindowController: NSWindowController {
     private let terminalTypeField = NSComboBox()
     /// X11 转发：远端跑图形程序，窗口由本机 XQuartz 显示。
     private let x11Popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+    private let sftpCheckbox = NSButton(checkboxWithTitle: "连接 SFTP（显示文件树）", target: nil, action: nil)
     private let favoriteCheckbox = NSButton(checkboxWithTitle: "收藏", target: nil, action: nil)
     private let notesView = NSTextView()
     private let fingerprintLabel = NSTextField(labelWithString: "")
@@ -174,6 +175,7 @@ final class HostFormWindowController: NSWindowController {
             [label("启动目录"), startupDirectoryField],
             [label("终端类型"), terminalTypeField],
             [label("X11 转发"), x11Popup],
+            [NSView(), sftpCheckbox],
             [NSView(), favoriteCheckbox],
             [label("备注"), notesScroll],
             [label("已记录指纹"), fingerprintLabel],
@@ -293,6 +295,8 @@ final class HostFormWindowController: NSWindowController {
         timeoutField.stringValue = "\(host.connectTimeout)"
         keepaliveField.stringValue = "\(host.keepaliveInterval)"
         notesView.string = host.notes
+        sftpCheckbox.state = host.sftpEnabled ? .on : .off
+        sftpCheckbox.toolTip = "关闭后仅连接 SSH 终端，不建立 SFTP 通道，也不显示文件树。"
         favoriteCheckbox.state = host.favorite ? .on : .off
         fingerprintLabel.stringValue = host.hostKeyFingerprint.isEmpty
             ? "尚未确认，首次连接时会提示"
@@ -357,6 +361,7 @@ final class HostFormWindowController: NSWindowController {
         setRowHidden(keepaliveField, hidden: !isSSH)
         setRowHidden(startupDirectoryField, hidden: !isSSH)
         setRowHidden(x11Popup, hidden: !isSSH)
+        setRowHidden(sftpCheckbox, hidden: !isSSH)
         setRowHidden(fingerprintLabel, hidden: !isSSH)
 
         let method = selectedMethod
@@ -406,6 +411,7 @@ final class HostFormWindowController: NSWindowController {
         // 存空串而不是当场填上默认值：这样以后改设置里的默认，未指定的主机会跟着变。
         host.terminalType = TerminalTypes.sanitized(terminalTypeField.stringValue)
         host.x11Forwarding = selectedX11Forwarding
+        host.sftpEnabled = sftpCheckbox.state == .on
         host.favorite = favoriteCheckbox.state == .on
         host.notes = notesView.string
         if selectedProtocol == .serial {
