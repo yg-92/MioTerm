@@ -137,4 +137,37 @@ struct TerminalPaneLayoutTests {
         #expect(layout.secondary == right)
         #expect(layout.selected == right)
     }
+
+    @Test func droppingOntoTheSinglePaneKeepsItLeftAndPutsDraggedRight() {
+        var layout = TerminalPaneLayout()
+        layout.select(left)
+        layout.drop(right, onto: left, baseOnLeft: true)
+        #expect(layout.primary == left)
+        #expect(layout.secondary == right)
+        #expect(layout.isSplit)
+    }
+
+    @Test func droppingOntoTheRightPaneKeepsItRightAndPutsDraggedLeft() {
+        var layout = TerminalPaneLayout()
+        layout.pair(left, with: right)
+        layout.drop(third, onto: right, baseOnLeft: false)
+        #expect(layout.primary == third)
+        #expect(layout.secondary == right)
+    }
+
+    @Test func droppingOntoTheLeftPaneReplacesOnlyTheRightSide() {
+        var layout = TerminalPaneLayout()
+        layout.pair(left, with: right)
+        layout.drop(third, onto: left, baseOnLeft: true)
+        #expect(layout.primary == left)
+        #expect(layout.secondary == third)
+    }
+
+    @Test func droppingATabOntoItsOwnPaneDoesNothing() {
+        var layout = TerminalPaneLayout()
+        layout.pair(left, with: right)
+        layout.drop(left, onto: left, baseOnLeft: true)
+        #expect(layout.primary == left)
+        #expect(layout.secondary == right)
+    }
 }

@@ -20,6 +20,7 @@ final class SessionTabViewController: NSViewController {
     private let content = ContainerViewController()
     private let statusBar = TerminalStatusBarView()
     private let terminalSplit = TerminalSplitViewController()
+    private let splitDropOverlay = SplitDropOverlayView()
     private var paneLayout = TerminalPaneLayout()
     private let welcome = WelcomeViewController()
     private var order: [TerminalController] = []
@@ -87,7 +88,67 @@ final class SessionTabViewController: NSViewController {
             self?.showTabContextMenu(at: index, event: event, anchor: anchor)
         }
         content.show(welcome)
+        installSplitDropTarget()
         updateChrome()
+    }
+
+    /// 终端画面接受标签拖拽：落点高亮浮在内容之上，但不拦截鼠标与拖拽命中。
+    private func installSplitDropTarget() {
+        splitDropOverlay.isHidden = true
+        splitDropOverlay.layer?.zPosition = 999
+        content.view.addSubview(splitDropOverlay)
+        terminalSplit.splitView.onTabDropHint = { [weak self] id, side in
+            self?.splitDropHint(id: id, side: side)
+        }
+        terminalSplit.splitView.onTabDropPerform = { [weak self] id, side in
+            self?.performSplitDrop(id: id, side: side) ?? false
+        }
+        terminalSplit.splitView.onTabDropHighlight = { [weak self] side, hint in
+            self?.showSplitDropOverlay(side: side, hint: hint)
+        }
+        terminalSplit.splitView.onTabDropHide = { [weak self] in
+            self?.splitDropOverlay.isHidden = true
+        }
+    }
+
+    private func controller(id: UUID) -> TerminalController? {
+        order.first { $0.sessionID == id }
+    }
+
+    /// 落点所在屏的会话：未分屏时整块画面就是当前会话。
+    private func splitDropBase(side: TerminalTabDropSide) -> TerminalController? {
+        switch side {
+        case .single: return selectedController
+        case .left: return paneLayout.primary.flatMap(controller(id:))
+        case .right: return paneLayout.secondary.flatMap(controller(id:))
+        }
+    }
+
+    private func splitDropHint(id: UUID, side: TerminalTabDropSide) -> String? {
+        guard !isShowingHome, let dragged = controller(id: id),
+              let base = splitDropBase(side: side), dragged !== base else { return nil }
+        return "放开与「\(base.title)」左右分屏"
+    }
+
+    /// 被拖会话落到另一侧，落点屏的会话留在原位；已分屏时替换对面那一屏。
+    private func performSplitDrop(id: UUID, side: TerminalTabDropSide) -> Bool {
+        guard let dragged = controller(id: id), let base = splitDropBase(side: side),
+              dragged !== base else { return false }
+        paneLayout.drop(dragged.sessionID, onto: base.sessionID, baseOnLeft: side != .right)
+        presentSelection()
+        return true
+    }
+
+    private func showSplitDropOverlay(side: TerminalTabDropSide, hint: String) {
+        let splitView = terminalSplit.splitView
+        let pane: NSRect
+        switch side {
+        case .single: pane = splitView.bounds
+        case .left: pane = splitView.subviews.first?.frame ?? splitView.bounds
+        case .right: pane = splitView.subviews.dropFirst().first?.frame ?? splitView.bounds
+        }
+        splitDropOverlay.frame = content.view.convert(pane.insetBy(dx: 6, dy: 6), from: splitView)
+        splitDropOverlay.show(hint: hint)
     }
 
     func append(_ controller: TerminalController, beside baseID: UUID? = nil) {
@@ -511,7 +572,7 @@ final class SessionTabBarView: NSView {
     private var renderedSelection: Int?
     private let dragOwner = UUID()
     private let dropIndicator = NSView()
-    private static let dragType = NSPasteboard.PasteboardType("com.mio.term.session-tab")
+    static let dragType = NSPasteboard.PasteboardType("com.mio.term.session-tab")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -728,7 +789,7 @@ final class SessionTabBarView: NSView {
                 title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
                 closable: true, fixedWidth: nil
             )
-            chip.toolTip = "\(tab.tooltip)\n拖动可调整顺序，右键可与当前终端分屏，× 关闭"
+            chip.toolTip = "\(tab.tooltip)\n拖动换序，拖到终端画面分屏，右键更多，× 关闭"
             chip.dragOwner = dragOwner
             chip.onDrag = { [weak self, weak chip] event in
                 guard let self, let chip else { return }
@@ -1056,6 +1117,42 @@ final class SessionTabChip: NSView, NSDraggingSource {
         let configuration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
         return base.withSymbolConfiguration(configuration) ?? base
+    }
+}
+
+/// 拖标签分屏的落点高亮：只画不拦截，鼠标与拖拽命中都穿透到终端。
+@MainActor
+private final class SplitDropOverlayView: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 2
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.alignment = .center
+        label.textColor = .white
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func show(hint: String) {
+        label.stringValue = hint
+        layer?.backgroundColor = Theme.layerColor(Theme.accent.withAlphaComponent(0.16), for: self)
+        layer?.borderColor = Theme.layerColor(Theme.accent, for: self)
+        isHidden = false
     }
 }
 

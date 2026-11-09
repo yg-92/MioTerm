@@ -1,9 +1,14 @@
 import AppKit
 
+/// 拖标签到终端画面的落点：未分屏时整块画面是一个落点。
+enum TerminalTabDropSide {
+    case left, right, single
+}
+
 /// 两个持久槽位共享可拖动分隔带，切标签时保留分隔比例。
 @MainActor
 final class TerminalSplitViewController: NSViewController, NSSplitViewDelegate {
-    let splitView: NSSplitView = TerminalPaneSplitView(frame: NSRect(x: 0, y: 0, width: 900, height: 560))
+    let splitView = TerminalPaneSplitView(frame: NSRect(x: 0, y: 0, width: 900, height: 560))
     private let left = ContainerViewController()
     private let right = ContainerViewController()
     private var primary: NSViewController?
@@ -13,6 +18,7 @@ final class TerminalSplitViewController: NSViewController, NSSplitViewDelegate {
         splitView.isVertical = true
         splitView.dividerStyle = .thin
         splitView.delegate = self
+        splitView.registerForDraggedTypes([SessionTabBarView.dragType])
         view = splitView
         addChild(left)
         splitView.addArrangedSubview(left.view)
@@ -68,8 +74,14 @@ final class TerminalSplitViewController: NSViewController, NSSplitViewDelegate {
 }
 
 /// 留出独立的中性分隔带；整条带都能拖动，不靠活动窗格的外框制造边界。
+/// 同时是标签拖拽的落点：拖到左/右屏就把被拖会话与该屏组合分屏。
 @MainActor
-private final class TerminalPaneSplitView: NSSplitView {
+final class TerminalPaneSplitView: NSSplitView {
+    var onTabDropHint: ((UUID, TerminalTabDropSide) -> String?)?
+    var onTabDropPerform: ((UUID, TerminalTabDropSide) -> Bool)?
+    var onTabDropHighlight: ((TerminalTabDropSide, String) -> Void)?
+    var onTabDropHide: (() -> Void)?
+
     override var dividerThickness: CGFloat { 9 }
     private var dividerHovered = false
     private var hoverTracking: NSTrackingArea?
@@ -106,4 +118,46 @@ private final class TerminalPaneSplitView: NSSplitView {
         needsDisplay = true
         super.mouseExited(with: event)
     }
+
+    // MARK: 标签拖拽落点
+
+    private func tabDrop(_ sender: NSDraggingInfo) -> (id: UUID, side: TerminalTabDropSide)? {
+        guard sender.draggingSource is SessionTabChip,
+              let raw = sender.draggingPasteboard.string(forType: SessionTabBarView.dragType),
+              let id = UUID(uuidString: raw) else { return nil }
+        let point = convert(sender.draggingLocation, from: nil)
+        let side: TerminalTabDropSide
+        if subviews.count >= 2 {
+            side = point.x < subviews[0].frame.maxX ? .left : .right
+        } else {
+            side = .single
+        }
+        return (id, side)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let drop = tabDrop(sender), let hint = onTabDropHint?(drop.id, drop.side) else {
+            onTabDropHide?()
+            return []
+        }
+        onTabDropHighlight?(drop.side, hint)
+        return .move
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { onTabDropHide?() }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let drop = tabDrop(sender) else { return false }
+        return onTabDropHint?(drop.id, drop.side) != nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onTabDropHide?()
+        guard let drop = tabDrop(sender) else { return false }
+        return onTabDropPerform?(drop.id, drop.side) ?? false
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { onTabDropHide?() }
 }

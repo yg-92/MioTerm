@@ -36,6 +36,16 @@ public struct TerminalPaneLayout {
         selected = secondary
     }
 
+    /// 拖标签落屏：落点屏的会话留在原侧，被拖会话去另一侧。
+    public mutating func drop(_ dragged: UUID, onto base: UUID, baseOnLeft: Bool) {
+        guard dragged != base else { return }
+        if baseOnLeft {
+            pair(base, with: dragged)
+        } else {
+            pair(dragged, with: base)
+        }
+    }
+
     public mutating func unsplit() {
         primary = selected ?? primary
         secondary = nil
