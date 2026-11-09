@@ -8,7 +8,9 @@ final class WelcomeViewController: NSViewController {
         let root = WelcomeBackgroundView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
         view = root
 
-        let mark = BrandMarkView(frame: NSRect(x: 0, y: 0, width: 68, height: 68))
+        let mark = NSImageView()
+        mark.image = NSApp.applicationIconImage
+        mark.imageScaling = .scaleProportionallyUpOrDown
         mark.translatesAutoresizingMaskIntoConstraints = false
 
         let title = NSTextField(labelWithString: "MioTerm")
@@ -115,35 +117,6 @@ private final class WelcomeBackgroundView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
-    }
-}
-
-/// 程序化画的应用标记：渐变圆角方块，代替缺位的 bundle 图标。
-@MainActor
-private final class BrandMarkView: NSView {
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 17, yRadius: 17)
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow()
-        shadow.shadowColor = Theme.accent.withAlphaComponent(0.35)
-        shadow.shadowBlurRadius = 26
-        shadow.shadowOffset = NSSize(width: 0, height: -6)
-        shadow.set()
-        NSGradient(colors: [Theme.accentDeep, Theme.purple])?.draw(in: path, angle: -55)
-        NSGraphicsContext.restoreGraphicsState()
-
-        guard let glyph = NSImage(systemSymbolName: "terminal.fill", accessibilityDescription: nil) else { return }
-        let tinted = glyph.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 28, weight: .semibold)
-                .applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
-        ) ?? glyph
-        let size = tinted.size
-        tinted.draw(in: NSRect(
-            x: bounds.midX - size.width / 2,
-            y: bounds.midY - size.height / 2,
-            width: size.width,
-            height: size.height
-        ))
     }
 }
 
