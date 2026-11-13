@@ -7,9 +7,9 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .ssh: return "SSH"
-        case .telnet: return "Telnet"
-        case .serial: return "串口"
+        case .ssh: return L10n.tr(.protocolSSH)
+        case .telnet: return L10n.tr(.protocolTelnet)
+        case .serial: return L10n.tr(.protocolSerial)
         }
     }
 
@@ -37,9 +37,9 @@ public enum AuthMethod: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .automatic: return "自动（密钥 / agent / ssh_config）"
-        case .password: return "密码"
-        case .privateKey: return "私钥"
+        case .automatic: return L10n.tr(.authAutomatic)
+        case .password: return L10n.tr(.authPassword)
+        case .privateKey: return L10n.tr(.authPrivateKey)
         }
     }
 }
@@ -59,9 +59,9 @@ public enum X11Forwarding: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .off: return "关闭"
-        case .restricted: return "受限（-X，推荐）"
-        case .trusted: return "可信（-Y，远端可访问本机 X）"
+        case .off: return L10n.tr(.hostFormX11Off)
+        case .restricted: return L10n.tr(.hostFormX11Restricted)
+        case .trusted: return L10n.tr(.hostFormX11Trusted)
         }
     }
 

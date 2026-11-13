@@ -35,9 +35,9 @@
 
 ## 界面预览
 
-![MioTerm 主界面](docs/images/main.png)
+![MioTerm 主界面](docs/images/main-zh.jpg)
 
-![MioTerm 终端与文件管理](docs/images/view.png)
+![MioTerm 终端与文件管理](docs/images/view-zh.jpg)
 
 ## 主要功能
 

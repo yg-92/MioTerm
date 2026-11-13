@@ -1,9 +1,49 @@
 import AppKit
+import MioTermCore
 
 /// 主页：没有选中会话时的落地页。左侧仍是主机列表，
 /// 这里只放最常用的四个入口，视觉上让刚打开的窗口不至于空白。
 @MainActor
 final class WelcomeViewController: NSViewController {
+    private let subtitle = NSTextField(labelWithString: "")
+    private let hint = NSTextField(labelWithString: "")
+    private let footer = NSTextField(labelWithString: "")
+    private let localCard = WelcomeActionCard(
+        symbol: "terminal.fill",
+        title: "",
+        detail: "",
+        shortcut: "⌘T",
+        action: #selector(WorkspaceViewController.newLocalTerminal(_:))
+    )
+    private let newHostCard = WelcomeActionCard(
+        symbol: "plus.circle.fill",
+        title: "",
+        detail: "",
+        shortcut: "⌘N",
+        action: #selector(WorkspaceViewController.newHost(_:))
+    )
+    private let connectCard = WelcomeActionCard(
+        symbol: "bolt.fill",
+        title: "",
+        detail: "",
+        shortcut: "↩",
+        action: #selector(WorkspaceViewController.connectSelectedHost(_:))
+    )
+    private let settingsCard = WelcomeActionCard(
+        symbol: "gearshape.fill",
+        title: "",
+        detail: "",
+        shortcut: "⌘,",
+        action: #selector(WorkspaceViewController.showPreferences(_:))
+    )
+    private var settingsObserver: NSObjectProtocol?
+
+    deinit {
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
+    }
+
     override func loadView() {
         let root = WelcomeBackgroundView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
         view = root
@@ -18,18 +58,15 @@ final class WelcomeViewController: NSViewController {
         title.textColor = Theme.textPrimary
         title.alignment = .center
 
-        let subtitle = NSTextField(labelWithString: "原生 macOS 终端工作台 · SSH / Telnet / 串口")
         subtitle.font = .systemFont(ofSize: 13)
         subtitle.textColor = Theme.textSecondary
         subtitle.alignment = .center
 
-        let hint = NSTextField(labelWithString: "在左侧选择主机回车连接，或从下面开始")
         hint.font = .systemFont(ofSize: 12)
         hint.textColor = Theme.textTertiary
         hint.alignment = .center
 
         let cards = makeCards()
-        let footer = NSTextField(labelWithString: "⌘T 新建终端   ·   ⌘N 新增主机   ·   ⌘, 设置")
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = Theme.textTertiary
         footer.alignment = .center
@@ -53,41 +90,44 @@ final class WelcomeViewController: NSViewController {
             stack.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
             cards.widthAnchor.constraint(equalToConstant: 464),
         ])
+
+        applyLocalization()
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.applyLocalization()
+            }
+        }
+    }
+
+    private func applyLocalization() {
+        subtitle.stringValue = L10n.tr(.welcomeSubtitle)
+        hint.stringValue = L10n.tr(.welcomeHint)
+        footer.stringValue = L10n.tr(.welcomeFooter)
+        localCard.updateContent(
+            title: L10n.tr(.welcomeLocalTerminal),
+            detail: L10n.tr(.welcomeLocalTerminalDetail)
+        )
+        newHostCard.updateContent(
+            title: L10n.tr(.welcomeNewHost),
+            detail: L10n.tr(.welcomeNewHostDetail)
+        )
+        connectCard.updateContent(
+            title: L10n.tr(.welcomeConnectTitle),
+            detail: L10n.tr(.welcomeConnectDetail)
+        )
+        settingsCard.updateContent(
+            title: L10n.tr(.welcomeSettingsTitle),
+            detail: L10n.tr(.welcomeSettingsDetail)
+        )
     }
 
     private func makeCards() -> NSView {
-        let left = NSStackView(views: [
-            WelcomeActionCard(
-                symbol: "terminal.fill",
-                title: "新建本地终端",
-                detail: "打开一个本机 shell",
-                shortcut: "⌘T",
-                action: #selector(WorkspaceViewController.newLocalTerminal(_:))
-            ),
-            WelcomeActionCard(
-                symbol: "plus.circle.fill",
-                title: "新增主机",
-                detail: "SSH、Telnet 或串口",
-                shortcut: "⌘N",
-                action: #selector(WorkspaceViewController.newHost(_:))
-            ),
-        ])
-        let right = NSStackView(views: [
-            WelcomeActionCard(
-                symbol: "bolt.fill",
-                title: "连接所选主机",
-                detail: "选中左侧主机后直接连接",
-                shortcut: "↩",
-                action: #selector(WorkspaceViewController.connectSelectedHost(_:))
-            ),
-            WelcomeActionCard(
-                symbol: "gearshape.fill",
-                title: "设置",
-                detail: "字体、跟随与关闭确认",
-                shortcut: "⌘,",
-                action: #selector(WorkspaceViewController.showPreferences(_:))
-            ),
-        ])
+        let left = NSStackView(views: [localCard, newHostCard])
+        let right = NSStackView(views: [connectCard, settingsCard])
         for column in [left, right] {
             column.orientation = .vertical
             column.alignment = .leading
@@ -197,6 +237,11 @@ private final class WelcomeActionCard: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    func updateContent(title: String, detail: String) {
+        titleLabel.stringValue = title
+        detailLabel.stringValue = detail
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

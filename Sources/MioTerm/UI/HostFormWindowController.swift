@@ -19,7 +19,7 @@ final class HostFormWindowController: NSWindowController {
     private let authPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let identityField = NSTextField()
     private let secretField = NSSecureTextField()
-    private let clearSecretCheckbox = NSButton(checkboxWithTitle: "清除已保存的口令", target: nil, action: nil)
+    private let clearSecretCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormClearSecret), target: nil, action: nil)
     private let timeoutField = NSTextField()
     private let keepaliveField = NSTextField()
     private let startupDirectoryField = NSTextField()
@@ -27,8 +27,8 @@ final class HostFormWindowController: NSWindowController {
     private let terminalTypeField = NSComboBox()
     /// X11 转发：远端跑图形程序，窗口由本机 XQuartz 显示。
     private let x11Popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-    private let sftpCheckbox = NSButton(checkboxWithTitle: "连接 SFTP（显示文件树）", target: nil, action: nil)
-    private let favoriteCheckbox = NSButton(checkboxWithTitle: "收藏", target: nil, action: nil)
+    private let sftpCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormSFTPCheckbox), target: nil, action: nil)
+    private let favoriteCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormFavorite), target: nil, action: nil)
     private let notesView = NSTextView()
     private let fingerprintLabel = NSTextField(labelWithString: "")
 
@@ -39,9 +39,9 @@ final class HostFormWindowController: NSWindowController {
     private let parityPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 110, height: 24))
     private let stopBitsPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 60, height: 24))
     private let lineEndingPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
-    private let echoCheckbox = NSButton(checkboxWithTitle: "本地回显", target: nil, action: nil)
-    private let dtrCheckbox = NSButton(checkboxWithTitle: "拉高 DTR", target: nil, action: nil)
-    private let rtsCheckbox = NSButton(checkboxWithTitle: "拉高 RTS", target: nil, action: nil)
+    private let echoCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormLocalEcho), target: nil, action: nil)
+    private let dtrCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormRaiseDTR), target: nil, action: nil)
+    private let rtsCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormRaiseRTS), target: nil, action: nil)
     private let serialHintLabel = NSTextField(wrappingLabelWithString: "")
     private var serialPanel = NSGridView()
     private let identityStack = NSStackView()
@@ -83,7 +83,7 @@ final class HostFormWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = host.name.isEmpty ? "新增主机" : "编辑 \(host.name)"
+        window.title = host.name.isEmpty ? L10n.tr(.hostFormNewTitle) : L10n.tr(.hostFormEditHostTitle, host.name)
         super.init(window: window)
         buildContents()
         load(from: host)
@@ -117,18 +117,18 @@ final class HostFormWindowController: NSWindowController {
         keepaliveField.placeholderString = "30"
         terminalTypeField.addItems(withObjectValues: TerminalTypes.options)
         terminalTypeField.numberOfVisibleItems = 8
-        terminalTypeField.placeholderString = "留空则用默认：\(environment.settings.settings.terminalType)"
-        addressField.placeholderString = "host.example.com 或 192.168.1.10"
+        terminalTypeField.placeholderString = L10n.tr(.hostFormDefaultTermPlaceholder, environment.settings.settings.terminalType)
+        addressField.placeholderString = L10n.tr(.hostFormAddressPlaceholder)
         usernameField.placeholderString = NSUserName()
         startupDirectoryField.placeholderString = "/var/log"
-        tagsField.placeholderString = "逗号分隔"
-        secretField.placeholderString = "未保存"
+        tagsField.placeholderString = L10n.tr(.hostFormTagsPlaceholder)
+        secretField.placeholderString = L10n.tr(.hostFormSecretUnsaved)
         groupField.removeAllItems()
         groupField.addItems(withObjectValues: HostSorting.groupNames(environment.hosts.hosts))
         groupField.numberOfVisibleItems = 8
-        groupField.placeholderString = "选择已有分组，或直接输入新分组"
+        groupField.placeholderString = L10n.tr(.hostFormGroupPlaceholder)
 
-        let pickButton = NSButton(title: "选择…", target: self, action: #selector(pickIdentity(_:)))
+        let pickButton = NSButton(title: L10n.tr(.hostFormPickButton), target: self, action: #selector(pickIdentity(_:)))
         pickButton.bezelStyle = .rounded
         identityStack.addArrangedSubview(identityField)
         identityStack.addArrangedSubview(pickButton)
@@ -145,10 +145,10 @@ final class HostFormWindowController: NSWindowController {
         notesScroll.borderType = .bezelBorder
         notesScroll.heightAnchor.constraint(equalToConstant: 76).isActive = true
 
-        let saveButton = NSButton(title: "保存", target: self, action: #selector(save(_:)))
+        let saveButton = NSButton(title: L10n.tr(.commonSave), target: self, action: #selector(save(_:)))
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
-        let cancelButton = NSButton(title: "取消", target: self, action: #selector(cancel(_:)))
+        let cancelButton = NSButton(title: L10n.tr(.commonCancel), target: self, action: #selector(cancel(_:)))
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
         let buttons = NSStackView(views: [NSView(), saveButton, cancelButton])
@@ -158,27 +158,27 @@ final class HostFormWindowController: NSWindowController {
         serialPanel = buildSerialPanel()
 
         grid = NSGridView(views: [
-            [label("名称"), nameField],
-            [label("分组"), groupField],
-            [label("标签"), tagsField],
-            [label("协议"), protocolPopup],
+            [label(L10n.tr(.hostFormName)), nameField],
+            [label(L10n.tr(.hostFormGroup)), groupField],
+            [label(L10n.tr(.hostFormTags)), tagsField],
+            [label(L10n.tr(.hostFormProtocol)), protocolPopup],
             [NSView(), serialPanel],
-            [label("地址"), addressField],
-            [label("端口"), portField],
-            [label("用户名"), usernameField],
-            [label("认证方式"), authPopup],
-            [label("私钥文件"), identityStack],
-            [label("口令"), secretField],
+            [label(L10n.tr(.hostFormAddress)), addressField],
+            [label(L10n.tr(.hostFormPort)), portField],
+            [label(L10n.tr(.hostFormUsername)), usernameField],
+            [label(L10n.tr(.hostFormAuthMethod)), authPopup],
+            [label(L10n.tr(.hostFormIdentityFile)), identityStack],
+            [label(L10n.tr(.hostFormSecret)), secretField],
             [NSView(), clearSecretCheckbox],
-            [label("超时 (秒)"), timeoutField],
-            [label("保活 (秒)"), keepaliveField],
-            [label("启动目录"), startupDirectoryField],
-            [label("终端类型"), terminalTypeField],
-            [label("X11 转发"), x11Popup],
+            [label(L10n.tr(.hostFormTimeout)), timeoutField],
+            [label(L10n.tr(.hostFormKeepalive)), keepaliveField],
+            [label(L10n.tr(.hostFormStartupDir)), startupDirectoryField],
+            [label(L10n.tr(.hostFormTerminalType)), terminalTypeField],
+            [label(L10n.tr(.hostFormX11)), x11Popup],
             [NSView(), sftpCheckbox],
             [NSView(), favoriteCheckbox],
-            [label("备注"), notesScroll],
-            [label("已记录指纹"), fingerprintLabel],
+            [label(L10n.tr(.hostFormNotes)), notesScroll],
+            [label(L10n.tr(.hostFormFingerprint)), fingerprintLabel],
             [NSView(), buttons],
         ])
         grid.rowSpacing = 8
@@ -209,7 +209,7 @@ final class HostFormWindowController: NSWindowController {
 
     /// 串口参数只在协议为串口时显示，整块塞进一行便于统一隐藏。
     private func buildSerialPanel() -> NSGridView {
-        let refreshButton = NSButton(title: "刷新", target: self, action: #selector(refreshSerialDevices(_:)))
+        let refreshButton = NSButton(title: L10n.tr(.commonRefresh), target: self, action: #selector(refreshSerialDevices(_:)))
         refreshButton.bezelStyle = .rounded
         let deviceStack = NSStackView(views: [devicePopup, refreshButton])
         deviceStack.orientation = .horizontal
@@ -228,7 +228,7 @@ final class HostFormWindowController: NSWindowController {
         // 帧格式三个下拉并排：拆成三行会让面板比主表单还长。
         // 下拉框不写死宽度，让它们按最长条目自撑——校验位带中文说明，压窄了会截断。
         let frameStack = NSStackView(views: [
-            label("数据"), dataBitsPopup, label("校验"), parityPopup, label("停止"), stopBitsPopup,
+            label(L10n.tr(.hostFormDataBits)), dataBitsPopup, label(L10n.tr(.hostFormParity)), parityPopup, label(L10n.tr(.hostFormStopBits)), stopBitsPopup,
         ])
         frameStack.orientation = .horizontal
         frameStack.spacing = 4
@@ -245,11 +245,11 @@ final class HostFormWindowController: NSWindowController {
         serialHintLabel.widthAnchor.constraint(equalToConstant: 380).isActive = true
 
         let panel = NSGridView(views: [
-            [label("设备"), deviceStack],
-            [label("波特率"), baudField],
-            [label("帧格式"), frameStack],
-            [label("回车发送"), inputStack],
-            [label("控制线"), modemStack],
+            [label(L10n.tr(.hostFormDevice)), deviceStack],
+            [label(L10n.tr(.hostFormBaudRate)), baudField],
+            [label(L10n.tr(.hostFormFrameFormat)), frameStack],
+            [label(L10n.tr(.hostFormLineEnding)), inputStack],
+            [label(L10n.tr(.hostFormControlLines)), modemStack],
             [NSView(), serialHintLabel],
         ])
         panel.rowSpacing = 6
@@ -258,9 +258,8 @@ final class HostFormWindowController: NSWindowController {
         return panel
     }
 
-    private static let serialHintNormal =
-        "设备要插在这台 Mac 上。流控不启用；Mac 驱动不支持 Mark/Space 校验和 1.5 停止位。部分开发板会在 DTR/RTS 跳变时复位，不确定就别勾选。"
-    private static let serialHintEmpty = "没有找到串口设备：请确认 USB 转串口线已插好、驱动已安装，然后点“刷新”。"
+    private static var serialHintNormal: String { L10n.tr(.hostFormSerialHintNormal) }
+    private static var serialHintEmpty: String { L10n.tr(.hostFormSerialHintEmpty) }
 
     /// 刷新设备列表。编辑既有主机时把已保存的设备也留在列表里：
     /// 适配器临时不在（比如换了 USB 口）也不能悄悄改掉用户的配置。
@@ -296,10 +295,10 @@ final class HostFormWindowController: NSWindowController {
         keepaliveField.stringValue = "\(host.keepaliveInterval)"
         notesView.string = host.notes
         sftpCheckbox.state = host.sftpEnabled ? .on : .off
-        sftpCheckbox.toolTip = "关闭后仅连接 SSH 终端，不建立 SFTP 通道，也不显示文件树。"
+        sftpCheckbox.toolTip = L10n.tr(.hostFormSFTPTooltip)
         favoriteCheckbox.state = host.favorite ? .on : .off
         fingerprintLabel.stringValue = host.hostKeyFingerprint.isEmpty
-            ? "尚未确认，首次连接时会提示"
+            ? L10n.tr(.hostFormFingerprintUnconfirmed)
             : "\(host.hostKeyAlgorithm) · \(host.hostKeyFingerprint)"
         dataBitsPopup.selectItem(at: Self.formDataBits.firstIndex(of: host.serial.dataBits) ?? 0)
         stopBitsPopup.selectItem(at: Self.formStopBits.firstIndex(of: host.serial.stopBits) ?? 0)
@@ -311,7 +310,7 @@ final class HostFormWindowController: NSWindowController {
         rtsCheckbox.state = host.serial.rts ? .on : .off
         reloadSerialDevices(keeping: host.serial.device)
         if secretExists(host) {
-            secretField.placeholderString = "已保存，留空表示不修改"
+            secretField.placeholderString = L10n.tr(.hostFormSecretSaved)
         }
         updateRowVisibility()
     }
@@ -387,7 +386,7 @@ final class HostFormWindowController: NSWindowController {
         panel.allowsMultipleSelection = false
         panel.showsHiddenFiles = true
         panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
-        panel.message = "选择私钥文件（选私钥本身，不要选 .pub）"
+        panel.message = L10n.tr(.hostFormPickKeyMessage)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         identityField.stringValue = url.path
     }
@@ -435,7 +434,7 @@ final class HostFormWindowController: NSWindowController {
             try storeSecrets(for: saved)
             close()
         } catch {
-            AlertPresenter.fail(title: "无法保存主机", message: error.localizedDescription, in: window)
+            AlertPresenter.fail(title: L10n.tr(.hostFormSaveFailedTitle), message: error.localizedDescription, in: window)
         }
     }
 
@@ -450,7 +449,7 @@ final class HostFormWindowController: NSWindowController {
         guard !secretField.stringValue.isEmpty else { return }
         try environment.vault.setSecret(secretField.stringValue, hostID: host.id, kind: kind)
         secretField.stringValue = ""
-        secretField.placeholderString = "已保存，留空表示不修改"
+        secretField.placeholderString = L10n.tr(.hostFormSecretSaved)
     }
 
     @objc private func cancel(_ sender: NSButton) { close() }

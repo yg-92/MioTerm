@@ -29,6 +29,7 @@ final class AppEnvironment {
         logger = .shared
         hosts = HostRepository()
         settings = SettingsStore()
+        L10n.configure(preference: settings.settings.language)
         vault = KeychainVault()
         hostKeyGuard = HostKeyGuard()
         commands = CommandLibraryStore()
@@ -37,12 +38,17 @@ final class AppEnvironment {
         applyAppearance()
         settings.onChange = { [weak self] next in
             guard let self else { return }
+            let languageChanged = L10n.resolveLanguageCode(preference: next.language) != L10n.currentLanguageCode
+            L10n.configure(preference: next.language)
+            if languageChanged {
+                MenuBuilder.install()
+            }
             self.applyAppearance()
             for controller in self.sessions.values {
                 controller.apply(next)
             }
-            // 文件树的字号/图标只影响侧栏自己，不经过终端控制器；
-            // 用通知让已经打开的树就地重排，不必等切标签或重连。
+            // 文件树的字号/图标与界面语言更改只影响侧栏与各窗口，
+            // 用通知让已经打开的视图就地重排，不必等切标签或重连。
             NotificationCenter.default.post(name: .mioTermSettingsDidChange, object: next)
         }
     }

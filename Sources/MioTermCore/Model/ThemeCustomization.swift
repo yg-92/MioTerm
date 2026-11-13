@@ -6,19 +6,19 @@ public enum ThemeColorRole: String, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .background: return "整体背景"
-        case .sidebar: return "侧栏背景"
-        case .tabBar: return "标签栏背景"
-        case .surface: return "面板背景"
-        case .text: return "界面文字"
-        case .secondaryText: return "次要文字"
-        case .accent: return "强调色 / 焦点"
-        case .selectedTab: return "选中标签背景"
-        case .terminalBackground: return "终端背景"
-        case .terminalForeground: return "终端文字"
-        case .selectionBackground: return "选中文字背景"
-        case .selectionForeground: return "选中文字颜色"
-        case .cursor: return "光标颜色"
+        case .background: return L10n.tr(.themeRoleBackground)
+        case .sidebar: return L10n.tr(.themeRoleSidebar)
+        case .tabBar: return L10n.tr(.themeRoleTabBar)
+        case .surface: return L10n.tr(.themeRoleSurface)
+        case .text: return L10n.tr(.themeRoleText)
+        case .secondaryText: return L10n.tr(.themeRoleSecondaryText)
+        case .accent: return L10n.tr(.themeRoleAccent)
+        case .selectedTab: return L10n.tr(.themeRoleSelectedTab)
+        case .terminalBackground: return L10n.tr(.themeRoleTerminalBackground)
+        case .terminalForeground: return L10n.tr(.themeRoleTerminalForeground)
+        case .selectionBackground: return L10n.tr(.themeRoleSelectionBackground)
+        case .selectionForeground: return L10n.tr(.themeRoleSelectionForeground)
+        case .cursor: return L10n.tr(.themeRoleCursor)
         }
     }
 }

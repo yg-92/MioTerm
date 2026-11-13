@@ -33,7 +33,7 @@ final class ConnectionCoordinator {
             controller.start(launch)
             return controller
         } catch {
-            AlertPresenter.fail(title: "连接 \(host.displayName) 失败", message: error.localizedDescription, in: window)
+            AlertPresenter.fail(title: L10n.tr(.connectHostFailed, host.displayName), message: error.localizedDescription, in: window)
             return nil
         }
     }
@@ -42,8 +42,8 @@ final class ConnectionCoordinator {
     private func openByteStream(for host: HostProfile, in window: NSWindow?) -> TerminalController? {
         guard let stream = makeStream(for: host) else {
             // SSH 有 OpenSSH 子进程可托管，不该走到这里。
-            AlertPresenter.fail(title: "连接 \(host.displayName) 失败",
-                                message: "SSH 会话应通过子进程启动，这里是内部错误。",
+            AlertPresenter.fail(title: L10n.tr(.connectHostFailed, host.displayName),
+                                message: L10n.tr(.connectInternalSSH),
                                 in: window)
             return nil
         }
@@ -105,7 +105,7 @@ final class ConnectionCoordinator {
                 controller.start(stream)
             }
         } catch {
-            AlertPresenter.fail(title: "重新连接 \(host.displayName) 失败",
+            AlertPresenter.fail(title: L10n.tr(.connectReconnectFailed, host.displayName),
                                 message: error.localizedDescription,
                                 in: window)
         }
@@ -143,16 +143,16 @@ final class ConnectionCoordinator {
             )
             AskpassHelper.destroy(fileAt: launch.askpassFile)
             if result.succeeded {
-                AlertPresenter.notify(title: "\(host.displayName) 连接成功", message: "认证与握手均通过。", in: window)
+                AlertPresenter.notify(title: L10n.tr(.connectTestSuccessTitle, host.displayName), message: L10n.tr(.connectTestSuccessMsg), in: window)
             } else {
                 let detail = [result.errorText.trimmingCharacters(in: .whitespacesAndNewlines),
-                              "退出码 \(result.exitStatus)"]
+                              L10n.tr(.terminalProcessExitCode, result.exitStatus)]
                     .filter { !$0.isEmpty }
                     .joined(separator: "\n")
-                AlertPresenter.fail(title: "\(host.displayName) 连接失败", message: detail, in: window)
+                AlertPresenter.fail(title: L10n.tr(.connectTestFailedTitle, host.displayName), message: detail, in: window)
             }
         } catch {
-            AlertPresenter.fail(title: "测试连接失败", message: error.localizedDescription, in: window)
+            AlertPresenter.fail(title: L10n.tr(.connectTestErrorTitle), message: error.localizedDescription, in: window)
         }
     }
 
@@ -167,12 +167,12 @@ final class ConnectionCoordinator {
                 // 只枚举、不打开：很多开发板在 DTR/RTS 跳变时复位，测试连接不该有副作用。
                 let present = await Task.detached(priority: .userInitiated) { SerialDevices.isAvailable(device) }.value
                 if present {
-                    AlertPresenter.notify(title: "\(host.displayName) 设备就绪",
-                                          message: "\(device) 已被系统识别。打开终端即可，测试不会占用设备。",
+                    AlertPresenter.notify(title: L10n.tr(.connectSerialReadyTitle, host.displayName),
+                                          message: L10n.tr(.connectSerialReadyMsg, device),
                                           in: window)
                 } else {
-                    AlertPresenter.fail(title: "\(host.displayName) 找不到设备",
-                                        message: "\(device) 不在系统串口列表里，请检查连线与驱动后在表单里刷新设备列表。",
+                    AlertPresenter.fail(title: L10n.tr(.connectSerialMissingTitle, host.displayName),
+                                        message: L10n.tr(.connectSerialMissingMsg, device),
                                         in: window)
                 }
             }
@@ -191,10 +191,10 @@ final class ConnectionCoordinator {
                     }
                 }.value
                 if let outcome {
-                    AlertPresenter.fail(title: "\(host.displayName) 不可达", message: outcome, in: window)
+                    AlertPresenter.fail(title: L10n.tr(.connectUnreachableTitle, host.displayName), message: outcome, in: window)
                 } else {
-                    AlertPresenter.notify(title: "\(host.displayName) 端口可达",
-                                          message: "\(address):\(port) 能建立 TCP 连接。登录请在终端里完成。",
+                    AlertPresenter.notify(title: L10n.tr(.connectPortReachableTitle, host.displayName),
+                                          message: L10n.tr(.connectPortReachableMsg, address, port),
                                           in: window)
                 }
             }
@@ -206,18 +206,18 @@ final class ConnectionCoordinator {
         do {
             let keys = try await HostKeyProber().probe(host: host.address, port: host.port, timeout: max(3, host.connectTimeout))
             let alert = NSAlert()
-            alert.messageText = "\(host.displayName) 当前指纹"
+            alert.messageText = L10n.tr(.connectCurrentFingerprintTitle, host.displayName)
             alert.informativeText = Self.fingerprintList(keys)
             alert.alertStyle = .informational
-            alert.addButton(withTitle: "记录该指纹")
-            alert.addButton(withTitle: "取消")
+            alert.addButton(withTitle: L10n.tr(.connectRecordFingerprint))
+            alert.addButton(withTitle: L10n.tr(.commonCancel))
             let response = await AlertPresenter.present(alert, in: window)
             if response == .alertFirstButtonReturn {
                 let updated = try environment.hostKeyGuard.confirm(host: host, keys: keys)
                 try environment.hosts.recordHostKey(id: host.id, algorithm: updated.hostKeyAlgorithm, fingerprint: updated.hostKeyFingerprint)
             }
         } catch {
-            AlertPresenter.fail(title: "获取指纹失败", message: error.localizedDescription, in: window)
+            AlertPresenter.fail(title: L10n.tr(.connectFetchFingerprintFailed), message: error.localizedDescription, in: window)
         }
     }
 
@@ -235,16 +235,11 @@ final class ConnectionCoordinator {
         case .unconfirmed(let keys):
             guard !keys.isEmpty else { return false }
             let alert = NSAlert()
-            alert.messageText = "首次连接 \(host.address):\(host.port)"
-            alert.informativeText = """
-            请核对服务器指纹，确认无误后再信任。指纹不符时应当取消，\
-            因为无法区分“没见过这台机器”和“链路被中间人劫持”。
-
-            \(Self.fingerprintList(keys))
-            """
+            alert.messageText = L10n.tr(.connectFirstTimeTitle, host.address, host.port)
+            alert.informativeText = L10n.tr(.connectFirstTimeMsg, Self.fingerprintList(keys))
             alert.alertStyle = .warning
-            alert.addButton(withTitle: "信任并连接")
-            alert.addButton(withTitle: "取消")
+            alert.addButton(withTitle: L10n.tr(.connectTrustAndConnect))
+            alert.addButton(withTitle: L10n.tr(.commonCancel))
             alert.buttons.last?.keyEquivalent = "\u{1b}"
             guard await AlertPresenter.present(alert, in: window) == .alertFirstButtonReturn else { return false }
             let updated = try environment.hostKeyGuard.confirm(host: host, keys: keys)
@@ -252,19 +247,19 @@ final class ConnectionCoordinator {
             return true
         case .changed(let stored, let current):
             let alert = NSAlert()
-            alert.messageText = "服务器身份已变化"
-            alert.informativeText = """
-            \(host.address):\(host.port) 的宿主密钥与已记录的指纹不一致。
-
-            已记录：\(stored)
-            当前（\(current.algorithm) \(current.bits) 位）：\(current.fingerprint)
-
-            这可能意味着中间人攻击，也可能是服务器重装或换了密钥。\
-            若无法确认原因，请取消并联系管理员。
-            """
+            alert.messageText = L10n.tr(.connectKeyChangedTitle)
+            alert.informativeText = L10n.tr(
+                .connectKeyChangedDetailMsg,
+                host.address,
+                host.port,
+                stored,
+                current.algorithm,
+                current.bits,
+                current.fingerprint
+            )
             alert.alertStyle = .critical
-            alert.addButton(withTitle: "取消连接")
-            alert.addButton(withTitle: "我确认服务器更换了密钥")
+            alert.addButton(withTitle: L10n.tr(.connectCancelConnection))
+            alert.addButton(withTitle: L10n.tr(.connectConfirmKeyRotation))
             alert.buttons.first?.keyEquivalent = "\u{1b}"
             guard await AlertPresenter.present(alert, in: window) == .alertSecondButtonReturn else { return false }
             let updated = try environment.hostKeyGuard.confirm(host: host, keys: [current])
@@ -274,6 +269,6 @@ final class ConnectionCoordinator {
     }
 
     static func fingerprintList(_ keys: [ScannedHostKey]) -> String {
-        keys.map { "\($0.algorithm) \($0.bits) 位\n\($0.fingerprint)" }.joined(separator: "\n\n")
+        keys.map { L10n.tr(.connectKeyBitsFormat, $0.algorithm, $0.bits, $0.fingerprint) }.joined(separator: "\n\n")
     }
 }

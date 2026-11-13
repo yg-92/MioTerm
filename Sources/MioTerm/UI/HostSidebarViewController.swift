@@ -54,6 +54,13 @@ final class HostSidebarViewController: NSViewController {
     private var collapsedGroups: Set<String> = []
     /// 搜索时分组默认全部展开，收起动作单独记一份，退出搜索后恢复原状态。
     private var searchCollapsedGroups: Set<String> = []
+    private var settingsObserver: NSObjectProtocol?
+
+    deinit {
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
+    }
 
     init(repository: HostRepository) {
         self.repository = repository
@@ -87,7 +94,7 @@ final class HostSidebarViewController: NSViewController {
         outlineView.onToggleGroup = { [weak self] item in self?.toggleGroup(item) }
 
         let column = NSTableColumn(identifier: hostIdentifier)
-        column.title = "主机"
+        column.title = L10n.tr(.sidePanelHosts)
         column.resizingMask = .autoresizingMask
         outlineView.addTableColumn(column)
         outlineView.outlineTableColumn = column
@@ -97,7 +104,7 @@ final class HostSidebarViewController: NSViewController {
         scrollView.drawsBackground = false
         scrollView.backgroundColor = .clear
 
-        searchField.placeholderString = "搜索名称、地址或分组"
+        searchField.placeholderString = L10n.tr(.sidebarSearchPlaceholder)
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
         searchField.sendsSearchStringImmediately = true
@@ -148,23 +155,39 @@ final class HostSidebarViewController: NSViewController {
 
         repository.onChange = { [weak self] in self?.reload() }
         reload()
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.searchField.placeholderString = L10n.tr(.sidebarSearchPlaceholder)
+                self.addButton.toolTip = L10n.tr(.sidebarAddHost)
+                self.addButton.image?.accessibilityDescription = L10n.tr(.sidebarAddHost)
+                self.localTerminalButton.toolTip = L10n.tr(.sidebarLocalTerminal)
+                self.localTerminalButton.image?.accessibilityDescription = L10n.tr(.sidebarLocalTerminal)
+                self.outlineView.menu = self.buildMenu()
+                self.reload()
+            }
+        }
     }
 
     private func configureBottomBar() {
-        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "新增主机")
+        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: L10n.tr(.sidebarAddHost))
         addButton.isBordered = false
         addButton.contentTintColor = Theme.textSecondary
         addButton.imageScaling = .scaleProportionallyDown
-        addButton.toolTip = "新增主机"
+        addButton.toolTip = L10n.tr(.sidebarAddHost)
         addButton.target = self
         addButton.action = #selector(addHost(_:))
         addButton.translatesAutoresizingMaskIntoConstraints = false
 
-        localTerminalButton.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "新建本地终端")
+        localTerminalButton.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: L10n.tr(.sidebarLocalTerminal))
         localTerminalButton.isBordered = false
         localTerminalButton.contentTintColor = Theme.textSecondary
         localTerminalButton.imageScaling = .scaleProportionallyDown
-        localTerminalButton.toolTip = "新建本地终端"
+        localTerminalButton.toolTip = L10n.tr(.sidebarLocalTerminal)
         localTerminalButton.target = self
         localTerminalButton.action = #selector(newLocalTerminal(_:))
         localTerminalButton.translatesAutoresizingMaskIntoConstraints = false
@@ -217,9 +240,9 @@ final class HostSidebarViewController: NSViewController {
         outlineView.reloadData()
 
         let hosts = groups.reduce(0) { $0 + $1.hosts.count }
-        countLabel.stringValue = "\(hosts) 台主机"
+        countLabel.stringValue = L10n.tr(.sidebarHostCount, hosts)
         emptyLabel.isHidden = hosts > 0
-        emptyLabel.stringValue = query.isEmpty ? "还没有主机\n点左下角 + 添加一台" : "没有匹配的主机"
+        emptyLabel.stringValue = query.isEmpty ? L10n.tr(.sidebarEmptyNoHost) : L10n.tr(.sidebarEmptyNoMatch)
     }
 
     private var isSearching: Bool {
@@ -292,13 +315,13 @@ final class HostSidebarViewController: NSViewController {
 
     private func buildMenu() -> NSMenu {
         let titles: [(String, Selector)] = [
-            ("连接", #selector(connectSelected(_:))),
-            ("测试连接", #selector(testSelected(_:))),
-            ("编辑…", #selector(editSelected(_:))),
-            ("创建副本", #selector(duplicateSelected(_:))),
-            ("收藏 / 取消收藏", #selector(toggleFavoriteSelected(_:))),
-            ("刷新指纹…", #selector(refreshFingerprintSelected(_:))),
-            ("删除", #selector(deleteSelected(_:))),
+            (L10n.tr(.sidebarMenuConnect), #selector(connectSelected(_:))),
+            (L10n.tr(.sidebarMenuTest), #selector(testSelected(_:))),
+            (L10n.tr(.sidebarMenuEdit), #selector(editSelected(_:))),
+            (L10n.tr(.sidebarMenuDuplicate), #selector(duplicateSelected(_:))),
+            (L10n.tr(.sidebarMenuFavorite), #selector(toggleFavoriteSelected(_:))),
+            (L10n.tr(.sidebarMenuRefreshFingerprint), #selector(refreshFingerprintSelected(_:))),
+            (L10n.tr(.sidebarMenuDelete), #selector(deleteSelected(_:))),
         ]
         let menu = NSMenu()
         for (title, action) in titles {
@@ -584,7 +607,7 @@ final class HostGroupCell: NSTableCellView {
     func configure(name: String, count: Int, expanded: Bool) {
         chevron.image = NSImage(
             systemSymbolName: expanded ? "chevron.down" : "chevron.right",
-            accessibilityDescription: expanded ? "收起分组" : "展开分组"
+            accessibilityDescription: expanded ? L10n.tr(.sidebarCollapseGroup) : L10n.tr(.sidebarExpandGroup)
         )
         titleLabel.attributedStringValue = NSAttributedString(
             string: name,
@@ -633,7 +656,7 @@ final class HostRowCell: NSTableCellView {
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(detailLabel)
 
-        star.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "已收藏")
+        star.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: L10n.tr(.sidebarFavorited))
         star.contentTintColor = Theme.warning
         star.imageScaling = .scaleProportionallyDown
         star.translatesAutoresizingMaskIntoConstraints = false

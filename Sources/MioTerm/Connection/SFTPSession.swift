@@ -18,11 +18,11 @@ final class SFTPSession {
 
         var label: String {
             switch self {
-            case .closed: return "未连接"
-            case .connecting: return "连接中"
-            case .ready: return "已连接"
-            case .unsupported: return "服务器未启用 SFTP"
-            case .failed: return "连接失败"
+            case .closed: return L10n.tr(.sftpStateClosed)
+            case .connecting: return L10n.tr(.terminalStateStarting)
+            case .ready: return L10n.tr(.terminalStateRunning)
+            case .unsupported: return L10n.tr(.sftpNoticeTitle)
+            case .failed: return L10n.tr(.tabConnectFailed)
             }
         }
 
@@ -41,8 +41,8 @@ final class SFTPSession {
 
         var errorDescription: String? {
             switch self {
-            case .disabled: return "此主机已关闭 SFTP。请在主机配置中勾选连接 SFTP。"
-            case .notSupported(let kind): return "\(kind.displayName) 连接不提供 SFTP 文件通道。"
+            case .disabled: return L10n.tr(.sftpErrorDisabled)
+            case .notSupported(let kind): return L10n.tr(.sftpErrorNotSupported, kind.displayName)
             }
         }
     }

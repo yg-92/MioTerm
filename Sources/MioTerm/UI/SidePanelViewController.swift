@@ -1,4 +1,5 @@
 import AppKit
+import MioTermCore
 
 /// 左侧面板：主机列表与远端文件树共用一个槽位。
 /// 没会话时看主机，进入 SSH 主机后看文件，切换由会话状态驱动，也允许手动切。
@@ -13,7 +14,14 @@ final class SidePanelViewController: NSViewController {
     let hosts = HostSidebarViewController(repository: AppEnvironment.shared.hosts)
     let files = SFTPBrowserViewController()
 
-    private let modeSwitcher = CapsuleSegmentedView(titles: ["主机", "文件"])
+    private let modeSwitcher = CapsuleSegmentedView(titles: [L10n.tr(.sidePanelHosts), L10n.tr(.sidePanelFiles)])
+    private var settingsObserver: NSObjectProtocol?
+
+    deinit {
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
+    }
     /// 切换器套进系统玻璃，胶囊轨道由 NSGlassEffectView 提供，控件自己只画选中块和文字。
     private lazy var switcher: GlassBarView = {
         modeSwitcher.drawsTrack = false
@@ -38,6 +46,15 @@ final class SidePanelViewController: NSViewController {
         modeSwitcher.selectedIndex = mode.rawValue
         modeSwitcher.setEnabled(false, at: Mode.files.rawValue)
         switcher.translatesAutoresizingMaskIntoConstraints = false
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.modeSwitcher.setTitles([L10n.tr(.sidePanelHosts), L10n.tr(.sidePanelFiles)])
+            }
+        }
 
         divider.wantsLayer = true
         divider.layer?.backgroundColor = Theme.layerColor(Theme.border, for: divider)
@@ -161,7 +178,7 @@ final class CapsuleSegmentedView: NSView {
         didSet { needsDisplay = true }
     }
 
-    private let titles: [String]
+    private var titles: [String]
     private var enabledFlags: [Bool]
     private var hovered: Int?
     private var trackingAreaRef: NSTrackingArea?
@@ -175,7 +192,13 @@ final class CapsuleSegmentedView: NSView {
         super.init(frame: .zero)
         setAccessibilityElement(true)
         setAccessibilityRole(.tabGroup)
-        setAccessibilityLabel("侧栏视图")
+        setAccessibilityLabel(L10n.tr(.sidePanelAccessibility))
+    }
+
+    func setTitles(_ titles: [String]) {
+        self.titles = titles
+        setAccessibilityLabel(L10n.tr(.sidePanelAccessibility))
+        needsDisplay = true
     }
 
     required init?(coder: NSCoder) {

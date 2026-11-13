@@ -20,13 +20,13 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
 
         var label: String {
             switch self {
-            case .idle: return "未启动"
-            case .starting: return "连接中"
-            case .running: return "已连接"
+            case .idle: return L10n.tr(.terminalStateIdle)
+            case .starting: return L10n.tr(.terminalStateStarting)
+            case .running: return L10n.tr(.terminalStateRunning)
             case .exited(let code):
-                guard let code else { return "已断开" }
-                return code == 0 ? "已结束" : "已退出 (\(code))"
-            case .failed: return "启动失败"
+                guard let code else { return L10n.tr(.terminalStateDisconnected) }
+                return code == 0 ? L10n.tr(.terminalStateEnded) : L10n.tr(.terminalStateExitedWithCode, code)
+            case .failed: return L10n.tr(.terminalStateFailed)
             }
         }
     }
@@ -109,13 +109,13 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     var title: String {
         if let host { return host.displayName }
         if let remoteTitle, !remoteTitle.isEmpty { return remoteTitle }
-        guard let directory = workingDirectory else { return "本地终端" }
+        guard let directory = workingDirectory else { return L10n.tr(.terminalLocalTitle) }
         let last = (directory as NSString).lastPathComponent
         return last.isEmpty ? directory : last
     }
 
     var tooltip: String {
-        let subject = host.map { "\($0.protocolKind.displayName) · \($0.subtitle)" } ?? "本地终端"
+        let subject = host.map { "\($0.protocolKind.displayName) · \($0.subtitle)" } ?? L10n.tr(.terminalLocalTitle)
         return "\(subject) · \(state.label)"
     }
 
@@ -348,7 +348,8 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
             state = .exited(nil)
             follow.isLive = false
             follow.stop()
-            terminalView.feed(text: "\r\n\u{1B}[2m[\(title)] \(reason ?? "连接已断开")，关闭标签或重新连接\r\n\u{1B}[0m")
+            let message = L10n.tr(.terminalDisconnectPromptLine, title, reason ?? L10n.tr(.terminalStateDisconnected))
+            terminalView.feed(text: "\r\n\u{1B}[2m\(message)\r\n\u{1B}[0m")
         case .failed(let reason):
             detachStream()
             state = .failed(reason)
@@ -497,7 +498,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         remoteTitle = nil
         workingDirectory = nil
         terminalView.feed(text: "\u{1B}[?1049l\u{1B}[!p")
-        terminalView.feed(text: "\r\n\u{1B}[2m[\(title)] 重新连接…\u{1B}[0m\r\n")
+        terminalView.feed(text: "\r\n\u{1B}[2m[\(title)] \(L10n.tr(.terminalReconnectingLine))\u{1B}[0m\r\n")
     }
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
@@ -507,11 +508,12 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         follow.stop()
         let reason: String
         switch exitCode {
-        case .none: reason = "进程被信号终止"
-        case .some(0): reason = "连接正常结束"
-        case .some(let code): reason = "退出码 \(code)"
+        case .none: reason = L10n.tr(.terminalProcessSignaled)
+        case .some(0): reason = L10n.tr(.terminalProcessEnded)
+        case .some(let code): reason = L10n.tr(.terminalProcessExitCode, code)
         }
-        terminalView.feed(text: "\r\n\u{1B}[2m[\(title)] \(reason)，关闭标签或重新连接\r\n\u{1B}[0m")
+        let message = L10n.tr(.terminalDisconnectPromptLine, title, reason)
+        terminalView.feed(text: "\r\n\u{1B}[2m\(message)\r\n\u{1B}[0m")
     }
 
     func processFailedToStart(source: TerminalView, error: LocalProcessError) {
@@ -519,7 +521,8 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         state = .failed(String(describing: error))
         follow.isLive = false
         follow.stop()
-        terminalView.feed(text: "\r\n\u{1B}[31m[启动失败] \(error)\r\n\u{1B}[0m")
+        let message = L10n.tr(.terminalLaunchFailedPrefix, String(describing: error))
+        terminalView.feed(text: "\r\n\u{1B}[31m\(message)\r\n\u{1B}[0m")
     }
 
     // MARK: - TerminalViewDelegate

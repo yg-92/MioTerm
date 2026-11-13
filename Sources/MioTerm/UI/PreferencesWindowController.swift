@@ -9,6 +9,7 @@ final class PreferencesWindowController: NSWindowController {
     private let store: SettingsStore
     private var styleWindow: StylePreferencesWindowController?
 
+    private let languagePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let appearancePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let contrastPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let accentPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
@@ -20,14 +21,19 @@ final class PreferencesWindowController: NSWindowController {
     private let treeFontSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
     private let treeIconSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
     private let scrollbackField = NSTextField()
-    private let bellCheckbox = NSButton(checkboxWithTitle: "响铃", target: nil, action: nil)
-    private let followCheckbox = NSButton(checkboxWithTitle: "跟随终端当前目录（OSC 7）", target: nil, action: nil)
+    private let bellCheckbox = NSButton(checkboxWithTitle: L10n.tr(.prefBellTitle), target: nil, action: nil)
+    private let followCheckbox = NSButton(checkboxWithTitle: L10n.tr(.prefFollowDirectoryTitle), target: nil, action: nil)
     private let chunkField = NSTextField()
     private let concurrencyField = NSTextField()
     private let timeoutField = NSTextField()
     private let keepaliveField = NSTextField()
 
-    private static let labelWidth: CGFloat = 104
+    private let styleButton = NSButton(title: L10n.tr(.prefStyleButton), target: nil, action: nil)
+    private let saveButton = NSButton(title: L10n.tr(.commonSave), target: nil, action: nil)
+    private let cancelButton = NSButton(title: L10n.tr(.commonCancel), target: nil, action: nil)
+    private var localizedLabels: [(NSTextField, L10nKey)] = []
+
+    private static let labelWidth: CGFloat = 128
     private static let fontSizes: [Double] = [11, 12, 13, 14, 15, 16, 18, 20, 22, 24]
     private static let treeFontSizes: [Double] = [10, 11, 12, 13, 14, 15, 16, 18, 20]
     private static let treeIconSizes: [Double] = [11, 12, 13, 14, 16, 18, 20, 22]
@@ -59,13 +65,23 @@ final class PreferencesWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "设置"
+        window.title = L10n.tr(.preferencesTitle)
         // 窗口归控制器长期持有：关掉再打开时要能复用，不然第二次打开控件会失灵。
         window.isReleasedWhenClosed = false
         super.init(window: window)
         buildContents()
         load(store.settings)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(settingsDidChange),
+            name: .mioTermSettingsDidChange,
+            object: nil
+        )
         window.center()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
@@ -73,10 +89,12 @@ final class PreferencesWindowController: NSWindowController {
     private func buildContents() {
         guard let window else { return }
 
+        languagePopup.addItems(withTitles: AppLanguage.allCases.map { $0.displayName })
+        languagePopup.toolTip = L10n.tr(.prefLanguageHint)
         appearancePopup.addItems(withTitles: AppearanceMode.allCases.map { $0.displayName })
         contrastPopup.addItems(withTitles: UIContrast.allCases.map { $0.displayName })
         accentPopup.addItems(withTitles: AccentColor.allCases.map { $0.displayName })
-        accentPopup.toolTip = "自定义页面样式的强调色优先；在页面样式中还原该颜色后，跟随这里的选项。"
+        accentPopup.toolTip = L10n.tr(.prefAccentTooltip)
         fontPopup.addItems(withTitles: availableFonts)
         if fontPopup.itemTitles.isEmpty { fontPopup.addItem(withTitle: "Menlo Regular") }
         fontSizePopup.addItems(withTitles: Self.fontSizes.map { "\($0)" })
@@ -84,13 +102,14 @@ final class PreferencesWindowController: NSWindowController {
         treeIconSizePopup.addItems(withTitles: Self.treeIconSizes.map { "\($0)" })
         terminalTypeCombo.addItems(withObjectValues: TerminalTypes.options)
         terminalTypeCombo.numberOfVisibleItems = 8
-        terminalTypeHint.stringValue =
-            "主机留空时用这个值；远端缺对应 terminfo 会报终端不可用，换回 xterm 即可。本地终端固定 xterm-256color。"
+        terminalTypeHint.stringValue = L10n.tr(.prefTerminalTypeHint)
 
-        let saveButton = NSButton(title: "保存", target: self, action: #selector(save(_:)))
+        saveButton.target = self
+        saveButton.action = #selector(save(_:))
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
-        let cancelButton = NSButton(title: "取消", target: self, action: #selector(cancel(_:)))
+        cancelButton.target = self
+        cancelButton.action = #selector(cancel(_:))
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
         let buttons = NSStackView(views: [NSView(), saveButton, cancelButton])
@@ -101,7 +120,8 @@ final class PreferencesWindowController: NSWindowController {
             field.alignment = .left
             field.widthAnchor.constraint(equalToConstant: 140).isActive = true
         }
-        // 三个下拉框统一宽度，点开菜单时标题不会被挤成省略号。
+        // 下拉框统一宽度，点开菜单时标题不会被挤成省略号。
+        languagePopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
         appearancePopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
         contrastPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
         accentPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
@@ -114,26 +134,28 @@ final class PreferencesWindowController: NSWindowController {
         treeFontSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
         treeIconSizePopup.widthAnchor.constraint(equalToConstant: 90).isActive = true
 
-        let styleButton = NSButton(title: "页面样式…", target: self, action: #selector(openStyles(_:)))
+        styleButton.target = self
+        styleButton.action = #selector(openStyles(_:))
         styleButton.bezelStyle = .rounded
         let grid = NSGridView(views: [
-            [label("外观"), appearancePopup],
-            [label("对比度"), contrastPopup],
-            [label("强调色"), accentPopup],
-            [label("自定义配色"), styleButton],
-            [label("终端字体"), fontPopup],
-            [label("字号"), fontSizePopup],
-            [label("终端类型"), terminalTypeCombo],
+            [label(.prefLanguage), languagePopup],
+            [label(.prefAppearance), appearancePopup],
+            [label(.prefContrast), contrastPopup],
+            [label(.prefAccent), accentPopup],
+            [label(.prefCustomTheme), styleButton],
+            [label(.prefTerminalFont), fontPopup],
+            [label(.prefTerminalFontSize), fontSizePopup],
+            [label(.prefTerminalType), terminalTypeCombo],
             [NSView(), terminalTypeHint],
-            [label("目录树字号"), treeFontSizePopup],
-            [label("目录树图标"), treeIconSizePopup],
-            [label("回滚行数"), scrollbackField],
-            [label("提示音"), bellCheckbox],
-            [label("目录跟随"), followCheckbox],
-            [label("上传分片 (MB)"), chunkField],
-            [label("并发传输数"), concurrencyField],
-            [label("默认超时 (秒)"), timeoutField],
-            [label("默认保活 (秒)"), keepaliveField],
+            [label(.prefTreeFontSize), treeFontSizePopup],
+            [label(.prefTreeIconSize), treeIconSizePopup],
+            [label(.prefScrollback), scrollbackField],
+            [label(.prefBell), bellCheckbox],
+            [label(.prefFollowDirectory), followCheckbox],
+            [label(.prefUploadChunk), chunkField],
+            [label(.prefMaxConcurrent), concurrencyField],
+            [label(.prefConnectTimeout), timeoutField],
+            [label(.prefKeepalive), keepaliveField],
             [NSView(), buttons],
         ])
         grid.rowSpacing = 10
@@ -157,14 +179,56 @@ final class PreferencesWindowController: NSWindowController {
     }
 
     /// 标签与内容都靠左；固定标签列宽，右侧控件才会在同一条竖线上。
-    private func label(_ text: String) -> NSTextField {
-        let field = NSTextField(labelWithString: text)
+    private func label(_ key: L10nKey) -> NSTextField {
+        let field = NSTextField(labelWithString: L10n.tr(key))
         field.alignment = .left
         field.widthAnchor.constraint(equalToConstant: Self.labelWidth).isActive = true
+        localizedLabels.append((field, key))
         return field
     }
 
+    @objc private func settingsDidChange() {
+        applyLocalization()
+    }
+
+    private func applyLocalization() {
+        window?.title = L10n.tr(.preferencesTitle)
+        for (field, key) in localizedLabels {
+            field.stringValue = L10n.tr(key)
+        }
+        let selectedLang = languagePopup.indexOfSelectedItem
+        languagePopup.removeAllItems()
+        languagePopup.addItems(withTitles: AppLanguage.allCases.map { $0.displayName })
+        if selectedLang >= 0 { languagePopup.selectItem(at: selectedLang) }
+        languagePopup.toolTip = L10n.tr(.prefLanguageHint)
+
+        let selectedAppearance = appearancePopup.indexOfSelectedItem
+        appearancePopup.removeAllItems()
+        appearancePopup.addItems(withTitles: AppearanceMode.allCases.map { $0.displayName })
+        if selectedAppearance >= 0 { appearancePopup.selectItem(at: selectedAppearance) }
+
+        let selectedContrast = contrastPopup.indexOfSelectedItem
+        contrastPopup.removeAllItems()
+        contrastPopup.addItems(withTitles: UIContrast.allCases.map { $0.displayName })
+        if selectedContrast >= 0 { contrastPopup.selectItem(at: selectedContrast) }
+
+        let selectedAccent = accentPopup.indexOfSelectedItem
+        accentPopup.removeAllItems()
+        accentPopup.addItems(withTitles: AccentColor.allCases.map { $0.displayName })
+        if selectedAccent >= 0 { accentPopup.selectItem(at: selectedAccent) }
+        accentPopup.toolTip = L10n.tr(.prefAccentTooltip)
+
+        styleButton.title = L10n.tr(.prefStyleButton)
+        terminalTypeHint.stringValue = L10n.tr(.prefTerminalTypeHint)
+        bellCheckbox.title = L10n.tr(.prefBellTitle)
+        followCheckbox.title = L10n.tr(.prefFollowDirectoryTitle)
+        scrollbackField.toolTip = L10n.tr(.prefScrollbackTooltip)
+        saveButton.title = L10n.tr(.commonSave)
+        cancelButton.title = L10n.tr(.commonCancel)
+    }
+
     private func load(_ settings: AppSettings) {
+        languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: settings.language) ?? 0)
         appearancePopup.selectItem(at: AppearanceMode.allCases.firstIndex(of: settings.appearance) ?? 0)
         contrastPopup.selectItem(at: UIContrast.allCases.firstIndex(of: settings.contrast) ?? 0)
         accentPopup.selectItem(at: AccentColor.allCases.firstIndex(of: settings.accent) ?? 0)
@@ -183,7 +247,7 @@ final class PreferencesWindowController: NSWindowController {
             treeIconSizePopup.selectItem(withTitle: "\(nearest)")
         }
         scrollbackField.stringValue = "\(settings.scrollbackLines)"
-        scrollbackField.toolTip = "每个终端默认保留 2000 行历史；调小后立即生效，会舍弃超出上限的旧历史，当前屏幕保留。"
+        scrollbackField.toolTip = L10n.tr(.prefScrollbackTooltip)
         terminalTypeCombo.stringValue = settings.terminalType
         bellCheckbox.state = settings.playBellSound ? .on : .off
         followCheckbox.state = settings.followTerminalDirectory ? .on : .off
@@ -202,6 +266,7 @@ final class PreferencesWindowController: NSWindowController {
         let fontName = fontPopup.titleOfSelectedItem ?? "Menlo Regular"
         do {
             try store.update { settings in
+                settings.language = selected(languagePopup, AppLanguage.allCases)
                 settings.appearance = selected(appearancePopup, AppearanceMode.allCases)
                 settings.contrast = selected(contrastPopup, UIContrast.allCases)
                 settings.accent = selected(accentPopup, AccentColor.allCases)
@@ -222,7 +287,7 @@ final class PreferencesWindowController: NSWindowController {
             }
             close()
         } catch {
-            AlertPresenter.fail(title: "无法保存设置", message: error.localizedDescription, in: window)
+            AlertPresenter.fail(title: L10n.tr(.prefSaveFailedTitle), message: error.localizedDescription, in: window)
         }
     }
 

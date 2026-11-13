@@ -35,7 +35,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func presentLaunchFailure(_ error: Error) {
         let alert = NSAlert()
-        alert.messageText = "MioTerm 无法准备运行目录"
+        alert.messageText = L10n.tr(.launchDirErrorTitle)
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .critical
         alert.runModal()

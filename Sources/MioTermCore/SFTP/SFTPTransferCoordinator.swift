@@ -4,7 +4,7 @@ public enum SFTPTransferKind: String, Sendable {
     case upload
     case download
 
-    public var displayName: String { self == .upload ? "上传" : "下载" }
+    public var displayName: String { self == .upload ? L10n.tr(.sftpTransferUpload) : L10n.tr(.sftpTransferDownload) }
 }
 
 public enum SFTPTransferState: Equatable, Sendable {
@@ -17,12 +17,12 @@ public enum SFTPTransferState: Equatable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .queued: return "排队中"
-        case .running: return "传输中"
-        case .paused: return "已暂停"
-        case .cancelled: return "已取消"
-        case .completed: return "完成"
-        case .failed: return "失败"
+        case .queued: return L10n.tr(.sftpTransferQueued)
+        case .running: return L10n.tr(.sftpTransferRunning)
+        case .paused: return L10n.tr(.sftpTransferPaused)
+        case .cancelled: return L10n.tr(.sftpTransferCancelled)
+        case .completed: return L10n.tr(.sftpTransferCompleted)
+        case .failed: return L10n.tr(.sftpTransferFailed)
         }
     }
 }

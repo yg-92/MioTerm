@@ -90,6 +90,20 @@ final class SessionTabViewController: NSViewController {
         content.show(welcome)
         installSplitDropTarget()
         updateChrome()
+        NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.tabBar.refreshLocalization()
+                self.updateChrome()
+                for controller in self.tabControllers.values {
+                    controller.updateConnectionState()
+                }
+            }
+        }
     }
 
     /// 终端画面接受标签拖拽：落点高亮浮在内容之上，但不拦截鼠标与拖拽命中。
@@ -127,7 +141,7 @@ final class SessionTabViewController: NSViewController {
     private func splitDropHint(id: UUID, side: TerminalTabDropSide) -> String? {
         guard !isShowingHome, let dragged = controller(id: id),
               let base = splitDropBase(side: side), dragged !== base else { return nil }
-        return "放开与「\(base.title)」左右分屏"
+        return L10n.tr(.tabDropToSplit, base.title)
     }
 
     /// 被拖会话落到另一侧，落点屏的会话留在原位；已分屏时替换对面那一屏。
@@ -342,27 +356,27 @@ final class SessionTabViewController: NSViewController {
 
     /// 菜单按会话 ID 绑定动作，显示相同名称的连接也能通过序号和地址区分。
     func splitMenu(beside base: TerminalController) -> NSMenu {
-        let menu = NSMenu(title: "左右分屏")
+        let menu = NSMenu(title: L10n.tr(.tabSplitTip))
         menu.autoenablesItems = false
-        let caption = NSMenuItem(title: "与「\(base.title)」组合分屏", action: nil, keyEquivalent: "")
+        let caption = NSMenuItem(title: L10n.tr(.tabSplitMenuCaption, base.title), action: nil, keyEquivalent: "")
         caption.isEnabled = false
         menu.addItem(caption)
         let candidates = order.enumerated().filter { $0.element !== base }
         if candidates.isEmpty {
-            let empty = NSMenuItem(title: "暂无其他已打开的终端", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: L10n.tr(.tabSplitNoOtherOpen), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
         }
         for (index, controller) in candidates {
-            let detail = controller.host?.address ?? "本地"
+            let detail = controller.host?.address ?? L10n.tr(.tabSplitLocalDetail)
             let item = addSplitItem(to: menu, title: "\(index + 1). \(controller.title) · \(detail)",
                                     action: .existing(controller.sessionID, beside: base.sessionID))
             item.toolTip = controller.tooltip
             item.state = paneLayout.isSplit && (controller.sessionID == paneLayout.primary || controller.sessionID == paneLayout.secondary) ? .on : .off
         }
         menu.addItem(.separator())
-        let hostsItem = NSMenuItem(title: "连接主机到另一侧", action: nil, keyEquivalent: "")
-        let hostsMenu = NSMenu(title: "选择主机")
+        let hostsItem = NSMenuItem(title: L10n.tr(.tabSplitConnectHostItem), action: nil, keyEquivalent: "")
+        let hostsMenu = NSMenu(title: L10n.tr(.tabSplitSelectHostMenu))
         hostsMenu.autoenablesItems = false
         for group in environment.hosts.groups() {
             let groupItem = NSMenuItem(title: group.name, action: nil, keyEquivalent: "")
@@ -371,26 +385,26 @@ final class SessionTabViewController: NSViewController {
             for host in group.hosts {
                 let item = addSplitItem(to: groupMenu, title: "\(host.displayName) · \(host.subtitle)",
                                        action: .host(host, beside: base.sessionID))
-                item.toolTip = "新建连接，不影响已有会话"
+                item.toolTip = L10n.tr(.tabSplitNewConnTip)
             }
             groupItem.submenu = groupMenu
             hostsMenu.addItem(groupItem)
         }
         if hostsMenu.items.isEmpty {
-            let empty = NSMenuItem(title: "暂无已保存的主机，请先在主机列表新增", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: L10n.tr(.tabSplitNoSavedHosts), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             hostsMenu.addItem(empty)
         }
         hostsItem.submenu = hostsMenu
         menu.addItem(hostsItem)
         if let host = base.host {
-            addSplitItem(to: menu, title: "新建「\(host.displayName)」连接到另一侧",
+            addSplitItem(to: menu, title: L10n.tr(.tabSplitNewHostInOtherPane, host.displayName),
                          action: .host(host, beside: base.sessionID))
         }
-        addSplitItem(to: menu, title: "新建本地终端到另一侧", action: .local(beside: base.sessionID))
+        addSplitItem(to: menu, title: L10n.tr(.tabSplitNewLocalInOtherPane), action: .local(beside: base.sessionID))
         if paneLayout.isSplit {
             menu.addItem(.separator())
-            addSplitItem(to: menu, title: "退出分屏（保留会话）", action: .exit)
+            addSplitItem(to: menu, title: L10n.tr(.tabSplitExitKeepSession), action: .exit)
         }
         return menu
     }
@@ -406,13 +420,13 @@ final class SessionTabViewController: NSViewController {
         let menu = NSMenu()
         menu.autoenablesItems = false
         if let selected = selectedController, selected !== controller {
-            addSplitItem(to: menu, title: "与「\(selected.title)」左右分屏",
+            addSplitItem(to: menu, title: L10n.tr(.tabSplitWithSelected, selected.title),
                          action: .existing(controller.sessionID, beside: selected.sessionID))
         } else {
-            addSplitItem(to: menu, title: "选择终端进行分屏…", action: .choose(controller.sessionID))
+            addSplitItem(to: menu, title: L10n.tr(.tabSplitChooseTerminal), action: .choose(controller.sessionID))
         }
         menu.addItem(.separator())
-        addSplitItem(to: menu, title: "关闭标签", action: .close(controller.sessionID))
+        addSplitItem(to: menu, title: L10n.tr(.menuCloseTab), action: .close(controller.sessionID))
         return menu
     }
 
@@ -563,7 +577,7 @@ final class SessionTabBarView: NSView {
     private let separator = NSView()
     private var documentWidth: NSLayoutConstraint!
     private lazy var homeChip = SessionTabChip(
-        title: "主页", symbol: "house.fill", symbolColor: Theme.accent,
+        title: L10n.tr(.tabHome), symbol: "house.fill", symbolColor: Theme.accent,
         closable: false, fixedWidth: 84
     )
     private var chips: [SessionTabChip] = []
@@ -595,8 +609,8 @@ final class SessionTabBarView: NSView {
         addSubview(scrollView)
 
         for (button, symbol, tip, action) in [
-            (leftScrollButton, "chevron.left", "向左滚动标签", #selector(scrollTabsLeft(_:))),
-            (rightScrollButton, "chevron.right", "向右滚动标签", #selector(scrollTabsRight(_:))),
+            (leftScrollButton, "chevron.left", L10n.tr(.tabScrollLeftTip), #selector(scrollTabsLeft(_:))),
+            (rightScrollButton, "chevron.right", L10n.tr(.tabScrollRightTip), #selector(scrollTabsRight(_:))),
         ] {
             button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
             button.isBordered = false
@@ -635,11 +649,11 @@ final class SessionTabBarView: NSView {
 
         homeChip.onSelect = { [weak self] in self?.onSelect?(nil) }
 
-        plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "新建本地终端")
+        plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: L10n.tr(.sidebarLocalTerminal))
         plusButton.isBordered = false
         plusButton.imageScaling = .scaleProportionallyDown
         plusButton.contentTintColor = Theme.textSecondary
-        plusButton.toolTip = "新建本地终端"
+        plusButton.toolTip = L10n.tr(.sidebarLocalTerminal)
         plusButton.target = self
         plusButton.action = #selector(newTab(_:))
         plusButton.translatesAutoresizingMaskIntoConstraints = false
@@ -650,7 +664,7 @@ final class SessionTabBarView: NSView {
         rightStack.translatesAutoresizingMaskIntoConstraints = false
         rightStack.addArrangedSubview(rightScrollButton)
         rightStack.addArrangedSubview(modeBadge)
-        splitButton.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "左右分屏")
+        splitButton.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: L10n.tr(.tabSplitTip))
         splitButton.isBordered = false
         splitButton.contentTintColor = Theme.textSecondary
         splitButton.target = self
@@ -789,7 +803,7 @@ final class SessionTabBarView: NSView {
                 title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
                 closable: true, fixedWidth: nil
             )
-            chip.toolTip = "\(tab.tooltip)\n拖动换序，拖到终端画面分屏，右键更多，× 关闭"
+            chip.toolTip = L10n.tr(.tabChipTooltip, tab.tooltip)
             chip.dragOwner = dragOwner
             chip.onDrag = { [weak self, weak chip] event in
                 guard let self, let chip else { return }
@@ -868,11 +882,26 @@ final class SessionTabBarView: NSView {
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) { dropIndicator.isHidden = true }
 
+    func refreshLocalization() {
+        homeChip.updateTitle(L10n.tr(.tabHome))
+        leftScrollButton.toolTip = L10n.tr(.tabScrollLeftTip)
+        leftScrollButton.image?.accessibilityDescription = L10n.tr(.tabScrollLeftTip)
+        rightScrollButton.toolTip = L10n.tr(.tabScrollRightTip)
+        rightScrollButton.image?.accessibilityDescription = L10n.tr(.tabScrollRightTip)
+        plusButton.toolTip = L10n.tr(.sidebarLocalTerminal)
+        plusButton.image?.accessibilityDescription = L10n.tr(.sidebarLocalTerminal)
+        splitButton.image?.accessibilityDescription = L10n.tr(.tabSplitTip)
+        splitButton.toolTip = L10n.tr(.tabSplitButtonTip)
+        for (chip, tab) in zip(chips, renderedTabs) {
+            chip.toolTip = L10n.tr(.tabChipTooltip, tab.tooltip)
+        }
+    }
+
     func updateSplit(isSplit: Bool, enabled: Bool) {
         splitButton.isEnabled = enabled
         splitButton.contentTintColor = isSplit ? Theme.accent : Theme.textSecondary
-        splitButton.toolTip = "选择已有终端或连接主机进行分屏 · ⌘⇧D"
-        splitButton.setAccessibilityLabel(isSplit ? "配置分屏" : "选择终端进行分屏")
+        splitButton.toolTip = L10n.tr(.tabSplitButtonTip)
+        splitButton.setAccessibilityLabel(isSplit ? L10n.tr(.tabSplitConfigureAcc) : L10n.tr(.tabSplitChooseAcc))
     }
 
     @objc private func toggleSplit(_ sender: Any?) { onSplit?() }
@@ -971,7 +1000,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
         statusDot.translatesAutoresizingMaskIntoConstraints = false
         addSubview(statusDot)
 
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "关闭标签")
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: L10n.tr(.menuCloseTab))
         closeButton.isBordered = false
         closeButton.imageScaling = .scaleProportionallyDown
         closeButton.contentTintColor = Theme.textTertiary
@@ -1020,6 +1049,11 @@ final class SessionTabChip: NSView, NSDraggingSource {
     func setSelected(_ selected: Bool) {
         self.selected = selected
         updateAppearance()
+    }
+
+    func updateTitle(_ title: String) {
+        titleLabel.stringValue = title
+        closeButton.image?.accessibilityDescription = L10n.tr(.menuCloseTab)
     }
 
     func refreshAppearance() {
@@ -1256,11 +1290,11 @@ final class TerminalTabViewController: NSViewController {
         }
         switch controller.state {
         case .exited(let code):
-            banner.show(title: code == 0 ? "会话已结束" : "连接已断开",
-                        detail: code.flatMap { $0 == 0 ? nil : "退出码 \($0)" })
+            banner.show(title: code == 0 ? L10n.tr(.tabSessionEnded) : L10n.tr(.tabDisconnectTitle),
+                        detail: code.flatMap { $0 == 0 ? nil : L10n.tr(.tabExitCodeDetail, $0) })
             banner.isHidden = false
         case .failed(let reason):
-            banner.show(title: "连接失败", detail: reason)
+            banner.show(title: L10n.tr(.tabConnectFailed), detail: reason)
             banner.isHidden = false
         default:
             banner.isHidden = true
@@ -1276,7 +1310,7 @@ final class TerminalTabViewController: NSViewController {
             updateConnectionState()
             return
         }
-        banner.show(title: "正在重新连接", detail: nil)
+        banner.show(title: L10n.tr(.terminalReconnectingLine), detail: nil)
         banner.isHidden = false
     }
 
@@ -1326,7 +1360,7 @@ private final class ReconnectBannerView: NSView {
         detailLabel.isHidden = true
 
         action.onTap = { [weak self] in self?.onReconnect?() }
-        action.toolTip = "重新建立连接，保留当前标签与输出历史"
+        action.toolTip = L10n.tr(.tabReconnectTooltip)
         action.translatesAutoresizingMaskIntoConstraints = false
         addSubview(action)
 
@@ -1363,7 +1397,7 @@ private final class ReconnectBannerView: NSView {
 
     func setBusy(_ busy: Bool) {
         action.isEnabled = !busy
-        action.setTitle(busy ? "正在连接" : "重新连接")
+        action.setTitle(busy ? L10n.tr(.tabReconnectingShort) : L10n.tr(.tabReconnect))
     }
 
     func refreshAppearance() {
@@ -1395,7 +1429,7 @@ private final class ReconnectActionButton: NSView {
     }
 
     private let icon = NSImageView()
-    private let label = NSTextField(labelWithString: "重新连接")
+    private let label = NSTextField(labelWithString: L10n.tr(.tabReconnect))
     private var hovering = false
     private var pressed = false
     private var trackingAreaRef: NSTrackingArea?
@@ -1408,7 +1442,7 @@ private final class ReconnectActionButton: NSView {
         layer?.borderWidth = 1
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("重新连接")
+        setAccessibilityLabel(L10n.tr(.tabReconnect))
 
         icon.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
         icon.imageScaling = .scaleProportionallyDown
@@ -1723,12 +1757,12 @@ final class TerminalStatusBarView: NSView {
         if let host = controller.host {
             identityLabel.stringValue = "\(host.displayName) · \(host.protocolKind.displayName) · \(host.subtitle)"
         } else {
-            identityLabel.stringValue = "本地终端"
+            identityLabel.stringValue = L10n.tr(.terminalLocalTitle)
         }
 
         let directory = controller.context.displayDirectory ?? controller.workingDirectory
         hasDirectory = directory != nil
-        pathLabel.stringValue = directory ?? "目录未知"
+        pathLabel.stringValue = directory ?? L10n.tr(.tabDirectoryUnknown)
         pathLabel.toolTip = directory
         pathIcon.isHidden = directory == nil
         toolTip = controller.tooltip

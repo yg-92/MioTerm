@@ -35,9 +35,9 @@ Get a Mac and a MioTerm release package that meet the system requirements, then 
 
 ## Screenshots
 
-![MioTerm main window](../docs/images/main.png)
+![MioTerm main window](../docs/images/main-en.jpg)
 
-![MioTerm terminal and file management](../docs/images/view.png)
+![MioTerm terminal and file management](../docs/images/view-en.jpg)
 
 ## Features
 

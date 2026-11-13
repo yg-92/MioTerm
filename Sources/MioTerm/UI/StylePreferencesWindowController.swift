@@ -9,7 +9,7 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
     var onApply: ((AppSettings) -> Void)?
     private var draft = AppSettings.default
     private let presetPopup = NSPopUpButton()
-    private let mode = NSSegmentedControl(labels: ["深色配色", "浅色配色"], trackingMode: .selectOne, target: nil, action: nil)
+    private let mode = NSSegmentedControl(labels: [L10n.tr(.styleModeDarkPalette), L10n.tr(.styleModeLightPalette)], trackingMode: .selectOne, target: nil, action: nil)
     private let fontPopup = NSPopUpButton()
     private let sizePopup = NSPopUpButton()
     private let preview = StylePreviewView()
@@ -22,7 +22,7 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
         self.store = store
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 930, height: 650),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.title = "页面样式"
+        window.title = L10n.tr(.styleWindowTitle)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         build()
@@ -76,15 +76,15 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
         controls.spacing = 10
         controls.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(controls)
-        presetPopup.addItems(withTitles: ["当前自定义"] + ThemePreset.allCases.map(\.displayName))
+        presetPopup.addItems(withTitles: [L10n.tr(.styleCustomPreset)] + ThemePreset.allCases.map(\.displayName))
         presetPopup.target = self
         presetPopup.action = #selector(presetChanged(_:))
         presetPopup.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        controls.addArrangedSubview(row("主题预设", [presetPopup]))
+        controls.addArrangedSubview(row(L10n.tr(.stylePresetLabel), [presetPopup]))
         mode.target = self
         mode.action = #selector(modeChanged(_:))
         controls.addArrangedSubview(mode)
-        let hint = NSTextField(wrappingLabelWithString: "深浅模式分别保存；未自定义的项目跟随现有主题。点击色块取色，或输入 #RRGGBB。")
+        let hint = NSTextField(wrappingLabelWithString: L10n.tr(.styleColorHint))
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.widthAnchor.constraint(equalToConstant: 346).isActive = true
@@ -101,11 +101,11 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
             field.delegate = self
             field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
             field.widthAnchor.constraint(equalToConstant: 86).isActive = true
-            field.setAccessibilityLabel(role.displayName + "十六进制颜色")
+            field.setAccessibilityLabel(L10n.tr(.styleHexAccessibility, role.displayName))
             well.setAccessibilityLabel(role.displayName)
-            let reset = button("还原", #selector(resetColor(_:)))
+            let reset = button(L10n.tr(.styleResetItem), #selector(resetColor(_:)))
             reset.tag = index
-            reset.setAccessibilityLabel(role.displayName + "恢复默认")
+            reset.setAccessibilityLabel(L10n.tr(.styleResetAccessibility, role.displayName))
             reset.controlSize = .small
             wells[role] = well
             fields[role] = field
@@ -120,23 +120,23 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
         sizePopup.addItems(withTitles: ["11", "12", "13", "14", "15", "16", "18", "20", "24", "28", "32"])
         sizePopup.target = self
         sizePopup.action = #selector(fontChanged(_:))
-        controls.addArrangedSubview(row("终端字体", [fontPopup]))
-        controls.addArrangedSubview(row("终端字号", [sizePopup]))
-        let footer = NSStackView(views: [button("导入配色…", #selector(importTheme(_:))),
-                                         button("导出配色…", #selector(exportTheme(_:))), NSView(),
-                                         button("恢复默认配色", #selector(resetAll(_:))),
-                                         button("取消", #selector(cancel(_:))),
-                                         button("应用", #selector(apply(_:))),
-                                         button("完成", #selector(done(_:)))])
-        for case let button as NSButton in footer.arrangedSubviews {
-            if button.title == "完成" { button.keyEquivalent = "\r" }
-            if button.title == "取消" { button.keyEquivalent = "\u{1b}" }
-        }
+        controls.addArrangedSubview(row(L10n.tr(.prefTerminalFont), [fontPopup]))
+        controls.addArrangedSubview(row(L10n.tr(.prefTerminalFontSize), [sizePopup]))
+        let doneButton = button(L10n.tr(.commonDone), #selector(done(_:)))
+        doneButton.keyEquivalent = "\r"
+        let cancelButton = button(L10n.tr(.commonCancel), #selector(cancel(_:)))
+        cancelButton.keyEquivalent = "\u{1b}"
+        let footer = NSStackView(views: [button(L10n.tr(.styleImport), #selector(importTheme(_:))),
+                                         button(L10n.tr(.styleExport), #selector(exportTheme(_:))), NSView(),
+                                         button(L10n.tr(.styleResetAll), #selector(resetAll(_:))),
+                                         cancelButton,
+                                         button(L10n.tr(.commonApply), #selector(apply(_:))),
+                                         doneButton])
         footer.orientation = .horizontal
         footer.spacing = 8
-        let previewTitle = NSTextField(labelWithString: "实时预览")
+        let previewTitle = NSTextField(labelWithString: L10n.tr(.stylePreviewTitle))
         previewTitle.font = .systemFont(ofSize: 15, weight: .semibold)
-        let previewHint = NSTextField(wrappingLabelWithString: "预览不会执行命令。点击“应用”后，所有已打开的终端和界面一起更新。")
+        let previewHint = NSTextField(wrappingLabelWithString: L10n.tr(.stylePreviewHint))
         previewHint.font = .systemFont(ofSize: 12)
         previewHint.textColor = .secondaryLabelColor
         for child in [scroll, previewTitle, previewHint, preview, footer] {
@@ -239,7 +239,7 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
     private func finishColorEditing() -> Bool {
         window?.makeFirstResponder(nil)
         guard fields.values.allSatisfy({ ThemeRGB(hex: $0.stringValue) != nil }) else {
-            AlertPresenter.fail(title: "颜色格式不正确", message: "请输入六位十六进制颜色，例如 #243447。", in: window)
+            AlertPresenter.fail(title: L10n.tr(.styleInvalidColorTitle), message: L10n.tr(.styleInvalidColorMsg), in: window)
             return false
         }
         return true
@@ -254,7 +254,7 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
             }
             onApply?(store.settings)
             return true
-        } catch { AlertPresenter.fail(title: "保存样式失败", message: error.localizedDescription, in: window); return false }
+        } catch { AlertPresenter.fail(title: L10n.tr(.styleSaveFailedTitle), message: error.localizedDescription, in: window); return false }
     }
     @objc private func apply(_ sender: Any?) { _ = save() }
     @objc private func done(_ sender: Any?) { if save() { close() } }
@@ -271,7 +271,7 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
             draft.themeCustomization = try ThemeCustomization.imported(from: data)
             presetPopup.selectItem(at: 0)
             reloadColors()
-        } catch { AlertPresenter.fail(title: "导入配色失败", message: error.localizedDescription, in: window) }
+        } catch { AlertPresenter.fail(title: L10n.tr(.styleImportFailedTitle), message: error.localizedDescription, in: window) }
     }
     @objc private func exportTheme(_ sender: Any?) {
         guard finishColorEditing() else { return }
@@ -280,7 +280,7 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
         panel.nameFieldStringValue = "MioTerm-theme.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try draft.themeCustomization.exportedData().write(to: url, options: .atomic) }
-        catch { AlertPresenter.fail(title: "导出配色失败", message: error.localizedDescription, in: window) }
+        catch { AlertPresenter.fail(title: L10n.tr(.styleExportFailedTitle), message: error.localizedDescription, in: window) }
     }
     override func close() {
         for well in wells.values { well.deactivate() }
@@ -310,13 +310,13 @@ private final class StylePreviewView: NSView {
         fill(.tabBar, NSRect(x: 0, y: 0, width: bounds.width, height: 40))
         fill(.selectedTab, NSRect(x: 12, y: 7, width: 138, height: 28))
         let ui = NSFont.systemFont(ofSize: 11, weight: .medium)
-        text("●  开发服务器", x: 22, y: 14, role: .text, font: ui)
-        text("本地终端", x: 170, y: 14, role: .secondaryText, font: ui)
+        text(L10n.tr(.stylePreviewDevServer), x: 22, y: 14, role: .text, font: ui)
+        text(L10n.tr(.stylePreviewLocalTerm), x: 170, y: 14, role: .secondaryText, font: ui)
         fill(.sidebar, NSRect(x: 0, y: 41, width: 112, height: bounds.height - 41))
-        text("主机列表", x: 14, y: 56, role: .secondaryText, font: ui)
+        text(L10n.tr(.stylePreviewHostList), x: 14, y: 56, role: .secondaryText, font: ui)
         fill(.surface, NSRect(x: 7, y: 84, width: 98, height: 28))
-        text("●  开发环境", x: 14, y: 93, role: .accent, font: ui)
-        text("生产环境", x: 24, y: 134, role: .text, font: ui)
+        text(L10n.tr(.stylePreviewDevEnv), x: 14, y: 93, role: .accent, font: ui)
+        text(L10n.tr(.stylePreviewProdEnv), x: 24, y: 134, role: .text, font: ui)
         fill(.terminalBackground, NSRect(x: 113, y: 41, width: bounds.width - 113, height: bounds.height - 41))
         let font = NSFont(name: settings.terminalFontName, size: CGFloat(settings.terminalFontSize)) ?? .monospacedSystemFont(ofSize: CGFloat(settings.terminalFontSize), weight: .regular)
         let x: CGFloat = 128

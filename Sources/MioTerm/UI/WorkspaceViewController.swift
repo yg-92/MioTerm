@@ -68,6 +68,16 @@ final class WorkspaceViewController: NSSplitViewController {
         }
         // 标签栏与主页都归会话控制器管：没有选中会话时它自己显示欢迎页。
         mainArea.show(sessions)
+        NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.updateTitlebar(for: self.contextController)
+            }
+        }
     }
 
     /// viewDidLoad 时视图还没进窗口，折叠态只能等 appear 以后再挂关闭钩子。
@@ -160,7 +170,7 @@ final class WorkspaceViewController: NSSplitViewController {
         guard let window = view.window else { return }
         guard let controller else {
             window.title = "MioTerm"
-            window.subtitle = "主页 · 主机列表"
+            window.subtitle = L10n.tr(.workspaceHomeSubtitle)
             return
         }
         window.title = controller.title
@@ -171,7 +181,11 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc func showFilePanel(_ sender: Any?) {
         guard SidePanelViewController.supportsFiles(sessions.selectedController) else {
-            AlertPresenter.notify(title: "没有可用的文件通道", message: "请连接已启用 SFTP 的 SSH 主机；可在主机配置中勾选“连接 SFTP”。", in: view.window)
+            AlertPresenter.notify(
+                title: L10n.tr(.workspaceNoSFTPTitle),
+                message: L10n.tr(.workspaceNoSFTPMsg),
+                in: view.window
+            )
             return
         }
         mainArea.show(sessions)
@@ -274,7 +288,11 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc func connectSelectedHost(_ sender: Any?) {
         guard let host = sidebar.selectedHost else {
-            AlertPresenter.notify(title: "未选择主机", message: "先在左侧列表里选中一台主机。", in: view.window)
+            AlertPresenter.notify(
+                title: L10n.tr(.workspaceNoHostSelectedTitle),
+                message: L10n.tr(.workspaceNoHostSelectedMsg),
+                in: view.window
+            )
             return
         }
         connect(host: host)
@@ -301,9 +319,11 @@ final class WorkspaceViewController: NSSplitViewController {
     /// 断线后原地重连：标签位置、滚动历史和当前目录都不动，换掉的只有传输通道。
     private func reconnect(_ controller: TerminalController) {
         guard !controller.state.isAlive else {
-            AlertPresenter.notify(title: "会话仍在运行",
-                                  message: "先关闭当前标签或等它结束，再重新连接。",
-                                  in: view.window)
+            AlertPresenter.notify(
+                title: L10n.tr(.workspaceSessionRunningTitle),
+                message: L10n.tr(.workspaceSessionRunningMsg),
+                in: view.window
+            )
             return
         }
         guard !reconnectingSessions.contains(controller.sessionID) else { return }
@@ -397,7 +417,11 @@ final class WorkspaceViewController: NSSplitViewController {
             sidebar.reload()
             presentHostForm(copy)
         } catch {
-            AlertPresenter.fail(title: "创建副本失败", message: error.localizedDescription, in: view.window)
+            AlertPresenter.fail(
+                title: L10n.tr(.workspaceDuplicateFailedTitle),
+                message: error.localizedDescription,
+                in: view.window
+            )
         }
     }
 
@@ -413,11 +437,11 @@ final class WorkspaceViewController: NSSplitViewController {
 
     private func delete(host: HostProfile) {
         let alert = NSAlert()
-        alert.messageText = "删除 “\(host.displayName)”？"
-        alert.informativeText = "主机配置与保存在 Keychain 里的凭据都会一并清除，known_hosts 中的记录保留。"
+        alert.messageText = L10n.tr(.workspaceDeleteHostTitle, host.displayName)
+        alert.informativeText = L10n.tr(.workspaceDeleteHostMsg)
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "删除")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L10n.tr(.commonDelete))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
@@ -427,7 +451,11 @@ final class WorkspaceViewController: NSSplitViewController {
             environment.commands.prune(validScopes: Set(environment.hosts.hosts.map(\.id)))
             sidebar.reload()
         } catch {
-            AlertPresenter.fail(title: "删除失败", message: error.localizedDescription, in: view.window)
+            AlertPresenter.fail(
+                title: L10n.tr(.workspaceDeleteFailedTitle),
+                message: error.localizedDescription,
+                in: view.window
+            )
         }
     }
 
@@ -497,7 +525,7 @@ extension WorkspaceViewController: NSMenuItemValidation {
             // 只有在跑完了才给重连；运行中的会话不该被 ⌘R 悄悄换掉。
             return sessions.selectedController.map { !$0.state.isAlive } ?? false
         case #selector(configureTerminalSplit(_:)):
-            menuItem.title = sessions.isSplit ? "配置分屏…" : "左右分屏…"
+            menuItem.title = sessions.isSplit ? L10n.tr(.menuConfigureSplit) : L10n.tr(.menuSplitLeftRight)
             menuItem.state = sessions.isSplit ? .on : .off
             return sessions.selectedController != nil
         case #selector(closeTerminalTab(_:)):

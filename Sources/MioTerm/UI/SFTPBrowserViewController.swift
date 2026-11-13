@@ -51,10 +51,10 @@ final class SFTPBrowserViewController: NSViewController {
     /// 每个标签单独的跟随开关：全局设置管默认，临时不想被终端拽走时在这里关掉。
     private let followToggle = FollowToggleButton()
     private let retryButton = NSButton()
-    private let statusLabel = NSTextField(labelWithString: "未选择 SSH 会话")
+    private let statusLabel = NSTextField(labelWithString: L10n.tr(.sftpNoSession))
     /// 远端拒绝 SFTP 子系统时，在列表的位置给出说明；这种情况不该弹错误框。
     private let noticeStack = NSStackView()
-    private let noticeTitle = NSTextField(labelWithString: "服务器未启用 SFTP 文件服务")
+    private let noticeTitle = NSTextField(labelWithString: L10n.tr(.sftpNoticeTitle))
     private let noticeDetail = NSTextField(wrappingLabelWithString: "")
     private let transferTable = NSTableView()
     private let transferScroll = NSScrollView()
@@ -175,11 +175,11 @@ final class SFTPBrowserViewController: NSViewController {
 
     private func configureChrome() {
         for (button, symbol, tip, action) in [
-            (refreshButton, "arrow.clockwise", "重新读取当前目录", #selector(reloadTree)),
-            (goToButton, "arrow.right.circle", "打开指定目录…", #selector(goToDirectory)),
-            (newFolderButton, "folder.badge.plus", "在选中目录下新建文件夹", #selector(createDirectory)),
-            (uploadButton, "arrow.up.doc", "上传文件到选中目录", #selector(uploadFiles)),
-            (downloadButton, "arrow.down.doc", "下载选中文件到本地", #selector(downloadSelected)),
+            (refreshButton, "arrow.clockwise", L10n.tr(.sftpRefreshTip), #selector(reloadTree)),
+            (goToButton, "arrow.right.circle", L10n.tr(.sftpGoToTip), #selector(goToDirectory)),
+            (newFolderButton, "folder.badge.plus", L10n.tr(.sftpNewFolderTip), #selector(createDirectory)),
+            (uploadButton, "arrow.up.doc", L10n.tr(.sftpUploadTip), #selector(uploadFiles)),
+            (downloadButton, "arrow.down.doc", L10n.tr(.sftpDownloadTip), #selector(downloadSelected)),
         ] {
             button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
             button.imagePosition = .imageOnly
@@ -192,20 +192,60 @@ final class SFTPBrowserViewController: NSViewController {
         Self.applyActionAppearance(to: hiddenToggle)
         hiddenToggle.target = self
         hiddenToggle.action = #selector(toggleHidden)
-        hiddenToggle.toolTip = "显示 / 隐藏以点开头的文件"
+        hiddenToggle.toolTip = L10n.tr(.sftpHiddenTip)
         updateHiddenToggleAppearance()
 
         followToggle.target = self
         followToggle.action = #selector(toggleFollow)
-        followToggle.toolTip = "文件列表跟着终端的 cd 走；关掉后终端再换目录也不影响这里"
+        followToggle.toolTip = L10n.tr(.sftpFollowTooltip)
 
-        retryButton.title = "重试"
+        retryButton.title = L10n.tr(.sftpRetry)
         retryButton.bezelStyle = .recessed
         retryButton.controlSize = .mini
         retryButton.target = self
         retryButton.action = #selector(reconnectChannel)
-        retryButton.toolTip = "重新建立文件通道"
+        retryButton.toolTip = L10n.tr(.sftpRetryTooltip)
         retryButton.isHidden = true
+
+        NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshLocalization()
+            }
+        }
+    }
+
+    private func refreshLocalization() {
+        refreshButton.toolTip = L10n.tr(.sftpRefreshTip)
+        refreshButton.image?.accessibilityDescription = L10n.tr(.sftpRefreshTip)
+        goToButton.toolTip = L10n.tr(.sftpGoToTip)
+        goToButton.image?.accessibilityDescription = L10n.tr(.sftpGoToTip)
+        newFolderButton.toolTip = L10n.tr(.sftpNewFolderTip)
+        newFolderButton.image?.accessibilityDescription = L10n.tr(.sftpNewFolderTip)
+        uploadButton.toolTip = L10n.tr(.sftpUploadTip)
+        uploadButton.image?.accessibilityDescription = L10n.tr(.sftpUploadTip)
+        downloadButton.toolTip = L10n.tr(.sftpDownloadTip)
+        downloadButton.image?.accessibilityDescription = L10n.tr(.sftpDownloadTip)
+        hiddenToggle.toolTip = L10n.tr(.sftpHiddenTip)
+        updateHiddenToggleAppearance()
+        followToggle.refreshLocalization()
+        retryButton.title = L10n.tr(.sftpRetry)
+        retryButton.toolTip = L10n.tr(.sftpRetryTooltip)
+        noticeTitle.stringValue = L10n.tr(.sftpNoticeTitle)
+        noticeDetail.stringValue = L10n.tr(.sftpNoticeDetail)
+        fileTable.tableColumns.first?.title = L10n.tr(.hostFormName)
+        transferTable.tableColumns.first?.title = L10n.tr(.sftpJobColumn)
+        fileTable.menu = makeFileMenu()
+        transferTable.menu = makeTransferMenu()
+        if let session {
+            render(state: session.state)
+        } else {
+            statusLabel.stringValue = Self.placeholder(for: boundController, host: boundController?.host)
+        }
+        transferTable.reloadData()
     }
 
     /// 玻璃栏里的按钮只画图标，尺寸由 FileActionRow 按面板宽度分配。
@@ -217,7 +257,7 @@ final class SFTPBrowserViewController: NSViewController {
     private func updateHiddenToggleAppearance() {
         hiddenToggle.image = NSImage(
             systemSymbolName: showHidden ? "eye" : "eye.slash",
-            accessibilityDescription: "显示隐藏文件"
+            accessibilityDescription: L10n.tr(.sftpHiddenTip)
         )
         hiddenToggle.restingTint = showHidden ? Theme.accent : Theme.textSecondary
     }
@@ -239,14 +279,7 @@ final class SFTPBrowserViewController: NSViewController {
         noticeTitle.textColor = Theme.textPrimary
         noticeTitle.alignment = .center
 
-        noticeDetail.stringValue = """
-        当前服务器拒绝了 SFTP 子系统请求，文件列表无法读取。
-        你仍可以在右侧终端里直接操作文件。
-
-        若需要文件面板，请在服务器上启用 sftp-server
-        （OpenSSH 通常自带，配置 Subsystem sftp 即可），
-        然后点状态行的「重试」。
-        """
+        noticeDetail.stringValue = L10n.tr(.sftpNoticeDetail)
         noticeDetail.font = .systemFont(ofSize: 11)
         noticeDetail.textColor = Theme.textSecondary
         noticeDetail.alignment = .center
@@ -367,7 +400,7 @@ final class SFTPBrowserViewController: NSViewController {
                 let client = try await session.ensureClient()
                 requestListing(try await client.realpath(path))
             } catch {
-                AlertPresenter.fail(title: "打开目录失败", message: error.localizedDescription, in: view.window)
+                AlertPresenter.fail(title: L10n.tr(.sftpErrorOpenDir), message: error.localizedDescription, in: view.window)
             }
         }
     }
@@ -389,7 +422,7 @@ final class SFTPBrowserViewController: NSViewController {
         fileTable.registerForDraggedTypes([.fileURL])
 
         let name = NSTableColumn(identifier: Self.nameColumn)
-        name.title = "名称"
+        name.title = L10n.tr(.hostFormName)
         name.minWidth = 80
         name.resizingMask = .autoresizingMask
         fileTable.addTableColumn(name)
@@ -404,7 +437,7 @@ final class SFTPBrowserViewController: NSViewController {
         transferTable.delegate = self
         transferTable.menu = transferMenu
         let job = NSTableColumn(identifier: Self.jobColumn)
-        job.title = "任务"
+        job.title = L10n.tr(.sftpJobColumn)
         job.resizingMask = .autoresizingMask
         transferTable.addTableColumn(job)
     }
@@ -418,29 +451,32 @@ final class SFTPBrowserViewController: NSViewController {
         fileTable.sizeLastColumnToFit()
     }
 
-    private lazy var fileMenu: NSMenu = {
-        let menu = NSMenu()
-        menu.delegate = self
-        menu.addItem(menuItem("下载", #selector(downloadSelected)))
-        menu.addItem(menuItem("复制路径", #selector(copyPaths)))
-        menu.addItem(menuItem("路径填入终端", #selector(insertPathsIntoTerminal)))
-        menu.addItem(.separator())
-        menu.addItem(menuItem("新建文件夹…", #selector(createDirectory)))
-        menu.addItem(menuItem("重命名…", #selector(renameSelected)))
-        menu.addItem(menuItem("删除", #selector(deleteSelected)))
-        return menu
-    }()
+    private lazy var fileMenu: NSMenu = makeFileMenu()
+    private lazy var transferMenu: NSMenu = makeTransferMenu()
 
-    private lazy var transferMenu: NSMenu = {
+    private func makeFileMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(menuItem("暂停", #selector(pauseTransfer(_:))))
-        menu.addItem(menuItem("继续", #selector(resumeTransfer(_:))))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuDownload), #selector(downloadSelected)))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuCopyPath), #selector(copyPaths)))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuInsertPath), #selector(insertPathsIntoTerminal)))
         menu.addItem(.separator())
-        menu.addItem(menuItem("取消", #selector(cancelTransfer(_:))))
-        menu.addItem(menuItem("清除已完成", #selector(clearFinishedTransfers)))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuNewFolder), #selector(createDirectory)))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuRename), #selector(renameSelected)))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuDelete), #selector(deleteSelected)))
         return menu
-    }()
+    }
+
+    private func makeTransferMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.addItem(menuItem(L10n.tr(.sftpMenuPause), #selector(pauseTransfer(_:))))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuResume), #selector(resumeTransfer(_:))))
+        menu.addItem(.separator())
+        menu.addItem(menuItem(L10n.tr(.sftpMenuCancel), #selector(cancelTransfer(_:))))
+        menu.addItem(menuItem(L10n.tr(.sftpMenuClearFinished), #selector(clearFinishedTransfers)))
+        return menu
+    }
 
     /// 面板内的菜单项一律显式指向本控制器，避免右键时靠响应链撞到终端视图。
     private func menuItem(_ title: String, _ action: Selector) -> NSMenuItem {
@@ -481,7 +517,7 @@ final class SFTPBrowserViewController: NSViewController {
             entries = []
             currentDirectory = nil
             lastUploadDirectory = nil
-            resetContent("未选择会话")
+            resetContent(L10n.tr(.cmdNoSession))
             return
         }
         // 视图没进窗口就建通道等于白起一个 ssh 子进程，等 viewDidAppear 再连。
@@ -604,19 +640,19 @@ final class SFTPBrowserViewController: NSViewController {
             // 远端 shell 既不报 OSC 7、提示符里也没有路径时，跟随确实无从下手，
             // 与其默默不动，不如把原因说出来。主目录问不出来是另一种情况，别混为一谈。
             if homeUnresolvable && context.promptHomeHint != nil {
-                statusLabel.stringValue = "问不出远端主目录，`~` 跟随不了（点刷新可重试）"
+                statusLabel.stringValue = L10n.tr(.sftpFollowUnavailableHome)
             } else if let name = context.promptBasename {
                 // 提示符只报了末级目录名（PS1 的 `\W`）：名字读到了，但拼不出全路径。
-                statusLabel.stringValue = "终端只报了目录名「\(name)」，定位不到绝对路径"
+                statusLabel.stringValue = L10n.tr(.sftpFollowRelativeName, name)
             } else {
-                statusLabel.stringValue = "终端未上报目录，暂时无法跟随"
+                statusLabel.stringValue = L10n.tr(.sftpFollowMissingDir)
             }
         case .idle:
             // 从容器里 exit 回来时目录往往没变，但状态行还挂着“暂停跟随”，
             // 必须换回普通状态，否则看起来像列表卡住了。
             if isPausedByTerminal, context.followAllowed {
                 isPausedByTerminal = false
-                statusLabel.stringValue = session?.state == .ready ? "已连接" : "未连接"
+                statusLabel.stringValue = session?.state == .ready ? L10n.tr(.terminalStateRunning) : L10n.tr(.sftpStateClosed)
             }
         case .channelNotReady, .resolveHome:
             break
@@ -721,9 +757,9 @@ final class SFTPBrowserViewController: NSViewController {
     }
 
     private static func placeholder(for controller: TerminalController?, host: HostProfile?) -> String {
-        if controller == nil { return "未选择会话" }
-        guard let host else { return "本地终端没有文件通道" }
-        return "\(host.protocolKind.displayName) 连接不提供文件面板"
+        if controller == nil { return L10n.tr(.cmdNoSession) }
+        guard let host else { return L10n.tr(.sftpLocalNoChannel) }
+        return L10n.tr(.sftpProtocolNoPanel, host.protocolKind.displayName)
     }
 
     private func detach() {
@@ -747,10 +783,10 @@ final class SFTPBrowserViewController: NSViewController {
     private func render(state: SFTPSession.State) {
         setNoticeVisible(false)
         switch state {
-        case .closed: statusLabel.stringValue = "未连接"
-        case .connecting: statusLabel.stringValue = "正在打开文件通道…"
+        case .closed: statusLabel.stringValue = L10n.tr(.sftpStateClosed)
+        case .connecting: statusLabel.stringValue = L10n.tr(.sftpOpeningChannel)
         case .ready:
-            statusLabel.stringValue = "已连接"
+            statusLabel.stringValue = L10n.tr(.terminalStateRunning)
             // 通道没建好之前攒下的请求（跟随、面包屑）这时补做；
             // 队列空但列表还没内容，说明连接期间没排上队，这里补一次。
             if currentDirectory == nil, listingTarget == nil {
@@ -767,9 +803,9 @@ final class SFTPBrowserViewController: NSViewController {
             fileTable.reloadData()
             renderBreadcrumbs(nil)
             clearTransfers()
-            statusLabel.stringValue = "文件通道不可用"
+            statusLabel.stringValue = L10n.tr(.sftpStatusUnavailable)
             setNoticeVisible(true)
-        case .failed(let reason): statusLabel.stringValue = "连接失败：\(reason)"
+        case .failed(let reason): statusLabel.stringValue = L10n.tr(.sftpChannelFailedReason, reason)
         }
         retryButton.isHidden = !state.isFailed
         updateControls()
@@ -816,7 +852,7 @@ final class SFTPBrowserViewController: NSViewController {
                 requestListing(try await client.realpath(raw))
             } catch {
                 guard session.state != .unsupported else { return }
-                AlertPresenter.fail(title: "打开目录失败", message: error.localizedDescription, in: view.window)
+                AlertPresenter.fail(title: L10n.tr(.sftpErrorOpenDir), message: error.localizedDescription, in: view.window)
             }
         }
     }
@@ -829,7 +865,7 @@ final class SFTPBrowserViewController: NSViewController {
         } catch {
             // “服务器没开 SFTP”已经在列表的位置说明了，不必再弹一个错误框。
             guard session?.state != .unsupported else { return }
-            AlertPresenter.fail(title: "打开文件面板失败", message: error.localizedDescription, in: view.window)
+            AlertPresenter.fail(title: L10n.tr(.sftpOpenPanelFailed), message: error.localizedDescription, in: view.window)
         }
     }
 
@@ -888,13 +924,13 @@ final class SFTPBrowserViewController: NSViewController {
             entries = try await client.list(directory, showHidden: showHidden)
         } catch {
             entries = []
-            failure = "读取 \(directory) 失败：\(error.localizedDescription)"
+            failure = L10n.tr(.sftpReadDirFailed, directory, error.localizedDescription)
         }
         // 换目录后旧的行号指向的是另一批文件，留着选区会让删除作用到错误的项。
         let directoryChanged = directory != currentDirectory
         currentDirectory = directory
         renderBreadcrumbs(directory)
-        statusLabel.stringValue = failure ?? "已连接"
+        statusLabel.stringValue = failure ?? L10n.tr(.terminalStateRunning)
         if let failure {
             FileLogger.shared.warning("文件面板：\(failure)")
         } else {
@@ -953,7 +989,7 @@ final class SFTPBrowserViewController: NSViewController {
         let paths = selectedEntries.map(\.path)
         guard !paths.isEmpty else { return }
         guard let controller = boundController, controller.state.isAlive else {
-            AlertPresenter.notify(title: "没有可用的终端", message: "当前会话已断开，先重新连接再填路径。", in: view.window)
+            AlertPresenter.notify(title: L10n.tr(.sftpNoTerminalTitle), message: L10n.tr(.sftpNoTerminalMsg), in: view.window)
             return
         }
         controller.injectInput(paths.map(ShellQuoting.quoteIfNeeded).joined(separator: " "))
@@ -963,21 +999,21 @@ final class SFTPBrowserViewController: NSViewController {
 
     @objc private func createDirectory() {
         let parent = uploadDirectory
-        guard let name = prompt(title: "新建文件夹", message: "在 \(parent) 下创建：", value: "新建文件夹") else { return }
+        guard let name = prompt(title: L10n.tr(.sftpPromptNewFolderTitle), message: L10n.tr(.sftpPromptNewFolderMsg, parent), value: L10n.tr(.sftpDefaultName)) else { return }
         let target = SFTPPath.join(parent, name)
         Task {
             do {
                 try await session?.client?.makeDirectory(target)
                 requestReload()
             } catch {
-                AlertPresenter.fail(title: "新建文件夹失败", message: error.localizedDescription, in: view.window)
+                AlertPresenter.fail(title: L10n.tr(.sftpErrorCreateDir), message: error.localizedDescription, in: view.window)
             }
         }
     }
 
     @objc private func renameSelected() {
         guard let entry = targetEntry else { return }
-        guard let name = prompt(title: "重命名 “\(entry.name)”", message: "新名称：", value: entry.name) else { return }
+        guard let name = prompt(title: L10n.tr(.sftpPromptRenameTitle, entry.name), message: L10n.tr(.sftpRenameNewNameMsg), value: entry.name) else { return }
         let parent = SFTPPath.parent(entry.path)
         let target = SFTPPath.join(parent, name)
         Task {
@@ -985,7 +1021,7 @@ final class SFTPBrowserViewController: NSViewController {
                 try await session?.client?.move(from: entry.path, to: target)
                 requestReload()
             } catch {
-                AlertPresenter.fail(title: "重命名失败", message: error.localizedDescription, in: view.window)
+                AlertPresenter.fail(title: L10n.tr(.sftpErrorRename), message: error.localizedDescription, in: view.window)
             }
         }
     }
@@ -995,14 +1031,14 @@ final class SFTPBrowserViewController: NSViewController {
         guard !targets.isEmpty else { return }
         let hasDirectory = targets.contains(where: \.isDirectory)
         let alert = NSAlert()
-        alert.messageText = "删除 \(targets.count) 项？"
+        alert.messageText = L10n.tr(.sftpDeleteMultipleTitle, targets.count)
         alert.informativeText = targets.map(\.name).joined(separator: "、")
             + (hasDirectory
-                ? "\n\n目录会连同其中的所有内容一起删除，且无法恢复。"
-                : "\n\n删除后无法恢复。")
+                ? L10n.tr(.sftpDeleteDirExtraMsg)
+                : L10n.tr(.sftpDeleteFileExtraMsg))
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "删除")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L10n.tr(.commonDelete))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
@@ -1014,7 +1050,7 @@ final class SFTPBrowserViewController: NSViewController {
                         try await session?.client?.removeFile(entry.path)
                     }
                 } catch {
-                    AlertPresenter.fail(title: "删除 \(entry.name) 失败", message: error.localizedDescription, in: view.window)
+                    AlertPresenter.fail(title: L10n.tr(.sftpDeleteItemFailed, entry.name), message: error.localizedDescription, in: view.window)
                 }
             }
             requestReload()
@@ -1028,13 +1064,13 @@ final class SFTPBrowserViewController: NSViewController {
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
         field.stringValue = value
         alert.accessoryView = field
-        alert.addButton(withTitle: "确定")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L10n.tr(.commonConfirm))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !text.contains("/") else {
-            AlertPresenter.fail(title: "名称不合法", message: "名称不能为空，也不能包含 “/”。", in: view.window)
+            AlertPresenter.fail(title: L10n.tr(.sftpInvalidNameTitle), message: L10n.tr(.sftpInvalidNameMsg), in: view.window)
             return nil
         }
         return text
@@ -1043,13 +1079,13 @@ final class SFTPBrowserViewController: NSViewController {
     /// 目录输入不能套文件名的校验：路径当然有 “/”。
     private func pathPrompt(value: String) -> String? {
         let alert = NSAlert()
-        alert.messageText = "打开远端目录"
-        alert.informativeText = "输入绝对路径；相对路径按服务端登录目录解析："
+        alert.messageText = L10n.tr(.sftpGoToTitle)
+        alert.informativeText = L10n.tr(.sftpGoToMsg)
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
         field.stringValue = value
         alert.accessoryView = field
-        alert.addButton(withTitle: "打开")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L10n.tr(.commonOpen))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1063,8 +1099,8 @@ final class SFTPBrowserViewController: NSViewController {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.prompt = "上传"
-        panel.message = "上传到 \(uploadDirectory)"
+        panel.prompt = L10n.tr(.sftpUploadPanelPrompt)
+        panel.message = L10n.tr(.sftpUploadPanelMsg, uploadDirectory)
         guard panel.runModal() == .OK else { return }
         scheduleUploads(panel.urls)
     }
@@ -1077,7 +1113,7 @@ final class SFTPBrowserViewController: NSViewController {
 
     private func scheduleUploads(_ urls: [URL], to directory: String? = nil) {
         guard let transfers = session?.transfers else {
-            AlertPresenter.fail(title: "文件通道未就绪", message: "等文件连接建立后再传输，或点状态行的“重试”重连。", in: view.window)
+            AlertPresenter.fail(title: L10n.tr(.sftpErrorNoChannelTitle), message: L10n.tr(.sftpErrorNoChannelMsg), in: view.window)
             return
         }
         let target = directory ?? uploadDirectory
@@ -1091,17 +1127,17 @@ final class SFTPBrowserViewController: NSViewController {
 
     private func download(_ files: [SFTPFileEntry]) {
         guard !files.isEmpty else {
-            AlertPresenter.notify(title: "未选择文件", message: "先选中要下载的文件（目录暂不支持整目录下载）。", in: view.window)
+            AlertPresenter.notify(title: L10n.tr(.sftpErrorNoFileTitle), message: L10n.tr(.sftpErrorNoFileMsg), in: view.window)
             return
         }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "下载到这里"
+        panel.prompt = L10n.tr(.sftpDownloadPanelPrompt)
         guard panel.runModal() == .OK, let directory = panel.url else { return }
         guard let transfers = session?.transfers else {
-            AlertPresenter.fail(title: "文件通道未就绪", message: "等文件连接建立后再传输。", in: view.window)
+            AlertPresenter.fail(title: L10n.tr(.sftpErrorNoChannelTitle), message: L10n.tr(.sftpErrorNoChannelDownloadMsg), in: view.window)
             return
         }
         Task { await transfers.enqueueDownloads(files, to: directory) }
@@ -1298,10 +1334,10 @@ extension SFTPBrowserViewController: NSTableViewDataSource, NSTableViewDelegate,
         status.imageScaling = .scaleProportionallyDown
         status.translatesAutoresizingMaskIntoConstraints = false
         if progress.state == .completed {
-            status.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "传输完成")?
+            status.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: L10n.tr(.sftpTransferCompletedTip))?
                 .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
             status.contentTintColor = Theme.success
-            status.toolTip = "传输完成"
+            status.toolTip = L10n.tr(.sftpTransferCompletedTip)
         } else {
             status.isHidden = true
         }
@@ -1463,11 +1499,15 @@ private final class FollowToggleButton: NSButton {
 
     init() {
         super.init(frame: .zero)
-        title = "跟随"
         isBordered = false
         setButtonType(.toggle)
-        toolTip = "文件列表跟着终端的 cd 走；关掉后终端再换目录也不影响这里"
-        setAccessibilityLabel("跟随终端目录")
+        refreshLocalization()
+    }
+
+    func refreshLocalization() {
+        title = L10n.tr(.sftpFollowTitle)
+        toolTip = L10n.tr(.sftpFollowTooltip)
+        setAccessibilityLabel(L10n.tr(.sftpFollowAccessibility))
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
@@ -1551,9 +1591,9 @@ private final class TransferDismissButton: NSButton {
         setButtonType(.momentaryChange)
         imageScaling = .scaleProportionallyDown
         contentTintColor = Theme.textTertiary
-        image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "从列表移除")?
+        image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: L10n.tr(.sftpRemoveRecordAcc))?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .regular))
-        toolTip = "只从列表移除这条记录，不会删除远端或本地文件"
+        toolTip = L10n.tr(.sftpDismissTooltip)
         translatesAutoresizingMaskIntoConstraints = false
     }
 

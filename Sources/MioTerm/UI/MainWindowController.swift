@@ -11,6 +11,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private static let pageActions = NSToolbarItem.Identifier("mio.pageActions")
     private static let windowActions = NSToolbarItem.Identifier("mio.windowActions")
     private var showingSession = false
+    private var settingsObserver: NSObjectProtocol?
+
+    deinit {
+        if let settingsObserver {
+            NotificationCenter.default.removeObserver(settingsObserver)
+        }
+    }
 
     convenience init() {
         let window = NSWindow(
@@ -35,6 +42,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             self?.setSessionActive(controller != nil)
         }
         installToolbar()
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.applyToolbarItems()
+            }
+        }
         // 首次启动按设计尺寸来，但屏幕装不下时先缩到 visibleFrame 内，
         // 否则窗口底部（文件面板的跟随开关/状态行）会被屏幕边缘裁掉。
         if !window.setFrameUsingName("MioTermMainWindow") {
@@ -120,50 +136,50 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         row.spacing = 3
         row.addArrangedSubview(glassButton(
             symbol: "sidebar.left",
-            label: "显示/隐藏侧栏",
+            label: L10n.tr(.toolbarToggleSidebar),
             action: #selector(NSSplitViewController.toggleSidebar(_:))
         ))
         if showingSession {
             row.addArrangedSubview(glassButton(
                 symbol: "house",
-                label: "主页",
+                label: L10n.tr(.toolbarHome),
                 action: #selector(WorkspaceViewController.showHome(_:)),
                 target: workspace
             ))
         } else {
             row.addArrangedSubview(glassButton(
                 symbol: "bolt",
-                label: "连接所选主机",
+                label: L10n.tr(.toolbarConnect),
                 action: #selector(WorkspaceViewController.connectSelectedHost(_:)),
                 target: workspace
             ))
             row.addArrangedSubview(glassButton(
                 symbol: "plus.circle",
-                label: "新增主机",
+                label: L10n.tr(.toolbarNewHost),
                 action: #selector(WorkspaceViewController.newHost(_:)),
                 target: workspace
             ))
         }
-        return glassItem(identifier, content: row, label: "侧栏 / 页面操作")
+        return glassItem(identifier, content: row, label: L10n.tr(.toolbarPageActionsGroup))
     }
 
     /// 右侧：命令库、新建标签、设置和品牌图标放进同一块玻璃，避免一半有玻璃一半没有。
     private func windowActionsItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let newTab = glassButton(
             symbol: "plus",
-            label: "新建标签",
+            label: L10n.tr(.toolbarLocalTerminal),
             action: #selector(WorkspaceViewController.newLocalTerminal(_:)),
             target: workspace
         )
         let commands = glassButton(
             symbol: "command",
-            label: "命令库",
+            label: L10n.tr(.toolbarCommandLibrary),
             action: #selector(WorkspaceViewController.showCommandLibrary(_:)),
             target: workspace
         )
         let preferences = glassButton(
             symbol: "gearshape",
-            label: "设置",
+            label: L10n.tr(.toolbarSettings),
             action: #selector(WorkspaceViewController.showPreferences(_:)),
             target: workspace
         )
@@ -172,7 +188,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         row.orientation = .horizontal
         row.spacing = 3
         row.setCustomSpacing(7, after: preferences)
-        return glassItem(identifier, content: row, label: "新建标签 / 命令库 / 设置 / MioTerm")
+        return glassItem(identifier, content: row, label: L10n.tr(.toolbarWindowActionsGroup))
     }
 
     private func glassItem(

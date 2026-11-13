@@ -1,4 +1,5 @@
 import AppKit
+import MioTermCore
 
 /// 分屏时才显示的会话标题；焦点只改变小圆点与文字权重，不描整圈边框。
 @MainActor
@@ -54,7 +55,7 @@ final class TerminalPaneHeaderView: NSView {
         titleLabel.stringValue = title
         directoryLabel.stringValue = directory ?? ""
         toolTip = [title, directory].compactMap { $0 }.joined(separator: " · ")
-        setAccessibilityLabel("\(title)\(active ? "，当前终端" : "，点击激活")")
+        setAccessibilityLabel("\(title)\(active ? L10n.tr(.paneHeaderActiveSuffix) : L10n.tr(.paneHeaderInactiveSuffix))")
         refreshAppearance()
     }
 

@@ -7,9 +7,9 @@ public enum AppearanceMode: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .system: return "跟随系统"
-        case .dark: return "深色"
-        case .light: return "浅色"
+        case .system: return L10n.tr(.appearanceSystem)
+        case .dark: return L10n.tr(.appearanceDark)
+        case .light: return L10n.tr(.appearanceLight)
         }
     }
 }
@@ -23,9 +23,9 @@ public enum UIContrast: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .soft: return "柔和"
-        case .standard: return "标准"
-        case .high: return "高对比"
+        case .soft: return L10n.tr(.contrastSoft)
+        case .standard: return L10n.tr(.contrastStandard)
+        case .high: return L10n.tr(.contrastHigh)
         }
     }
 }
@@ -40,11 +40,11 @@ public enum AccentColor: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .blue: return "蓝"
-        case .purple: return "紫"
-        case .green: return "绿"
-        case .rose: return "玫瑰"
-        case .graphite: return "石墨"
+        case .blue: return L10n.tr(.accentBlue)
+        case .purple: return L10n.tr(.accentPurple)
+        case .green: return L10n.tr(.accentGreen)
+        case .rose: return L10n.tr(.accentRose)
+        case .graphite: return L10n.tr(.accentGraphite)
         }
     }
 }
@@ -53,6 +53,7 @@ public enum AccentColor: String, Codable, CaseIterable, Sendable {
 /// 对齐 webterm “页面配置热更新” 的行为。
 public struct AppSettings: Codable, Equatable, Sendable {
     public static let defaultScrollbackLines = 2_000
+    public var language: AppLanguage
     public var themeCustomization: ThemeCustomization
     public var appearance: AppearanceMode
     public var contrast: UIContrast
@@ -74,6 +75,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var defaultKeepaliveInterval: Int
 
     public init(
+        language: AppLanguage = .system,
         themeCustomization: ThemeCustomization = ThemeCustomization(),
         appearance: AppearanceMode = .system,
         contrast: UIContrast = .soft,
@@ -91,6 +93,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         defaultConnectTimeout: Int = 10,
         defaultKeepaliveInterval: Int = 30
     ) {
+        self.language = language
         self.themeCustomization = themeCustomization.normalized()
         self.appearance = appearance
         self.contrast = contrast
@@ -115,6 +118,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// 合成解码器会把缺键当成整份失败，等于用户改过的字体、主题一起清零。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        language = (try? c.decodeIfPresent(AppLanguage.self, forKey: .language)) ?? .system
         themeCustomization = ((try? c.decodeIfPresent(ThemeCustomization.self, forKey: .themeCustomization)) ?? ThemeCustomization()).normalized()
         appearance = (try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearance)) ?? .system
         contrast = (try? c.decodeIfPresent(UIContrast.self, forKey: .contrast)) ?? .soft

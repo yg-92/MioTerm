@@ -26,8 +26,8 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
     private let environment = AppEnvironment.shared
     private let tableView = CommandTableView()
     private let searchField = NSSearchField()
-    private let scopeLabel = NSTextField(labelWithString: "未选择会话")
-    private let hintLabel = NSTextField(labelWithString: "单击填入终端，不会自动回车")
+    private let scopeLabel = NSTextField(labelWithString: L10n.tr(.cmdNoSession))
+    private let hintLabel = NSTextField(labelWithString: L10n.tr(.cmdHintDefault))
     private let sortPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let ignoreButton = NSButton()
     private let clearButton = NSButton()
@@ -41,27 +41,27 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
         scopeLabel.textColor = .secondaryLabelColor
         scopeLabel.lineBreakMode = .byTruncatingHead
 
-        sortPopup.addItems(withTitles: ["按次数", "按最近"])
+        sortPopup.addItems(withTitles: [L10n.tr(.cmdSortTimesShort), L10n.tr(.cmdSortRecentShort)])
         sortPopup.target = self
         sortPopup.action = #selector(sortChanged(_:))
 
-        searchField.placeholderString = "搜索命令"
+        searchField.placeholderString = L10n.tr(.cmdSearchPlaceholder)
         searchField.controlSize = .small
         searchField.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         searchField.sendsWholeSearchString = false
         searchField.sendsSearchStringImmediately = true
         searchField.target = self
         searchField.action = #selector(searchChanged(_:))
-        searchField.toolTip = "按命令文本过滤，忽略规则也会一起搜索"
+        searchField.toolTip = L10n.tr(.cmdSearchTooltip)
 
-        ignoreButton.title = "忽略…"
+        ignoreButton.title = L10n.tr(.cmdIgnoreButton)
         ignoreButton.target = self
         ignoreButton.action = #selector(addIgnoreManually(_:))
-        ignoreButton.toolTip = "把一条命令加入忽略清单，之后不再记录"
-        clearButton.title = "清空"
+        ignoreButton.toolTip = L10n.tr(.cmdIgnoreTooltip)
+        clearButton.title = L10n.tr(.cmdClearButton)
         clearButton.target = self
         clearButton.action = #selector(clearScope(_:))
-        clearButton.toolTip = "清掉这个作用域的历史与本机忽略清单"
+        clearButton.toolTip = L10n.tr(.cmdClearTooltip)
         for button in [ignoreButton, clearButton] {
             // 玻璃胶囊里不再套系统圆角按钮，只留文字，按下时由 AppKit 自己压暗。
             button.isBordered = false
@@ -104,9 +104,30 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
         tableView.action = #selector(rowClicked(_:))
         tableView.onReturn = { [weak self] in self?.injectSelectedRow() }
         let column = NSTableColumn(identifier: Self.columnIdentifier)
-        column.title = "命令"
+        column.title = L10n.tr(.cmdColumnCommand)
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
+        NotificationCenter.default.addObserver(
+            forName: .mioTermSettingsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let selectedSort = self.sortPopup.indexOfSelectedItem
+                self.sortPopup.removeAllItems()
+                self.sortPopup.addItems(withTitles: [L10n.tr(.cmdSortTimesShort), L10n.tr(.cmdSortRecentShort)])
+                if selectedSort >= 0 { self.sortPopup.selectItem(at: selectedSort) }
+                self.searchField.placeholderString = L10n.tr(.cmdSearchPlaceholder)
+                self.searchField.toolTip = L10n.tr(.cmdSearchTooltip)
+                self.ignoreButton.title = L10n.tr(.cmdIgnoreButton)
+                self.ignoreButton.toolTip = L10n.tr(.cmdIgnoreTooltip)
+                self.clearButton.title = L10n.tr(.cmdClearButton)
+                self.clearButton.toolTip = L10n.tr(.cmdClearTooltip)
+                self.tableView.tableColumns.first?.title = L10n.tr(.cmdColumnCommand)
+                self.reload()
+            }
+        }
 
         let scroll = NSScrollView()
         scroll.documentView = tableView
@@ -165,7 +186,7 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
         var hasContent = false
         var hasClearable = false
         if let session {
-            scopeLabel.stringValue = session.host.map { "主机 · \($0.displayName)" } ?? "本地终端"
+            scopeLabel.stringValue = session.host.map { L10n.tr(.cmdScopeHost, $0.displayName) } ?? L10n.tr(.terminalLocalTitle)
             let scope = session.commandScope
             let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
             func matches(_ text: String) -> Bool {
@@ -183,12 +204,12 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
 
             let visibleFavorites = favorites.filter { matches($0.command) }
             if !visibleFavorites.isEmpty {
-                rows.append(.group("收藏"))
+                rows.append(.group(L10n.tr(.cmdGroupFavorite)))
                 rows.append(contentsOf: visibleFavorites.map { Row.command($0) })
             }
             let rest = tracked.filter { !$0.favorite && matches($0.command) }
             if !rest.isEmpty {
-                rows.append(.group(sort == .mostUsed ? "常用" : "最近"))
+                rows.append(.group(sort == .mostUsed ? L10n.tr(.cmdGroupFrequent) : L10n.tr(.cmdGroupRecent)))
                 rows.append(contentsOf: rest.map { Row.command($0) })
             }
             // 本机规则和全局规则分开展示：两者影响的范围不同，混在一起容易误删。
@@ -196,11 +217,11 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
             let localIgnores = visibleIgnores.filter { !$0.global }
             let globalIgnores = visibleIgnores.filter { $0.global }
             if !localIgnores.isEmpty {
-                rows.append(.group("本机忽略"))
+                rows.append(.group(L10n.tr(.cmdGroupLocalIgnore)))
                 rows.append(contentsOf: localIgnores.map { Row.ignore($0) })
             }
             if !globalIgnores.isEmpty {
-                rows.append(.group("全局忽略"))
+                rows.append(.group(L10n.tr(.cmdGroupGlobalIgnore)))
                 rows.append(contentsOf: globalIgnores.map { Row.ignore($0) })
             }
 
@@ -209,19 +230,19 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
                 return count
             }
             if rows.isEmpty, !needle.isEmpty {
-                hintLabel.stringValue = "没有匹配 “\(needle)” 的内容"
+                hintLabel.stringValue = L10n.tr(.cmdHintNoMatch, needle)
             } else if !needle.isEmpty, commandCount == 0 {
-                hintLabel.stringValue = "只匹配到忽略规则"
+                hintLabel.stringValue = L10n.tr(.cmdHintOnlyIgnored)
             } else if !needle.isEmpty {
-                hintLabel.stringValue = "找到 \(commandCount) 条命令 · 单击填入终端"
+                hintLabel.stringValue = L10n.tr(.cmdHintCount, commandCount)
             } else if !hasContent {
-                hintLabel.stringValue = "还没有记录：敲过的命令会按主机累计在这里"
+                hintLabel.stringValue = L10n.tr(.cmdHintEmptyRecorded)
             } else {
-                hintLabel.stringValue = "单击填入终端，不会自动回车"
+                hintLabel.stringValue = L10n.tr(.cmdHintDefault)
             }
         } else {
-            scopeLabel.stringValue = "未选择会话"
-            hintLabel.stringValue = "先连上一台主机或开一个本地终端"
+            scopeLabel.stringValue = L10n.tr(.cmdNoSession)
+            hintLabel.stringValue = L10n.tr(.cmdEmptyNoSession)
         }
         tableView.reloadData()
         restoreSelection(previous)
@@ -277,7 +298,7 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
     private func inject(_ command: String) {
         guard let session else { return }
         guard session.state.isAlive else {
-            hintLabel.stringValue = "会话已断开，命令无法填入"
+            hintLabel.stringValue = L10n.tr(.cmdHintDisconnected)
             return
         }
         session.injectInput(command)
@@ -329,20 +350,20 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
         }
         switch row(at: tableView.clickedRow) {
         case .command(let record):
-            menu.addItem(menuItem("填入终端", #selector(injectSelected(_:))))
-            menu.addItem(menuItem("复制命令", #selector(copySelected(_:))))
+            menu.addItem(menuItem(L10n.tr(.cmdMenuInject), #selector(injectSelected(_:))))
+            menu.addItem(menuItem(L10n.tr(.cmdMenuCopy), #selector(copySelected(_:))))
             menu.addItem(.separator())
-            menu.addItem(menuItem(record.favorite ? "取消收藏" : "收藏", #selector(toggleFavorite(_:))))
-            menu.addItem(menuItem("加入忽略清单…", #selector(ignoreSelectedFromMenu(_:))))
+            menu.addItem(menuItem(record.favorite ? L10n.tr(.cmdMenuUnfavorite) : L10n.tr(.cmdMenuFavorite), #selector(toggleFavorite(_:))))
+            menu.addItem(menuItem(L10n.tr(.cmdMenuIgnore), #selector(ignoreSelectedFromMenu(_:))))
             menu.addItem(.separator())
-            menu.addItem(menuItem("删除这条记录", #selector(deleteSelected(_:))))
+            menu.addItem(menuItem(L10n.tr(.cmdMenuDelete), #selector(deleteSelected(_:))))
         case .ignore(let rule):
-            menu.addItem(menuItem(rule.global ? "移出全局忽略" : "移出忽略清单", #selector(unignoreSelected(_:))))
+            menu.addItem(menuItem(rule.global ? L10n.tr(.cmdMenuUnignoreGlobal) : L10n.tr(.cmdMenuUnignore), #selector(unignoreSelected(_:))))
             if !rule.global {
-                menu.addItem(menuItem("提升为全局忽略", #selector(promoteSelectedIgnore(_:))))
+                menu.addItem(menuItem(L10n.tr(.cmdMenuPromoteIgnore), #selector(promoteSelectedIgnore(_:))))
             }
         default:
-            let empty = NSMenuItem(title: "没有可用的操作", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: L10n.tr(.cmdMenuEmpty), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
         }
@@ -400,22 +421,22 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
 
     @objc private func addIgnoreManually(_ sender: NSButton) {
         guard scopeKey != nil else {
-            AlertPresenter.notify(title: "未选择会话", message: "先连上一台主机，再添加忽略规则。", in: view.window)
+            AlertPresenter.notify(title: L10n.tr(.cmdNoSession), message: L10n.tr(.cmdNoSessionAlertMsg), in: view.window)
             return
         }
         let alert = NSAlert()
-        alert.messageText = "添加忽略规则"
-        alert.informativeText = "这条命令之后不再记录（含粘贴与带变量的整行原文）："
+        alert.messageText = L10n.tr(.cmdPromptAddIgnoreTitle)
+        alert.informativeText = L10n.tr(.cmdPromptAddIgnoreMsg)
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         alert.accessoryView = field
-        alert.addButton(withTitle: "添加")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L10n.tr(.commonAdd))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         guard CommandLibraryStore.normalize(field.stringValue) != nil else {
             AlertPresenter.notify(
-                title: "命令不能为空",
-                message: "忽略规则需要一条完整命令，且不能包含换行等控制字符。",
+                title: L10n.tr(.cmdErrorEmptyCmdTitle),
+                message: L10n.tr(.cmdErrorEmptyCmdMsg),
                 in: view.window
             )
             return
@@ -429,11 +450,11 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
         let alert = NSAlert()
         // 长命令不能把确认框撑到屏幕外，显示时只留开头一段。
         let shown = command.count > 48 ? String(command.prefix(48)) + "…" : command
-        alert.messageText = "忽略 “\(shown)”？"
-        alert.informativeText = "已有记录会被删除，之后这条命令不再计入统计。"
-        alert.addButton(withTitle: "只忽略这台主机")
-        alert.addButton(withTitle: "忽略所有主机")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = L10n.tr(.cmdConfirmIgnoreTitle, shown)
+        alert.informativeText = L10n.tr(.cmdConfirmIgnoreMsg)
+        alert.addButton(withTitle: L10n.tr(.cmdConfirmIgnoreHost))
+        alert.addButton(withTitle: L10n.tr(.cmdConfirmIgnoreAll))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         switch alert.runModal() {
         case .alertFirstButtonReturn: environment.commands.addIgnore(command, scope: scope)
@@ -455,11 +476,11 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
     @objc private func clearScope(_ sender: NSButton) {
         guard let scope = scopeKey else { return }
         let alert = NSAlert()
-        alert.messageText = "清空这个作用域的命令库？"
-        alert.informativeText = "统计、收藏与本机忽略规则都会删除，全局规则保留。"
+        alert.messageText = L10n.tr(.cmdConfirmClearTitle)
+        alert.informativeText = L10n.tr(.cmdConfirmClearMsg)
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "清空")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L10n.tr(.cmdClearButton))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
         alert.buttons.last?.keyEquivalent = "\u{1b}"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         environment.commands.clear(scope: scope)
@@ -490,11 +511,11 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
             cell.icon.image = Self.symbol(record.favorite ? "star.fill" : "star")
             cell.icon.contentTintColor = record.favorite ? .systemYellow : .tertiaryLabelColor
             cell.icon.isEnabled = true
-            cell.icon.toolTip = record.favorite ? "取消收藏" : "收藏"
+            cell.icon.toolTip = record.favorite ? L10n.tr(.cmdMenuUnfavorite) : L10n.tr(.cmdMenuFavorite)
             cell.onToggleFavorite = { [weak self] in self?.toggleFavoriteCommand(record.command) }
             cell.title.stringValue = record.command
-            cell.trailing.stringValue = "\(record.executionCount) 次"
-            cell.toolTip = "\(record.command)\n共 \(record.executionCount) 次 · 最后使用 \(Self.dateFormatter.string(from: record.lastExecutedAt))"
+            cell.trailing.stringValue = L10n.tr(.cmdCountTimes, record.executionCount)
+            cell.toolTip = L10n.tr(.cmdTooltipDetail, record.command, record.executionCount, Self.dateFormatter.string(from: record.lastExecutedAt))
             return cell
         case .ignore(let rule):
             let cell = makeCell()
@@ -506,7 +527,7 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
             cell.title.stringValue = rule.command
             // 分组标题已经写明本机/全局，这里不再重复。
             cell.trailing.stringValue = ""
-            cell.toolTip = "不记录：\(rule.command)"
+            cell.toolTip = L10n.tr(.cmdTooltipIgnored, rule.command)
             return cell
         }
     }
