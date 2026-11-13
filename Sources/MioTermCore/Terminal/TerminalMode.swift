@@ -15,10 +15,10 @@ public enum TerminalMode: Equatable, Sendable {
 
     public var shortName: String {
         switch self {
-        case .shell: return "普通 Shell"
+        case .shell: return L10n.tr(.terminalModePlainShell)
         case .docker: return "Docker"
         case .container(let runtime, _): return runtime
-        case .remoteShell: return "远程 Shell"
+        case .remoteShell: return L10n.tr(.terminalModeRemoteShell)
         }
     }
 
@@ -38,11 +38,11 @@ public enum TerminalMode: Equatable, Sendable {
         case .shell:
             return nil
         case .docker:
-            return "已进入 Docker 容器，宿主机文件树暂停跟随"
+            return L10n.tr(.terminalModePauseDocker)
         case .container(let runtime, _):
-            return "已进入 \(runtime) 容器，宿主机文件树暂停跟随"
+            return L10n.tr(.terminalModePauseContainer, runtime)
         case .remoteShell:
-            return "终端进入了别的机器，已暂停跟随"
+            return L10n.tr(.terminalModePauseRemote)
         }
     }
 }

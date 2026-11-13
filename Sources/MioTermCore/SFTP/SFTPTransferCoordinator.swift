@@ -58,11 +58,9 @@ public struct SFTPTransferProgress: Equatable, Sendable {
     }
 
     public var detailText: String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        let moved = formatter.string(fromByteCount: transferredBytes)
+        let moved = L10n.formatByteCount(transferredBytes)
         if totalBytes > 0 {
-            return "\(moved) / \(formatter.string(fromByteCount: totalBytes))"
+            return "\(moved) / \(L10n.formatByteCount(totalBytes))"
         }
         return moved
     }

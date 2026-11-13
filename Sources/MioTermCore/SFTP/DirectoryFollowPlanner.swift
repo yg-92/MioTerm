@@ -85,7 +85,7 @@ public enum DirectoryFollowPlanner {
         // 容器或嵌套机器里的路径属于另一套文件系统：即使跟随开着也不能动树，
         // 否则 SFTP 会拿宿主机去读容器内路径，只能报错。
         if facts.followEnabled, !facts.terminal.followAllowed {
-            return .pause(reason: facts.terminal.mode.pauseReason ?? "终端进入了别的机器，已暂停跟随")
+            return .pause(reason: facts.terminal.mode.pauseReason ?? L10n.tr(.terminalModePauseRemote))
         }
         let target = target(facts.terminal, remoteHome: facts.remoteHome)
         // 问过一次没问出来就到此为止：面板解析失败后会重放同一条上下文，

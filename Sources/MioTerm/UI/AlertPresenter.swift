@@ -1,4 +1,5 @@
 import AppKit
+import MioTermCore
 
 /// NSAlert 的 async 包装：有窗口时用模态表单，没有窗口（例如启动阶段）
 /// 才退回阻塞式 runModal。
@@ -17,7 +18,7 @@ enum AlertPresenter {
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: L10n.tr(.commonOK))
         if let window {
             alert.beginSheetModal(for: window) { _ in }
         } else {
@@ -30,7 +31,7 @@ enum AlertPresenter {
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .critical
-        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: L10n.tr(.commonOK))
         if let window {
             alert.beginSheetModal(for: window) { _ in }
         } else {

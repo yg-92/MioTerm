@@ -91,11 +91,11 @@ public enum Parity: String, Codable, CaseIterable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .none: return "无"
-        case .even: return "偶校验"
-        case .odd: return "奇校验"
-        case .mark: return "Mark（校验位恒 1）"
-        case .space: return "Space（校验位恒 0）"
+        case .none: return L10n.tr(.serialParityNone)
+        case .even: return L10n.tr(.serialParityEven)
+        case .odd: return L10n.tr(.serialParityOdd)
+        case .mark: return L10n.tr(.serialParityMark)
+        case .space: return L10n.tr(.serialParitySpace)
         }
     }
 }
@@ -287,7 +287,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         switch protocolKind {
         case .ssh: return "\(address):\(port)"
         case .telnet: return "\(address):\(port)"
-        case .serial: return serial.device.isEmpty ? "未选串口" : "\(serial.device) · \(serial.baudRate) baud"
+        case .serial: return serial.device.isEmpty ? L10n.tr(.hostSerialNotSelected) : "\(serial.device) · \(serial.baudRate) baud"
         }
     }
 
@@ -297,7 +297,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
 
     /// 组名留空时归入 “未分组”，与 webterm 的分组行为一致。
     public var groupName: String {
-        group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未分组" : group.trimmingCharacters(in: .whitespacesAndNewlines)
+        group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? L10n.tr(.hostGroupUngrouped) : group.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public func normalized() -> HostProfile {
@@ -331,13 +331,13 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
 
         public var errorDescription: String? {
             switch self {
-            case .nameRequired: return "请填写显示名称"
-            case .addressRequired: return "请填写主机地址"
-            case .serialDeviceRequired: return "请选择串口设备"
-            case .serialDevicePathInvalid: return "串口必须是 /dev/ 下的设备路径"
-            case .serialBaudOutOfRange: return "波特率范围为 \(SerialConfig.minimumBaudRate)–\(SerialConfig.maximumBaudRate)"
-            case .serialDataBitsOutOfRange: return "数据位范围为 5–8"
-            case .serialStopBitsInvalid: return "停止位只能是 1、1.5 或 2"
+            case .nameRequired: return L10n.tr(.hostValNameRequired)
+            case .addressRequired: return L10n.tr(.hostValAddressRequired)
+            case .serialDeviceRequired: return L10n.tr(.hostValSerialDeviceRequired)
+            case .serialDevicePathInvalid: return L10n.tr(.hostValSerialDevicePathInvalid)
+            case .serialBaudOutOfRange: return L10n.tr(.hostValSerialBaudOutOfRange, SerialConfig.minimumBaudRate, SerialConfig.maximumBaudRate)
+            case .serialDataBitsOutOfRange: return L10n.tr(.hostValSerialDataBitsOutOfRange)
+            case .serialStopBitsInvalid: return L10n.tr(.hostValSerialStopBitsInvalid)
             }
         }
     }

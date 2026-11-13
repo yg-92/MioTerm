@@ -113,10 +113,10 @@ public enum ThemePreset: String, CaseIterable {
     case standard, midnight, forest, paper
     public var displayName: String {
         switch self {
-        case .standard: return "MioTerm 默认"
-        case .midnight: return "深海蓝"
-        case .forest: return "松林绿"
-        case .paper: return "暖纸色"
+        case .standard: return L10n.tr(.themePresetStandard)
+        case .midnight: return L10n.tr(.themePresetMidnight)
+        case .forest: return L10n.tr(.themePresetForest)
+        case .paper: return L10n.tr(.themePresetPaper)
         }
     }
     public var customization: ThemeCustomization {
@@ -144,7 +144,7 @@ extension ThemeCustomization {
     public static let maximumFileBytes = 128 * 1024
     public enum ImportError: LocalizedError {
         case invalidTheme
-        public var errorDescription: String? { "请选择 MioTerm 导出的配色 JSON 文件；颜色须为 #RRGGBB，文件不能超过 128 KB。" }
+        public var errorDescription: String? { L10n.tr(.themeImportInvalid) }
     }
 
     public static func imported(from data: Data) throws -> ThemeCustomization {

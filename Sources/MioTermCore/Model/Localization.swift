@@ -585,6 +585,39 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case connectCancelConnection
     case connectConfirmKeyRotation
     case connectKeyBitsFormat
+
+    // MARK: - 终端模式与跟随状态
+    case terminalModePlainShell
+    case terminalModeRemoteShell
+    case terminalModePauseDocker
+    case terminalModePauseContainer
+    case terminalModePauseRemote
+
+    // MARK: - 主题预设与导入
+    case themePresetStandard
+    case themePresetMidnight
+    case themePresetForest
+    case themePresetPaper
+    case themeImportInvalid
+
+    // MARK: - 主机配置、串口校验与仓库
+    case serialParityNone
+    case serialParityEven
+    case serialParityOdd
+    case serialParityMark
+    case serialParitySpace
+    case hostSerialNotSelected
+    case hostGroupUngrouped
+    case hostDuplicateSuffix
+    case hostValNameRequired
+    case hostValAddressRequired
+    case hostValSerialDeviceRequired
+    case hostValSerialDevicePathInvalid
+    case hostValSerialBaudOutOfRange
+    case hostValSerialDataBitsOutOfRange
+    case hostValSerialStopBitsInvalid
+    case hostRepoUnreadable
+    case hostRepoUnwritable
 }
 
 /// 轻量级多语言运行时与扩展注册表。
@@ -695,5 +728,16 @@ public enum L10n {
         let format = tr(key)
         let locale = Locale(identifier: currentLanguageCode)
         return String(format: format, locale: locale, arguments: args)
+    }
+
+    /// 按当前应用语言格式化文件大小，避免系统语言为中文时英文界面仍显示“字节”。
+    public static func formatByteCount(_ byteCount: Int64) -> String {
+        if byteCount < 1000 {
+            if currentLanguageCode.hasPrefix("zh") {
+                return "\(byteCount) 字节"
+            }
+            return byteCount == 1 ? "1 byte" : "\(byteCount) bytes"
+        }
+        return ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
     }
 }

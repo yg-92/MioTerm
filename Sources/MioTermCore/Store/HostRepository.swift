@@ -10,8 +10,8 @@ public final class HostRepository {
 
         public var errorDescription: String? {
             switch self {
-            case .unreadable(let reason): return "读取主机配置失败：\(reason)"
-            case .unwritable(let reason): return "写入主机配置失败：\(reason)"
+            case .unreadable(let reason): return L10n.tr(.hostRepoUnreadable, reason)
+            case .unwritable(let reason): return L10n.tr(.hostRepoUnwritable, reason)
             }
         }
     }
@@ -90,7 +90,7 @@ public final class HostRepository {
     public func duplicate(id: String) throws -> HostProfile? {
         guard var copy = host(id: id) else { return nil }
         copy.id = UUID().uuidString
-        copy.name = "\(copy.name) 副本"
+        copy.name = "\(copy.name) \(L10n.tr(.hostDuplicateSuffix))"
         copy.hostKeyAlgorithm = ""
         copy.hostKeyFingerprint = ""
         copy.createdAt = Date()

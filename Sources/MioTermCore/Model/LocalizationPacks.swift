@@ -546,6 +546,39 @@ public enum LocalizationPacks {
             .connectCancelConnection: "取消连接",
             .connectConfirmKeyRotation: "我确认服务器更换了密钥",
             .connectKeyBitsFormat: "%@ %d 位\n%@",
+
+            // 终端模式与跟随状态
+            .terminalModePlainShell: "普通 Shell",
+            .terminalModeRemoteShell: "远程 Shell",
+            .terminalModePauseDocker: "已进入 Docker 容器，宿主机文件树暂停跟随",
+            .terminalModePauseContainer: "已进入 %@ 容器，宿主机文件树暂停跟随",
+            .terminalModePauseRemote: "终端进入了别的机器，已暂停跟随",
+
+            // 主题预设与导入
+            .themePresetStandard: "MioTerm 默认",
+            .themePresetMidnight: "深海蓝",
+            .themePresetForest: "松林绿",
+            .themePresetPaper: "暖纸色",
+            .themeImportInvalid: "请选择 MioTerm 导出的配色 JSON 文件；颜色须为 #RRGGBB，文件不能超过 128 KB。",
+
+            // 主机配置、串口校验与仓库
+            .serialParityNone: "无",
+            .serialParityEven: "偶校验",
+            .serialParityOdd: "奇校验",
+            .serialParityMark: "Mark（校验位恒 1）",
+            .serialParitySpace: "Space（校验位恒 0）",
+            .hostSerialNotSelected: "未选串口",
+            .hostGroupUngrouped: "未分组",
+            .hostDuplicateSuffix: "副本",
+            .hostValNameRequired: "请填写显示名称",
+            .hostValAddressRequired: "请填写主机地址",
+            .hostValSerialDeviceRequired: "请选择串口设备",
+            .hostValSerialDevicePathInvalid: "串口必须是 /dev/ 下的设备路径",
+            .hostValSerialBaudOutOfRange: "波特率范围为 %d–%d",
+            .hostValSerialDataBitsOutOfRange: "数据位范围为 5–8",
+            .hostValSerialStopBitsInvalid: "停止位只能是 1、1.5 或 2",
+            .hostRepoUnreadable: "读取主机配置失败：%@",
+            .hostRepoUnwritable: "写入主机配置失败：%@",
         ]
     )
 
@@ -1091,6 +1124,39 @@ public enum LocalizationPacks {
             .connectCancelConnection: "Cancel Connection",
             .connectConfirmKeyRotation: "Confirm Server Key Changed",
             .connectKeyBitsFormat: "%@ %d-bit\n%@",
+
+            // Terminal modes & follow state
+            .terminalModePlainShell: "Plain Shell",
+            .terminalModeRemoteShell: "Remote Shell",
+            .terminalModePauseDocker: "Inside Docker container; host file tree follow paused",
+            .terminalModePauseContainer: "Inside %@ container; host file tree follow paused",
+            .terminalModePauseRemote: "Terminal entered another host; follow paused",
+
+            // Theme presets & import
+            .themePresetStandard: "MioTerm Default",
+            .themePresetMidnight: "Midnight Blue",
+            .themePresetForest: "Forest Green",
+            .themePresetPaper: "Warm Paper",
+            .themeImportInvalid: "Please select a MioTerm color JSON file; colors must be #RRGGBB and file size must not exceed 128 KB.",
+
+            // Host profile, serial parity & repository
+            .serialParityNone: "None",
+            .serialParityEven: "Even",
+            .serialParityOdd: "Odd",
+            .serialParityMark: "Mark (always 1)",
+            .serialParitySpace: "Space (always 0)",
+            .hostSerialNotSelected: "No serial port selected",
+            .hostGroupUngrouped: "Ungrouped",
+            .hostDuplicateSuffix: "Copy",
+            .hostValNameRequired: "Please enter a display name",
+            .hostValAddressRequired: "Please enter a host address",
+            .hostValSerialDeviceRequired: "Please select a serial device",
+            .hostValSerialDevicePathInvalid: "Serial device must be a path under /dev/",
+            .hostValSerialBaudOutOfRange: "Baud rate must be between %d and %d",
+            .hostValSerialDataBitsOutOfRange: "Data bits must be between 5 and 8",
+            .hostValSerialStopBitsInvalid: "Stop bits must be 1, 1.5, or 2",
+            .hostRepoUnreadable: "Failed to read host configuration: %@",
+            .hostRepoUnwritable: "Failed to write host configuration: %@",
         ]
     )
 }

@@ -33,7 +33,7 @@ public struct SFTPFileEntry: Equatable, Identifiable, Sendable {
 
     /// 大小可能整个缺失（服务端没置 SIZE 位），此时显示为空而不是 0 字节。
     public var sizeText: String {
-        isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+        isDirectory ? "—" : L10n.formatByteCount(Int64(size))
     }
 
     /// 点文件/点目录：只有打开“显示隐藏文件”时才会进列表，界面据此弱化图标。
