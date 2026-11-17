@@ -68,12 +68,23 @@ public struct TerminalContextTracker {
             pendingFileChange = pendingFileChange || assumeFileChanges
             return
         }
-        let effect = ShellCommandClassifier.classify(command, currentDirectory: context.directory)
+        let baseDirectory: String?
+        if let directory = context.directory {
+            baseDirectory = directory
+        } else if let hint = context.promptHomeHint {
+            baseDirectory = hint.isEmpty ? Self.virtualHome : "\(Self.virtualHome)/\(hint)"
+        } else {
+            baseDirectory = nil
+        }
+        let effect = ShellCommandClassifier.classify(command, currentDirectory: baseDirectory)
         if let predicted = effect.predictedDirectory {
             predictedDirectory = predicted
         }
         pendingFileChange = pendingFileChange || effect.mayChangeFiles
     }
+
+    private static let virtualHomeRoot = "/__mioterm_home__"
+    private static let virtualHome = "/__mioterm_home__/__anchor__"
 
     /// OSC 7 由 shell 钩子主动报出，权威最高；载荷里的 `file://主机/路径` 顺便用来认嵌套。
     @discardableResult
@@ -126,9 +137,7 @@ public struct TerminalContextTracker {
             switch applyPrompt(promptLine) {
             case .noEvidence:
                 if let predicted = predictedDirectory, !isNested, containerMode == nil {
-                    context.directory = predicted
-                    context.promptHomeHint = nil
-                    context.promptBasename = nil
+                    applyPredictedDirectory(predicted)
                 }
             case .settled, .lostTrack:
                 break
@@ -192,9 +201,7 @@ public struct TerminalContextTracker {
             return .settled
         }
         if (predicted as NSString).lastPathComponent == base {
-            context.directory = predicted
-            context.promptHomeHint = nil
-            context.promptBasename = nil
+            applyPredictedDirectory(predicted)
             return .settled
         }
         // 预测的末级名和提示符对不上。若提示符显示的正是原目录，说明这次 `cd`
@@ -208,6 +215,29 @@ public struct TerminalContextTracker {
         context.promptBasename = base
         lostTrackAtLastSettle = true
         return .lostTrack
+    }
+
+    private mutating func applyPredictedDirectory(_ predicted: String) {
+        if predicted == Self.virtualHome {
+            context.directory = nil
+            context.promptHomeHint = ""
+            context.promptBasename = nil
+            return
+        }
+        let prefix = Self.virtualHome + "/"
+        if predicted.hasPrefix(prefix) {
+            context.directory = nil
+            context.promptHomeHint = String(predicted.dropFirst(prefix.count))
+            context.promptBasename = nil
+            return
+        }
+        // `cd ..` 退出了虚拟主目录边界时，不知道主目录真实深度，不能把虚拟根当成真实目录。
+        if predicted == Self.virtualHomeRoot || predicted.hasPrefix(Self.virtualHomeRoot + "/") {
+            return
+        }
+        context.directory = predicted
+        context.promptHomeHint = nil
+        context.promptBasename = nil
     }
 
     private mutating func applyNesting() {

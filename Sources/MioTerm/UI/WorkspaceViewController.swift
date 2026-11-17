@@ -47,6 +47,7 @@ final class WorkspaceViewController: NSSplitViewController {
         panelItem.minimumThickness = 220
         panelItem.maximumThickness = 420
         panelItem.preferredThicknessFraction = 0.24
+        panelItem.holdingPriority = .init(260)
         addSplitViewItem(panelItem)
         self.panelItem = panelItem
         panelItem.isCollapsed = UserDefaults.standard.bool(forKey: Self.sidebarCollapsedDefault)

@@ -123,6 +123,8 @@ final class SFTPBrowserViewController: NSViewController {
         statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        statusRow.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
         let treeScroll = NSScrollView()
         treeScroll.documentView = fileTable
@@ -130,6 +132,7 @@ final class SFTPBrowserViewController: NSViewController {
         treeScroll.autohidesScrollers = true
         treeScroll.borderType = .noBorder
         treeScroll.drawsBackground = false
+        treeScroll.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
         transferScroll.documentView = transferTable
         transferScroll.hasVerticalScroller = true
@@ -137,6 +140,7 @@ final class SFTPBrowserViewController: NSViewController {
         transferScroll.borderType = .noBorder
         transferScroll.drawsBackground = false
         transferScroll.isHidden = true
+        transferScroll.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
         let body = NSStackView(views: [actions, pathContainer, treeScroll, statusRow, transferScroll])
         body.orientation = .vertical
@@ -144,8 +148,10 @@ final class SFTPBrowserViewController: NSViewController {
         body.distribution = .fill
         body.spacing = 0
         body.translatesAutoresizingMaskIntoConstraints = false
+        body.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 640))
+        root.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         root.addSubview(body)
         NSLayoutConstraint.activate([
             body.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -318,8 +324,10 @@ final class SFTPBrowserViewController: NSViewController {
         pathScroll.borderType = .noBorder
         pathScroll.drawsBackground = false
         pathScroll.translatesAutoresizingMaskIntoConstraints = false
+        pathScroll.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
         pathContainer.translatesAutoresizingMaskIntoConstraints = false
+        pathContainer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         pathContainer.isHidden = true
         pathContainer.addSubview(pathScroll)
 

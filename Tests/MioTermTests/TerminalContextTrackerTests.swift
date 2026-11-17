@@ -203,4 +203,25 @@ struct TerminalContextTrackerTests {
         #expect(tracker.context.directory == "/home/jenkins_home")
         #expect(tracker.context.promptBasename == nil)
     }
+
+    @Test func cdIntoDotDirectoryFromHomePromptUpdatesHomeHint() {
+        var tracker = TerminalContextTracker()
+        tracker.submit(command: nil)
+        _ = tracker.settle(promptLine: "[root@htwy-68 ~]#", inAlternateScreen: false)
+        #expect(tracker.context.promptHomeHint == "")
+
+        tracker.submit(command: "cd .vs")
+        let changed = tracker.settle(promptLine: "[root@htwy-68 .vs]#", inAlternateScreen: false)
+        #expect(changed)
+        #expect(tracker.context.directory == nil)
+        #expect(tracker.context.promptHomeHint == ".vs")
+
+        tracker.submit(command: "cd sub")
+        _ = tracker.settle(promptLine: "[root@htwy-68 sub]#", inAlternateScreen: false)
+        #expect(tracker.context.promptHomeHint == ".vs/sub")
+
+        tracker.submit(command: "cd ..")
+        _ = tracker.settle(promptLine: "[root@htwy-68 .vs]#", inAlternateScreen: false)
+        #expect(tracker.context.promptHomeHint == ".vs")
+    }
 }
