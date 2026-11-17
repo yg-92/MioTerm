@@ -90,6 +90,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         applyToolbarItems()
     }
 
+    var workspaceController: WorkspaceViewController { workspace }
+
     func show() {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)

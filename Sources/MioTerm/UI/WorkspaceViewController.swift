@@ -280,9 +280,13 @@ final class WorkspaceViewController: NSSplitViewController {
     // MARK: - 会话动作
 
     @objc func newLocalTerminal(_ sender: Any?) {
+        openLocalTerminal()
+    }
+
+    func openLocalTerminal(workingDirectory: String? = nil, initialCommand: String? = nil) {
         let controller = TerminalController(host: nil, settings: environment.settings.settings)
         environment.register(controller)
-        controller.startLocalShell()
+        controller.startLocalShell(initialDirectory: workingDirectory, initialCommand: initialCommand)
         sessions.append(controller)
     }
 
@@ -353,7 +357,7 @@ final class WorkspaceViewController: NSSplitViewController {
         }
     }
 
-    private func connect(host: HostProfile, beside baseID: UUID? = nil) {
+    func connect(host: HostProfile, beside baseID: UUID? = nil) {
         guard !pendingConnects.contains(host.id) else { return }
         pendingConnects.insert(host.id)
         Task { @MainActor [weak self] in

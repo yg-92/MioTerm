@@ -160,6 +160,14 @@ public enum L10nKey: String, CaseIterable, Sendable {
     // MARK: - 主菜单
     case menuAbout
     case menuSettings
+    case menuMakeDefaultTerminal
+    case menuRestoreSystemTerminal
+    case defaultTerminalSetTitle
+    case defaultTerminalSetMsg
+    case defaultTerminalRestoredTitle
+    case defaultTerminalRestoredMsg
+    case defaultTerminalFailedTitle
+    case defaultTerminalFailedMsg
     case menuServices
     case menuHideApp
     case menuHideOthers

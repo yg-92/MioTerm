@@ -22,6 +22,9 @@ enum MenuBuilder {
         menu.addItem(.separator())
         menu.addItem(withTitle: L10n.tr(.menuSettings), action: Selector(("showPreferences:")), keyEquivalent: ",")
         menu.addItem(.separator())
+        menu.addItem(withTitle: L10n.tr(.menuMakeDefaultTerminal), action: Selector(("makeDefaultTerminal:")), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.tr(.menuRestoreSystemTerminal), action: Selector(("restoreSystemDefaultTerminal:")), keyEquivalent: "")
+        menu.addItem(.separator())
         let services = NSMenuItem(title: L10n.tr(.menuServices), action: nil, keyEquivalent: "")
         services.submenu = NSMenu(title: L10n.tr(.menuServices))
         NSApp.servicesMenu = services.submenu

@@ -232,7 +232,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         )
     }
 
-    func startLocalShell() {
+    func startLocalShell(initialDirectory: String? = nil, initialCommand: String? = nil) {
         guard !state.isAlive, let process = processView else { return }
         prepareForReconnectIfNeeded()
         resetContextTracking()
@@ -242,12 +242,14 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
         entries.append("COLORTERM=truecolor")
         state = .running
         installOutputWatch(process)
-        // 从 Finder 启动时进程的工作目录是 `/`，本地终端应该落在用户家目录。
+        let directory = initialDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let args = initialCommand.map { ["-l", "-c", $0] } ?? ["-l"]
+        // 从 Finder 启动时进程的工作目录是 `/`，本地终端应该落在用户家目录或外部传入目录。
         process.startProcess(
             executable: shell,
-            args: ["-l"],
+            args: args,
             environment: entries,
-            currentDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            currentDirectory: directory
         )
         armInitialContextRead()
     }
