@@ -14,6 +14,45 @@ final class ConnectionCoordinator {
         self.environment = environment ?? .shared
     }
 
+    /// 先同步建立控制器与终端视图，调用方可立即切到新终端页面，再异步完成密钥探测与建连。
+    func prepareController(for rawHost: HostProfile) -> TerminalController {
+        let host = resolved(environment.hosts.host(id: rawHost.id) ?? rawHost)
+        let controller = TerminalController(host: host, settings: environment.settings.settings)
+        observe(controller, host: host)
+        environment.register(controller)
+        return controller
+    }
+
+    /// 启动已经挂入标签栏的终端会话；失败时直接在该新页面报错，不回退或弹窗阻断跳转。
+    func start(_ controller: TerminalController, in window: NSWindow?) async {
+        guard let stored = controller.host else { return }
+        let host = resolved(environment.hosts.host(id: stored.id) ?? stored)
+        guard host.protocolKind.usesHostKey else {
+            guard let stream = makeStream(for: host) else {
+                controller.failStart(reason: L10n.tr(.connectInternalSSH))
+                return
+            }
+            controller.start(stream)
+            return
+        }
+        do {
+            guard try await ensureHostKeyTrusted(host: host, in: window) else {
+                controller.failStart(reason: L10n.tr(.connectCancelConnection))
+                return
+            }
+            let context = SSHLaunchPlanner.Context.live()
+            let launch = try SSHLaunchPlanner.terminalLaunch(
+                host: host,
+                secrets: environment.secrets(for: host),
+                context: context
+            )
+            logX11Preflight(host, context: context)
+            controller.start(launch)
+        } catch {
+            controller.failStart(reason: error.localizedDescription)
+        }
+    }
+
     /// 返回已启动的会话控制器；返回 nil 表示用户取消或出错，错误已经弹给用户。
     func open(host rawHost: HostProfile, in window: NSWindow?) async -> TerminalController? {
         let host = resolved(environment.hosts.host(id: rawHost.id) ?? rawHost)

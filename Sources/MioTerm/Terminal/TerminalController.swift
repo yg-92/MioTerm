@@ -520,11 +520,15 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
 
     func processFailedToStart(source: TerminalView, error: LocalProcessError) {
         destroyAskpass()
-        state = .failed(String(describing: error))
+        failStart(reason: String(describing: error))
+    }
+
+    /// 预建会话后连接准备阶段（如主机密钥探测、启动参数校验）失败时，直接在新终端页面内报错。
+    func failStart(reason: String) {
+        state = .failed(reason)
         follow.isLive = false
         follow.stop()
-        let message = L10n.tr(.terminalLaunchFailedPrefix, String(describing: error))
-        terminalView.feed(text: "\r\n\u{1B}[31m\(message)\r\n\u{1B}[0m")
+        terminalView.feed(text: "\r\n\u{1B}[31m[\(title)] \(reason)\r\n\u{1B}[0m")
     }
 
     // MARK: - TerminalViewDelegate

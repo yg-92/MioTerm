@@ -361,12 +361,12 @@ final class WorkspaceViewController: NSSplitViewController {
     func connect(host: HostProfile, beside baseID: UUID? = nil) {
         guard !pendingConnects.contains(host.id) else { return }
         pendingConnects.insert(host.id)
+        let controller = coordinator.prepareController(for: host)
+        sessions.append(controller, beside: baseID)
         Task { @MainActor [weak self] in
             defer { self?.pendingConnects.remove(host.id) }
             guard let self else { return }
-            if let controller = await self.coordinator.open(host: host, in: self.view.window) {
-                self.sessions.append(controller, beside: baseID)
-            }
+            await self.coordinator.start(controller, in: self.view.window)
         }
     }
 
