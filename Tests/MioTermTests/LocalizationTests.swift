@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MioTermCore
 
-@Suite("多语言与扩展语种包")
+@Suite("多语言与扩展语种包", .serialized)
 struct LocalizationTests {
     @Test("内置语种包完整覆盖所有文案键")
     func builtInPacksCoverAllKeys() {

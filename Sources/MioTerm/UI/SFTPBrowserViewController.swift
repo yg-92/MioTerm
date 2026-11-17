@@ -530,6 +530,13 @@ final class SFTPBrowserViewController: NSViewController {
         }
         // 视图没进窗口就建通道等于白起一个 ssh 子进程，等 viewDidAppear 再连。
         guard isViewLoaded, view.window != nil else {
+            detach()
+            entries = []
+            currentDirectory = nil
+            listingTarget = nil
+            if isViewLoaded {
+                resetContent(L10n.tr(.sftpOpeningChannel))
+            }
             FileLogger.shared.info("文件面板未上屏，暂不建通道（跟随要等面板显示后补齐）")
             return
         }
@@ -750,11 +757,12 @@ final class SFTPBrowserViewController: NSViewController {
         detach()
         session = next
         lastUploadDirectory = nil
+        entries = []
         currentDirectory = nil
         listingTarget = nil
+        resetContent(L10n.tr(.sftpOpeningChannel))
         next.onStateChange = { [weak self] state in self?.render(state: state) }
         next.onTransferUpdate = { [weak self] progress in self?.update(progress) }
-        clearTransfers()
         render(state: next.state)
         switch next.state {
         case .ready: requestReload()
