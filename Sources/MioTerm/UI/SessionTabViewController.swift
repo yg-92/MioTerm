@@ -1368,14 +1368,12 @@ final class SessionTabChip: NSView, NSDraggingSource {
         layer?.backgroundColor = selected
             ? Theme.layerColor(Theme.selectedTab, for: self)
             : (hovering ? Theme.layerColor(Theme.hoverFill, for: self) : idleBackground)
-        if compact {
+        if compact || !selected {
             layer?.borderWidth = 0
             layer?.borderColor = nil
         } else {
             layer?.borderWidth = 1
-            layer?.borderColor = selected
-                ? Theme.layerColor(Theme.borderStrong, for: self)
-                : Theme.layerColor(Theme.border.withAlphaComponent(0.65), for: self)
+            layer?.borderColor = Theme.layerColor(Theme.borderStrong, for: self)
         }
         titleLabel.textColor = selected ? Theme.textPrimary : Theme.textSecondary.withAlphaComponent(0.85)
         closeButton.isHidden = !closable || !(selected || hovering)
