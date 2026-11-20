@@ -331,6 +331,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         case nameRequired
         case addressRequired
         case rdpDependencyMissing
+        case x11DependencyMissing
         case serialDeviceRequired
         case serialDevicePathInvalid
         case serialBaudOutOfRange
@@ -342,6 +343,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
             case .nameRequired: return L10n.tr(.hostValNameRequired)
             case .addressRequired: return L10n.tr(.hostValAddressRequired)
             case .rdpDependencyMissing: return L10n.tr(.rdpDependencyMissing, FreeRDPAvailability.installCommand)
+            case .x11DependencyMissing: return L10n.tr(.x11DependencyMissing, X11Availability.installCommand)
             case .serialDeviceRequired: return L10n.tr(.hostValSerialDeviceRequired)
             case .serialDevicePathInvalid: return L10n.tr(.hostValSerialDevicePathInvalid)
             case .serialBaudOutOfRange: return L10n.tr(.hostValSerialBaudOutOfRange, SerialConfig.minimumBaudRate, SerialConfig.maximumBaudRate)
@@ -354,7 +356,10 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     public func validate() throws {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.nameRequired }
         switch protocolKind {
-        case .ssh, .telnet, .vnc:
+        case .ssh:
+            if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.addressRequired }
+            if x11Forwarding != .off && !X11Availability.isInstalled { throw ValidationError.x11DependencyMissing }
+        case .telnet, .vnc:
             if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.addressRequired }
         case .rdp:
             if !FreeRDPAvailability.isInstalled { throw ValidationError.rdpDependencyMissing }

@@ -253,4 +253,24 @@ struct SSHLaunchPlannerTests {
         ssh.x11Forwarding = .trusted
         #expect(ssh.normalized().x11Forwarding == .trusted)
     }
+
+    @Test func blocksEnablingX11ForwardingWhenDependencyIsMissing() throws {
+        var ssh = HostProfile(name: "s", address: "h", username: "u")
+        ssh.x11Forwarding = .restricted
+
+        _ = X11Availability.withOverride(false) {
+            #expect(throws: HostProfile.ValidationError.x11DependencyMissing) {
+                try ssh.validate()
+            }
+        }
+
+        try X11Availability.withOverride(true) {
+            try ssh.validate()
+        }
+
+        ssh.x11Forwarding = .off
+        try X11Availability.withOverride(false) {
+            try ssh.validate()
+        }
+    }
 }

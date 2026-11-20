@@ -44,6 +44,7 @@ final class HostFormWindowController: NSWindowController {
     private let rtsCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormRaiseRTS), target: nil, action: nil)
     private let serialHintLabel = NSTextField(wrappingLabelWithString: "")
     private let rdpDependencyLabel = NSTextField(wrappingLabelWithString: L10n.tr(.rdpMissingDependencyHint))
+    private let x11DependencyLabel = NSTextField(wrappingLabelWithString: L10n.tr(.x11MissingDependencyHint))
     private var saveButton = NSButton()
     private var serialPanel = NSGridView()
     private let identityStack = NSStackView()
@@ -114,6 +115,7 @@ final class HostFormWindowController: NSWindowController {
         clearSecretCheckbox.target = self
         clearSecretCheckbox.action = #selector(clearSecretChanged(_:))
 
+        x11Popup.autoenablesItems = false
         x11Popup.addItems(withTitles: X11Forwarding.allCases.map { $0.displayName })
         x11Popup.toolTip = """
         远端运行图形程序、窗口显示在本机。需要本机装有 XQuartz 并在运行，\
@@ -159,6 +161,9 @@ final class HostFormWindowController: NSWindowController {
         rdpDependencyLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         rdpDependencyLabel.textColor = .systemRed
         rdpDependencyLabel.widthAnchor.constraint(equalToConstant: 330).isActive = true
+        x11DependencyLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        x11DependencyLabel.textColor = .systemRed
+        x11DependencyLabel.widthAnchor.constraint(equalToConstant: 330).isActive = true
         let cancelButton = NSButton(title: L10n.tr(.commonCancel), target: self, action: #selector(cancel(_:)))
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
@@ -187,6 +192,7 @@ final class HostFormWindowController: NSWindowController {
             [label(L10n.tr(.hostFormStartupDir)), startupDirectoryField],
             [label(L10n.tr(.hostFormTerminalType)), terminalTypeField],
             [label(L10n.tr(.hostFormX11)), x11Popup],
+            [NSView(), x11DependencyLabel],
             [NSView(), sftpCheckbox],
             [NSView(), favoriteCheckbox],
             [label(L10n.tr(.hostFormNotes)), notesScroll],
@@ -366,9 +372,18 @@ final class HostFormWindowController: NSWindowController {
         let isVNC = selectedProtocol == .vnc
         let isRDP = selectedProtocol == .rdp
         let rdpReady = FreeRDPAvailability.isInstalled
+        let x11Ready = X11Availability.isInstalled
 
         setRowHidden(rdpDependencyLabel, hidden: !isRDP || rdpReady)
         saveButton.isEnabled = !(isRDP && !rdpReady)
+
+        for (index, mode) in X11Forwarding.allCases.enumerated() {
+            x11Popup.item(at: index)?.isEnabled = x11Ready || mode == .off
+        }
+        if !x11Ready && selectedX11Forwarding != .off {
+            x11Popup.selectItem(at: 0)
+        }
+        setRowHidden(x11DependencyLabel, hidden: !isSSH || x11Ready)
 
         setRowHidden(serialPanel, hidden: !isSerial)
         setRowHidden(addressField, hidden: isSerial)
