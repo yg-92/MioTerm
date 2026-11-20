@@ -143,7 +143,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         case Self.pageActions:
             return pageActionsItem(itemIdentifier)
         case Self.actionsSpacer:
-            return spacerItem(itemIdentifier, width: 14)
+            return spacerItem(itemIdentifier, width: 4)
         case Self.windowActions:
             return windowActionsItem(itemIdentifier)
         default:
@@ -197,8 +197,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         return glassItem(identifier, content: row, label: L10n.tr(.toolbarPageActionsGroup))
     }
 
-    /// 右侧：命令库、新建标签、设置和品牌图标放进同一块玻璃，避免一半有玻璃一半没有。
+    /// 右侧：新增主机、新建标签、命令库、设置和品牌图标放进同一块玻璃，避免一半有玻璃一半没有。
     private func windowActionsItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let newHost = glassButton(
+            symbol: "plus",
+            label: L10n.tr(.toolbarNewHost),
+            action: #selector(WorkspaceViewController.newHost(_:)),
+            target: workspace
+        )
         let newTab = glassButton(
             symbol: "terminal",
             label: L10n.tr(.toolbarLocalTerminal),
@@ -218,7 +224,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             target: workspace
         )
         workspace.attachCommandAnchor(commands)
-        let row = NSStackView(views: [newTab, commands, preferences, brandView()])
+        let row = NSStackView(views: [newHost, newTab, commands, preferences, brandView()])
         row.orientation = .horizontal
         row.spacing = 3
         row.setCustomSpacing(7, after: preferences)

@@ -45,8 +45,6 @@ final class HostSidebarViewController: NSViewController {
     private let scrollView = NSScrollView()
     private let outlineView = HostOutlineView()
     private let bottomBar = NSStackView()
-    private let addButton = NSButton()
-    private let localTerminalButton = NSButton()
     private let countLabel = NSTextField(labelWithString: "")
     private let footerDivider = NSView()
     private let emptyLabel = NSTextField(labelWithString: "")
@@ -163,10 +161,6 @@ final class HostSidebarViewController: NSViewController {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.searchField.placeholderString = L10n.tr(.sidebarSearchPlaceholder)
-                self.addButton.toolTip = L10n.tr(.sidebarAddHost)
-                self.addButton.image?.accessibilityDescription = L10n.tr(.sidebarAddHost)
-                self.localTerminalButton.toolTip = L10n.tr(.sidebarLocalTerminal)
-                self.localTerminalButton.image?.accessibilityDescription = L10n.tr(.sidebarLocalTerminal)
                 self.outlineView.menu = self.buildMenu()
                 self.reload()
             }
@@ -174,47 +168,12 @@ final class HostSidebarViewController: NSViewController {
     }
 
     private func configureBottomBar() {
-        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: L10n.tr(.sidebarAddHost))
-        addButton.isBordered = false
-        addButton.contentTintColor = Theme.textSecondary
-        addButton.imageScaling = .scaleProportionallyDown
-        addButton.toolTip = L10n.tr(.sidebarAddHost)
-        addButton.target = self
-        addButton.action = #selector(addHost(_:))
-        addButton.translatesAutoresizingMaskIntoConstraints = false
-
-        localTerminalButton.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: L10n.tr(.sidebarLocalTerminal))
-        localTerminalButton.isBordered = false
-        localTerminalButton.contentTintColor = Theme.textSecondary
-        localTerminalButton.imageScaling = .scaleProportionallyDown
-        localTerminalButton.toolTip = L10n.tr(.sidebarLocalTerminal)
-        localTerminalButton.target = self
-        localTerminalButton.action = #selector(newLocalTerminal(_:))
-        localTerminalButton.translatesAutoresizingMaskIntoConstraints = false
-
         countLabel.font = .systemFont(ofSize: 10)
         countLabel.textColor = Theme.textTertiary
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        // 两个图标按钮合成一条玻璃胶囊，和文件面板的操作栏保持同一种材质。
-        let tools = NSStackView(views: [addButton, localTerminalButton])
-        tools.orientation = .horizontal
-        tools.spacing = 3
-        let toolBar = GlassBarView(
-            content: tools,
-            padding: NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
-        )
-        toolBar.setContentHuggingPriority(.required, for: .horizontal)
-
-        bottomBar.addArrangedSubview(toolBar)
         bottomBar.addArrangedSubview(NSView())
         bottomBar.addArrangedSubview(countLabel)
-        NSLayoutConstraint.activate([
-            addButton.widthAnchor.constraint(equalToConstant: 26),
-            addButton.heightAnchor.constraint(equalToConstant: 24),
-            localTerminalButton.widthAnchor.constraint(equalToConstant: 26),
-            localTerminalButton.heightAnchor.constraint(equalToConstant: 24),
-        ])
     }
 
     func reload() {
@@ -301,14 +260,6 @@ final class HostSidebarViewController: NSViewController {
     @objc private func doubleClicked(_ sender: NSOutlineView) {
         guard let host = selectedHost else { return }
         delegate?.hostSidebar(self, didRequestConnect: host)
-    }
-
-    @objc private func addHost(_ sender: NSButton) {
-        delegate?.hostSidebarDidRequestNewHost(self)
-    }
-
-    @objc private func newLocalTerminal(_ sender: NSButton) {
-        delegate?.hostSidebarDidRequestNewLocalTerminal(self)
     }
 
     // MARK: - 右键菜单
