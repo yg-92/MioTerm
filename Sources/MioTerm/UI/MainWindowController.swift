@@ -43,9 +43,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         // 首次启动想要的是设计稿尺寸，已保存的窗口帧在后面恢复。
         window.setContentSize(NSSize(width: 1240, height: 780))
         window.title = "MioTerm"
-        window.alphaValue = CGFloat(AppEnvironment.shared.settings.settings.windowOpacity)
+        applyWindowOpacity(AppEnvironment.shared.settings.settings.windowOpacity)
         workspace.onPresentationChange = { [weak self] controller in
-            self?.setSessionActive(controller != nil)
+            guard let self else { return }
+            self.setSessionActive(controller != nil)
+            self.applyWindowOpacity(AppEnvironment.shared.settings.settings.windowOpacity)
         }
         installToolbar()
         settingsObserver = NotificationCenter.default.addObserver(
@@ -55,7 +57,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.applyToolbarItems()
-                self?.window?.alphaValue = CGFloat(AppEnvironment.shared.settings.settings.windowOpacity)
+                self?.applyWindowOpacity(AppEnvironment.shared.settings.settings.windowOpacity)
             }
         }
         opacityPreviewObserver = NotificationCenter.default.addObserver(
@@ -66,7 +68,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             let previewOpacity = notification.userInfo?["opacity"] as? Double
             MainActor.assumeIsolated {
                 let opacity = previewOpacity ?? AppEnvironment.shared.settings.settings.windowOpacity
-                self?.window?.alphaValue = CGFloat(opacity)
+                self?.applyWindowOpacity(opacity)
             }
         }
         // 首次启动按设计尺寸来，但屏幕装不下时先缩到 visibleFrame 内，
@@ -82,6 +84,23 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             if fitted != window.frame {
                 window.setFrame(fitted, display: false)
             }
+        }
+    }
+
+    private func applyWindowOpacity(_ opacity: Double) {
+        guard let window else { return }
+        if workspace.isShowingDesktopSession && opacity < 0.999 {
+            // 处于 VNC/RDP 桌面会话时，主窗口保持 1.0 不透明，仅让外围框架与普通终端继承透明度，
+            // 确保远程桌面内部视图始终 100% 不透明。
+            window.alphaValue = 1.0
+            window.isOpaque = false
+            window.backgroundColor = Theme.background.withAlphaComponent(CGFloat(opacity))
+            workspace.applyFrameOpacity(CGFloat(opacity))
+        } else {
+            window.isOpaque = true
+            window.backgroundColor = Theme.background
+            window.alphaValue = CGFloat(opacity)
+            workspace.applyFrameOpacity(1.0)
         }
     }
 

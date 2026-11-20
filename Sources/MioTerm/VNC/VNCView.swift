@@ -40,6 +40,7 @@ final class VNCView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

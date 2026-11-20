@@ -28,6 +28,12 @@ final class WorkspaceViewController: NSSplitViewController {
     private var reconnectingSessions: Set<UUID> = []
     /// 当前是否停在某个终端上：工具栏据此在“主机动作”和“主页”之间切换。
     var onPresentationChange: (((any SessionControlling)?) -> Void)?
+    var isShowingDesktopSession: Bool { sessions.hasVisibleDesktopSession }
+
+    func applyFrameOpacity(_ opacity: CGFloat) {
+        sidePanel.view.alphaValue = opacity
+        sessions.applyFrameOpacity(opacity)
+    }
 
     /// 侧栏折叠态与分栏宽度都要跨启动保留，对齐 webterm 记住面板布局的行为。
     private static let splitAutosaveName = "MioTermWorkspaceSplit"

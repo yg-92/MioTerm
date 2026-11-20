@@ -46,6 +46,15 @@ final class SessionTabViewController: NSViewController {
     var controllers: [any SessionControlling] { order }
     var isEmpty: Bool { order.isEmpty }
     var isShowingHome: Bool { selectedIndex == nil }
+    var hasVisibleDesktopSession: Bool {
+        guard !isShowingHome else { return false }
+        let visibleIDs = [paneLayout.primary, paneLayout.secondary].compactMap { $0 }
+        return visibleIDs.contains { id in
+            guard let ctrl = controller(id: id) else { return false }
+            return ctrl is VNCController || ctrl is RDPController
+        }
+    }
+    private var frameOpacity: CGFloat = 1.0
 
     override func loadView() {
         let root = AppearanceAwareView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
@@ -184,6 +193,8 @@ final class SessionTabViewController: NSViewController {
         }
         let tab = TerminalTabViewController(controller: controller)
         tab.onReconnect = { [weak self] controller in self?.onReconnect?(controller) }
+        let isDesktop = controller is VNCController || controller is RDPController
+        tab.view.alphaValue = isDesktop ? 1.0 : frameOpacity
         tabControllers[controller.sessionID] = tab
         controller.onTitleChange = { [weak self] _ in self?.refreshTabs() }
         stateTokens[controller.sessionID] = controller.addStateObserver { [weak self, weak controller] _ in
@@ -597,9 +608,25 @@ final class SessionTabViewController: NSViewController {
         append(controller)
     }
 
+    func applyFrameOpacity(_ opacity: CGFloat) {
+        frameOpacity = opacity
+        view.layer?.backgroundColor = opacity < 0.999
+            ? NSColor.clear.cgColor
+            : Theme.layerColor(Theme.background, for: view)
+        tabBar.alphaValue = opacity
+        statusBar.alphaValue = opacity
+        welcome.view.alphaValue = opacity
+        for tab in tabControllers.values {
+            let isDesktop = tab.controller is VNCController || tab.controller is RDPController
+            tab.view.alphaValue = isDesktop ? 1.0 : opacity
+        }
+    }
+
     /// 图层颜色在赋值时就固化成 CGColor，深浅切换后要重新取一次。
     private func refreshAppearance() {
-        view.layer?.backgroundColor = Theme.layerColor(Theme.background, for: view)
+        view.layer?.backgroundColor = frameOpacity < 0.999
+            ? NSColor.clear.cgColor
+            : Theme.layerColor(Theme.background, for: view)
         tabBar.refreshAppearance()
         statusBar.refreshAppearance()
     }
