@@ -90,6 +90,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case prefAccentTooltip
     case prefCustomTheme
     case prefStyleButton
+    case prefWindowOpacity
     case prefTerminalFont
     case prefTerminalFontSize
     case prefTerminalType

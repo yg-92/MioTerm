@@ -12,10 +12,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private static let windowActions = NSToolbarItem.Identifier("mio.windowActions")
     private var showingSession = false
     private var settingsObserver: NSObjectProtocol?
+    private var opacityPreviewObserver: NSObjectProtocol?
 
     deinit {
         if let settingsObserver {
             NotificationCenter.default.removeObserver(settingsObserver)
+        }
+        if let opacityPreviewObserver {
+            NotificationCenter.default.removeObserver(opacityPreviewObserver)
         }
     }
 
@@ -38,6 +42,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         // 首次启动想要的是设计稿尺寸，已保存的窗口帧在后面恢复。
         window.setContentSize(NSSize(width: 1240, height: 780))
         window.title = "MioTerm"
+        window.alphaValue = CGFloat(AppEnvironment.shared.settings.settings.windowOpacity)
         workspace.onPresentationChange = { [weak self] controller in
             self?.setSessionActive(controller != nil)
         }
@@ -49,6 +54,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.applyToolbarItems()
+                self?.window?.alphaValue = CGFloat(AppEnvironment.shared.settings.settings.windowOpacity)
+            }
+        }
+        opacityPreviewObserver = NotificationCenter.default.addObserver(
+            forName: .mioTermWindowOpacityPreview,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let opacity = (notification.userInfo?["opacity"] as? Double)
+                ?? AppEnvironment.shared.settings.settings.windowOpacity
+            MainActor.assumeIsolated {
+                self?.window?.alphaValue = CGFloat(opacity)
             }
         }
         // 首次启动按设计尺寸来，但屏幕装不下时先缩到 visibleFrame 内，

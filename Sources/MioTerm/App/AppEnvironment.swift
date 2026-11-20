@@ -131,4 +131,5 @@ final class AppEnvironment {
 
 extension Notification.Name {
     static let mioTermSettingsDidChange = Notification.Name("MioTermSettingsDidChange")
+    static let mioTermWindowOpacityPreview = Notification.Name("MioTermWindowOpacityPreview")
 }

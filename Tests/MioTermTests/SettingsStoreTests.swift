@@ -98,6 +98,11 @@ struct SettingsStoreTests {
         #expect(store.settings.scrollbackLines == 200)
         #expect(store.settings.maxConcurrentTransfers == 8)
         #expect(store.settings.terminalType == "screen-256color")
+        // 透明度范围在 0.4 ~ 1.0 之间。
+        try store.update { $0.windowOpacity = 0.05 }
+        #expect(store.settings.windowOpacity == AppSettings.minimumWindowOpacity)
+        try store.update { $0.windowOpacity = 2.5 }
+        #expect(store.settings.windowOpacity == AppSettings.maximumWindowOpacity)
         // 设置里的默认值是所有留空主机的兜底，不能是空串。
         try store.update { $0.terminalType = "" }
         #expect(store.settings.terminalType == TerminalTypes.fallback)

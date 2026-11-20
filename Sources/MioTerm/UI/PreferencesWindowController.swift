@@ -5,7 +5,7 @@ import MioTermCore
 /// 视觉上跟主机表单一致：标签左对齐、控件左端对齐，窗口按内容自适应高度，
 /// 免得底部按钮被挤到窗口外，点了像没反应。
 @MainActor
-final class PreferencesWindowController: NSWindowController {
+final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private let store: SettingsStore
     private var styleWindow: StylePreferencesWindowController?
 
@@ -13,6 +13,18 @@ final class PreferencesWindowController: NSWindowController {
     private let appearancePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let contrastPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let accentPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+    private lazy var opacitySlider: NSSlider = {
+        let slider = NSSlider(
+            value: 1.0,
+            minValue: AppSettings.minimumWindowOpacity,
+            maxValue: AppSettings.maximumWindowOpacity,
+            target: self,
+            action: #selector(opacityChanged(_:))
+        )
+        slider.isContinuous = true
+        return slider
+    }()
+    private let opacityValueLabel = NSTextField(labelWithString: "100%")
     private let fontPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let fontSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
     /// 终端类型既能从常用 TERM 里挑，也能直接输入对端要求的名字。
@@ -69,6 +81,7 @@ final class PreferencesWindowController: NSWindowController {
         // 窗口归控制器长期持有：关掉再打开时要能复用，不然第二次打开控件会失灵。
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        window.delegate = self
         buildContents()
         load(store.settings)
         NotificationCenter.default.addObserver(
@@ -137,12 +150,22 @@ final class PreferencesWindowController: NSWindowController {
         styleButton.target = self
         styleButton.action = #selector(openStyles(_:))
         styleButton.bezelStyle = .rounded
+
+        opacitySlider.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        opacityValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        opacityValueLabel.alignment = .right
+        opacityValueLabel.widthAnchor.constraint(equalToConstant: 42).isActive = true
+        let opacityRow = NSStackView(views: [opacitySlider, opacityValueLabel])
+        opacityRow.orientation = .horizontal
+        opacityRow.spacing = 8
+
         let grid = NSGridView(views: [
             [label(.prefLanguage), languagePopup],
             [label(.prefAppearance), appearancePopup],
             [label(.prefContrast), contrastPopup],
             [label(.prefAccent), accentPopup],
             [label(.prefCustomTheme), styleButton],
+            [label(.prefWindowOpacity), opacityRow],
             [label(.prefTerminalFont), fontPopup],
             [label(.prefTerminalFontSize), fontSizePopup],
             [label(.prefTerminalType), terminalTypeCombo],
@@ -232,6 +255,8 @@ final class PreferencesWindowController: NSWindowController {
         appearancePopup.selectItem(at: AppearanceMode.allCases.firstIndex(of: settings.appearance) ?? 0)
         contrastPopup.selectItem(at: UIContrast.allCases.firstIndex(of: settings.contrast) ?? 0)
         accentPopup.selectItem(at: AccentColor.allCases.firstIndex(of: settings.accent) ?? 0)
+        opacitySlider.doubleValue = settings.windowOpacity
+        updateOpacityLabel(settings.windowOpacity)
         if let index = availableFonts.firstIndex(of: settings.terminalFontName) {
             fontPopup.selectItem(at: index)
         } else {
@@ -270,6 +295,7 @@ final class PreferencesWindowController: NSWindowController {
                 settings.appearance = selected(appearancePopup, AppearanceMode.allCases)
                 settings.contrast = selected(contrastPopup, UIContrast.allCases)
                 settings.accent = selected(accentPopup, AccentColor.allCases)
+                settings.windowOpacity = opacitySlider.doubleValue
                 settings.terminalFontName = fontName
                 settings.terminalFontSize = Double(fontSizePopup.titleOfSelectedItem ?? "13") ?? 13
                 // 输入框可以留空，但设置里的默认值必须是能直接当 TERM 用的具体名字。
@@ -310,9 +336,38 @@ final class PreferencesWindowController: NSWindowController {
         styleWindow?.show()
     }
 
+    @objc private func opacityChanged(_ sender: NSSlider) {
+        let value = sender.doubleValue
+        updateOpacityLabel(value)
+        NotificationCenter.default.post(
+            name: .mioTermWindowOpacityPreview,
+            object: nil,
+            userInfo: ["opacity": value]
+        )
+    }
+
+    private func updateOpacityLabel(_ value: Double) {
+        opacityValueLabel.stringValue = "\(Int(round(value * 100)))%"
+    }
+
     @objc private func openStyles(_ sender: Any?) { showStyles() }
 
     @objc private func cancel(_ sender: NSButton) {
+        restoreSavedOpacityAndReload()
         close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        restoreSavedOpacityAndReload()
+    }
+
+    private func restoreSavedOpacityAndReload() {
+        let saved = store.settings.windowOpacity
+        load(store.settings)
+        NotificationCenter.default.post(
+            name: .mioTermWindowOpacityPreview,
+            object: nil,
+            userInfo: ["opacity": saved]
+        )
     }
 }

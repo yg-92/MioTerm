@@ -53,11 +53,14 @@ public enum AccentColor: String, Codable, CaseIterable, Sendable {
 /// 对齐 webterm “页面配置热更新” 的行为。
 public struct AppSettings: Codable, Equatable, Sendable {
     public static let defaultScrollbackLines = 2_000
+    public static let minimumWindowOpacity = 0.4
+    public static let maximumWindowOpacity = 1.0
     public var language: AppLanguage
     public var themeCustomization: ThemeCustomization
     public var appearance: AppearanceMode
     public var contrast: UIContrast
     public var accent: AccentColor
+    public var windowOpacity: Double
     public var terminalFontName: String
     public var terminalFontSize: Double
     /// 新建主机时预填的 TERM，也是主机留空时的兜底；本地终端不吃这一项，
@@ -80,6 +83,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         appearance: AppearanceMode = .system,
         contrast: UIContrast = .soft,
         accent: AccentColor = .blue,
+        windowOpacity: Double = 1.0,
         terminalFontName: String = "Menlo Regular",
         terminalFontSize: Double = 13,
         terminalType: String = TerminalTypes.fallback,
@@ -98,6 +102,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.appearance = appearance
         self.contrast = contrast
         self.accent = accent
+        self.windowOpacity = windowOpacity
         self.terminalFontName = terminalFontName
         self.terminalFontSize = terminalFontSize
         self.terminalType = terminalType
@@ -123,6 +128,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         appearance = (try? c.decodeIfPresent(AppearanceMode.self, forKey: .appearance)) ?? .system
         contrast = (try? c.decodeIfPresent(UIContrast.self, forKey: .contrast)) ?? .soft
         accent = (try? c.decodeIfPresent(AccentColor.self, forKey: .accent)) ?? .blue
+        windowOpacity = (try? c.decodeIfPresent(Double.self, forKey: .windowOpacity)) ?? 1.0
         terminalFontName = (try? c.decodeIfPresent(String.self, forKey: .terminalFontName)) ?? "Menlo Regular"
         terminalFontSize = (try? c.decodeIfPresent(Double.self, forKey: .terminalFontSize)) ?? 13
         // 老文件没有这一项；解析不出来时也退回兜底值，绝不能留空串当 TERM 传给子进程。
@@ -144,6 +150,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public func normalized() -> AppSettings {
         var copy = self
         copy.themeCustomization = themeCustomization.normalized()
+        copy.windowOpacity = min(Self.maximumWindowOpacity, max(Self.minimumWindowOpacity, windowOpacity))
         copy.terminalFontSize = min(32, max(9, terminalFontSize))
         copy.terminalType = TerminalTypes.resolved(terminalType, default: TerminalTypes.fallback)
         copy.fileTreeFontSize = min(20, max(10, fileTreeFontSize))
