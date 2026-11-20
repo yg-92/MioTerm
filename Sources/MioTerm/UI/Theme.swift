@@ -194,6 +194,160 @@ enum Theme {
         SwiftTerm.Color(red8: 0x31, green8: 0x92, blue8: 0xAA),
         SwiftTerm.Color(red8: 0x8C, green8: 0x95, blue8: 0x9F),
     ]
+
+    static func tint(for host: HostProfile) -> NSColor {
+        guard host.protocolKind == .ssh, host.systemIcon != .default else {
+            return tint(for: host.protocolKind)
+        }
+        return tint(for: host.systemIcon)
+    }
+
+    static func tint(for systemIcon: SSHSystemIcon) -> NSColor {
+        switch systemIcon {
+        case .default: return tint(for: .ssh)
+        case .ubuntu: return rgba(0xE9, 0x54, 0x20)
+        case .debian: return rgba(0xD7, 0x0A, 0x53)
+        case .centos: return rgba(0x93, 0x22, 0x79)
+        case .rhel: return rgba(0xEE, 0x00, 0x00)
+        case .fedora: return rgba(0x51, 0xA2, 0xDA)
+        case .arch: return rgba(0x17, 0x93, 0xD1)
+        case .alpine: return rgba(0x0D, 0x59, 0x7F)
+        case .macos: return textPrimary
+        case .windows: return rgba(0x00, 0x78, 0xD4)
+        case .linux: return rgba(0xE0, 0x9F, 0x1F)
+        }
+    }
+
+    static func iconImage(for host: HostProfile) -> NSImage? {
+        guard host.protocolKind == .ssh, host.systemIcon != .default else {
+            return NSImage(systemSymbolName: symbol(for: host.protocolKind), accessibilityDescription: host.protocolKind.displayName)
+        }
+        return iconImage(for: host.systemIcon)
+    }
+
+    static func iconImage(for systemIcon: SSHSystemIcon) -> NSImage? {
+        if systemIcon == .default {
+            return NSImage(systemSymbolName: symbol(for: .ssh), accessibilityDescription: systemIcon.displayName)
+        }
+        let image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { _ in
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+            switch systemIcon {
+            case .ubuntu:
+                let ring = NSBezierPath(ovalIn: NSRect(x: 2.5, y: 2.5, width: 9, height: 9))
+                ring.lineWidth = 1.6
+                ring.stroke()
+                for angle in [0.0, 120.0, 240.0] {
+                    let rad = angle * .pi / 180.0
+                    let cx = 7.0 + cos(rad) * 4.5
+                    let cy = 7.0 + sin(rad) * 4.5
+                    NSBezierPath(ovalIn: NSRect(x: cx - 1.5, y: cy - 1.5, width: 3, height: 3)).fill()
+                }
+            case .centos:
+                let box = NSBezierPath(roundedRect: NSRect(x: 2, y: 2, width: 10, height: 10), xRadius: 2, yRadius: 2)
+                box.lineWidth = 1.5
+                box.stroke()
+                let cross = NSBezierPath()
+                cross.lineWidth = 1.4
+                cross.move(to: NSPoint(x: 7, y: 2))
+                cross.line(to: NSPoint(x: 7, y: 12))
+                cross.move(to: NSPoint(x: 2, y: 7))
+                cross.line(to: NSPoint(x: 12, y: 7))
+                cross.stroke()
+            case .debian:
+                let spiral = NSBezierPath()
+                spiral.lineWidth = 1.6
+                spiral.lineCapStyle = .round
+                spiral.appendArc(withCenter: NSPoint(x: 7, y: 7), radius: 5, startAngle: 20, endAngle: 300)
+                spiral.appendArc(withCenter: NSPoint(x: 7.4, y: 7.2), radius: 2.3, startAngle: 300, endAngle: 120, clockwise: true)
+                spiral.stroke()
+            case .rhel:
+                let crown = NSBezierPath()
+                crown.lineWidth = 1.5
+                crown.lineJoinStyle = .round
+                crown.move(to: NSPoint(x: 2, y: 4.5))
+                crown.curve(to: NSPoint(x: 12, y: 4.5), controlPoint1: NSPoint(x: 5, y: 3), controlPoint2: NSPoint(x: 9, y: 3))
+                crown.move(to: NSPoint(x: 4, y: 5))
+                crown.line(to: NSPoint(x: 5.5, y: 10.5))
+                crown.line(to: NSPoint(x: 8.5, y: 10.5))
+                crown.line(to: NSPoint(x: 10, y: 5))
+                crown.stroke()
+            case .fedora:
+                let badge = NSBezierPath(roundedRect: NSRect(x: 2, y: 2, width: 10, height: 10), xRadius: 4.5, yRadius: 4.5)
+                badge.lineWidth = 1.5
+                badge.stroke()
+                let f = NSBezierPath()
+                f.lineWidth = 1.5
+                f.lineCapStyle = .round
+                f.move(to: NSPoint(x: 6.5, y: 4))
+                f.line(to: NSPoint(x: 6.5, y: 9.2))
+                f.curve(to: NSPoint(x: 9.2, y: 9.5), controlPoint1: NSPoint(x: 6.5, y: 10.6), controlPoint2: NSPoint(x: 9.2, y: 10.6))
+                f.move(to: NSPoint(x: 4.8, y: 7))
+                f.line(to: NSPoint(x: 8.5, y: 7))
+                f.stroke()
+            case .arch:
+                let tri = NSBezierPath()
+                tri.lineWidth = 1.6
+                tri.lineJoinStyle = .round
+                tri.lineCapStyle = .round
+                tri.move(to: NSPoint(x: 2.5, y: 2.5))
+                tri.line(to: NSPoint(x: 7, y: 12))
+                tri.line(to: NSPoint(x: 11.5, y: 2.5))
+                tri.move(to: NSPoint(x: 4.8, y: 5.2))
+                tri.line(to: NSPoint(x: 9.2, y: 5.2))
+                tri.stroke()
+            case .alpine:
+                let peak = NSBezierPath()
+                peak.lineWidth = 1.5
+                peak.lineJoinStyle = .round
+                peak.lineCapStyle = .round
+                peak.move(to: NSPoint(x: 1.5, y: 3))
+                peak.line(to: NSPoint(x: 5.5, y: 10.5))
+                peak.line(to: NSPoint(x: 8.5, y: 5.5))
+                peak.line(to: NSPoint(x: 10.2, y: 8.5))
+                peak.line(to: NSPoint(x: 12.5, y: 3))
+                peak.stroke()
+            case .macos:
+                let screen = NSBezierPath(roundedRect: NSRect(x: 2, y: 4, width: 10, height: 7.5), xRadius: 1.5, yRadius: 1.5)
+                screen.lineWidth = 1.5
+                screen.stroke()
+                let base = NSBezierPath()
+                base.lineWidth = 1.5
+                base.lineCapStyle = .round
+                base.move(to: NSPoint(x: 4.5, y: 2.2))
+                base.line(to: NSPoint(x: 9.5, y: 2.2))
+                base.stroke()
+            case .windows:
+                for rect in [
+                    NSRect(x: 2, y: 7.6, width: 4.4, height: 4.4),
+                    NSRect(x: 7.6, y: 7.6, width: 4.4, height: 4.4),
+                    NSRect(x: 2, y: 2, width: 4.4, height: 4.4),
+                    NSRect(x: 7.6, y: 2, width: 4.4, height: 4.4),
+                ] {
+                    NSBezierPath(roundedRect: rect, xRadius: 0.7, yRadius: 0.7).fill()
+                }
+            case .linux:
+                let box = NSBezierPath(roundedRect: NSRect(x: 1.8, y: 2.5, width: 10.4, height: 9), xRadius: 2, yRadius: 2)
+                box.lineWidth = 1.5
+                box.stroke()
+                let prompt = NSBezierPath()
+                prompt.lineWidth = 1.4
+                prompt.lineCapStyle = .round
+                prompt.lineJoinStyle = .round
+                prompt.move(to: NSPoint(x: 4.2, y: 8.5))
+                prompt.line(to: NSPoint(x: 6.2, y: 7))
+                prompt.line(to: NSPoint(x: 4.2, y: 5.5))
+                prompt.move(to: NSPoint(x: 7.4, y: 5.5))
+                prompt.line(to: NSPoint(x: 9.8, y: 5.5))
+                prompt.stroke()
+            case .default:
+                break
+            }
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
 }
 
 /// 只有 NSView 暴露外观变化回调，NSViewController 没有；

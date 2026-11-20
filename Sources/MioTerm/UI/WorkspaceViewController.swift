@@ -231,7 +231,7 @@ final class WorkspaceViewController: NSSplitViewController {
         guard let window = view.window else { return }
         guard let controller else {
             window.title = "MioTerm"
-            window.subtitle = L10n.tr(.workspaceHomeSubtitle)
+            window.subtitle = ""
             return
         }
         window.title = controller.title

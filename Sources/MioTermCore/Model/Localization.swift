@@ -320,6 +320,9 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case prefTabRemoteDesktop
     case sidebarExpandHosts
     case sidebarExpandFiles
+    case hostFormSystemIcon
+    case sshSystemIconDefault
+    case hostMenuChangeSystemIcon
     case prefRemoteControlKey
     case prefRemoteOptionKey
     case authAutomatic

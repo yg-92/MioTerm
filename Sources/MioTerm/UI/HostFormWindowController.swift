@@ -27,6 +27,7 @@ final class HostFormWindowController: NSWindowController {
     private let terminalTypeField = NSComboBox()
     /// X11 转发：远端跑图形程序，窗口由本机 XQuartz 显示。
     private let x11Popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+    private let systemIconPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let sftpCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormSFTPCheckbox), target: nil, action: nil)
     private let favoriteCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormFavorite), target: nil, action: nil)
     private let notesView = NSTextView()
@@ -76,6 +77,7 @@ final class HostFormWindowController: NSWindowController {
     private var selectedParity: Parity { selected(parityPopup, Parity.allCases) }
     private var selectedLineEnding: LineEnding { selected(lineEndingPopup, LineEnding.allCases) }
     private var selectedX11Forwarding: X11Forwarding { selected(x11Popup, X11Forwarding.allCases) }
+    private var selectedSystemIcon: SSHSystemIcon { selected(systemIconPopup, SSHSystemIcon.allCases) }
 
     init(host: HostProfile, environment: AppEnvironment) {
         self.original = host
@@ -117,6 +119,10 @@ final class HostFormWindowController: NSWindowController {
 
         x11Popup.autoenablesItems = false
         x11Popup.addItems(withTitles: X11Forwarding.allCases.map { $0.displayName })
+        for iconKind in SSHSystemIcon.allCases {
+            systemIconPopup.addItem(withTitle: iconKind.displayName)
+            systemIconPopup.lastItem?.image = Theme.iconImage(for: iconKind)
+        }
         x11Popup.toolTip = """
         远端运行图形程序、窗口显示在本机。需要本机装有 XQuartz 并在运行，\
         且远端 sshd 开了 X11Forwarding、装了 xauth。文件面板的 SFTP 通道不受这一档影响。
@@ -193,6 +199,7 @@ final class HostFormWindowController: NSWindowController {
             [label(L10n.tr(.hostFormTerminalType)), terminalTypeField],
             [label(L10n.tr(.hostFormX11)), x11Popup],
             [NSView(), x11DependencyLabel],
+            [label(L10n.tr(.hostFormSystemIcon)), systemIconPopup],
             [NSView(), sftpCheckbox],
             [NSView(), favoriteCheckbox],
             [label(L10n.tr(.hostFormNotes)), notesScroll],
@@ -309,6 +316,7 @@ final class HostFormWindowController: NSWindowController {
         startupDirectoryField.stringValue = host.startupDirectory
         terminalTypeField.stringValue = host.terminalType
         x11Popup.selectItem(at: X11Forwarding.allCases.firstIndex(of: host.x11Forwarding) ?? 0)
+        systemIconPopup.selectItem(at: SSHSystemIcon.allCases.firstIndex(of: host.systemIcon) ?? 0)
         timeoutField.stringValue = "\(host.connectTimeout)"
         keepaliveField.stringValue = "\(host.keepaliveInterval)"
         notesView.string = host.notes
@@ -395,6 +403,7 @@ final class HostFormWindowController: NSWindowController {
         setRowHidden(keepaliveField, hidden: !isSSH)
         setRowHidden(startupDirectoryField, hidden: !isSSH)
         setRowHidden(x11Popup, hidden: !isSSH)
+        setRowHidden(systemIconPopup, hidden: !isSSH)
         setRowHidden(sftpCheckbox, hidden: !isSSH)
         setRowHidden(fingerprintLabel, hidden: !isSSH)
 
@@ -445,6 +454,7 @@ final class HostFormWindowController: NSWindowController {
         // 存空串而不是当场填上默认值：这样以后改设置里的默认，未指定的主机会跟着变。
         host.terminalType = TerminalTypes.sanitized(terminalTypeField.stringValue)
         host.x11Forwarding = selectedX11Forwarding
+        host.systemIcon = selectedSystemIcon
         host.sftpEnabled = sftpCheckbox.state == .on
         host.favorite = favoriteCheckbox.state == .on
         host.notes = notesView.string

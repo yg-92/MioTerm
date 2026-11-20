@@ -42,6 +42,7 @@ final class HostSidebarViewController: NSViewController {
     private let hostIdentifier = NSUserInterfaceItemIdentifier("HostCell")
 
     private let searchField = NSSearchField()
+    private let newHostButton = NSButton()
     private let scrollView = NSScrollView()
     private let outlineView = HostOutlineView()
     private let bottomBar = NSStackView()
@@ -109,6 +110,14 @@ final class HostSidebarViewController: NSViewController {
         searchField.controlSize = .large
         searchField.font = .systemFont(ofSize: 13)
 
+        newHostButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: L10n.tr(.toolbarNewHost))
+        newHostButton.bezelStyle = .accessoryBarAction
+        newHostButton.isBordered = false
+        newHostButton.contentTintColor = Theme.textSecondary
+        newHostButton.toolTip = L10n.tr(.toolbarNewHost)
+        newHostButton.target = self
+        newHostButton.action = #selector(newHostTapped(_:))
+
         bottomBar.orientation = .horizontal
         bottomBar.spacing = 6
         configureBottomBar()
@@ -120,15 +129,20 @@ final class HostSidebarViewController: NSViewController {
         emptyLabel.lineBreakMode = .byWordWrapping
         emptyLabel.isHidden = true
 
-        for subview in [searchField, scrollView, emptyLabel, footerDivider, bottomBar] {
+        for subview in [searchField, newHostButton, scrollView, emptyLabel, footerDivider, bottomBar] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(subview)
         }
 
         NSLayoutConstraint.activate([
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            searchField.trailingAnchor.constraint(equalTo: newHostButton.leadingAnchor, constant: -6),
             searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 11),
+
+            newHostButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
+            newHostButton.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
+            newHostButton.widthAnchor.constraint(equalToConstant: 26),
+            newHostButton.heightAnchor.constraint(equalToConstant: 26),
 
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -161,6 +175,7 @@ final class HostSidebarViewController: NSViewController {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.searchField.placeholderString = L10n.tr(.sidebarSearchPlaceholder)
+                self.newHostButton.toolTip = L10n.tr(.toolbarNewHost)
                 self.outlineView.menu = self.buildMenu()
                 self.reload()
             }
@@ -286,7 +301,42 @@ final class HostSidebarViewController: NSViewController {
             menu.addItem(NSMenuItem(title: title, action: action, keyEquivalent: ""))
         }
         for item in menu.items { item.target = self }
+
+        let iconMenuItem = NSMenuItem(title: L10n.tr(.hostMenuChangeSystemIcon), action: nil, keyEquivalent: "")
+        let iconSubmenu = NSMenu()
+        for iconKind in SSHSystemIcon.allCases {
+            let sub = NSMenuItem(title: iconKind.displayName, action: #selector(changeSystemIcon(_:)), keyEquivalent: "")
+            sub.target = self
+            sub.representedObject = iconKind.rawValue
+            sub.image = Theme.iconImage(for: iconKind)
+            iconSubmenu.addItem(sub)
+        }
+        iconMenuItem.submenu = iconSubmenu
+        menu.insertItem(iconMenuItem, at: 3)
         return menu
+    }
+
+    @objc private func newHostTapped(_ sender: Any?) {
+        delegate?.hostSidebarDidRequestNewHost(self)
+    }
+
+    @objc private func changeSystemIcon(_ sender: NSMenuItem) {
+        guard let host = menuHost, host.protocolKind == .ssh,
+              let raw = sender.representedObject as? String,
+              let iconKind = SSHSystemIcon(rawValue: raw) else { return }
+        var updated = host
+        updated.systemIcon = iconKind
+        _ = try? repository.save(updated)
+    }
+
+    @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(changeSystemIcon(_:)) {
+            guard let host = menuHost, host.protocolKind == .ssh else { return false }
+            let raw = menuItem.representedObject as? String
+            menuItem.state = (raw == host.systemIcon.rawValue) ? .on : .off
+            return true
+        }
+        return menuHost != nil
     }
 
     /// 右键命中行优先于当前选中行，否则在同组内右键时会误操作上一行选中的主机。
@@ -647,9 +697,9 @@ final class HostRowCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
 
     func configure(host: HostProfile) {
-        let tint = Theme.tint(for: host.protocolKind)
+        let tint = Theme.tint(for: host)
         badge.layer?.backgroundColor = Theme.layerColor(tint.withAlphaComponent(0.16), for: self)
-        icon.image = NSImage(systemSymbolName: Theme.symbol(for: host.protocolKind), accessibilityDescription: host.protocolKind.displayName)
+        icon.image = Theme.iconImage(for: host)
         icon.contentTintColor = tint
         titleLabel.stringValue = host.displayName
         detailLabel.stringValue = "\(host.protocolKind.displayName) · \(host.subtitle)"

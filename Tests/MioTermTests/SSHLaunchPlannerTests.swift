@@ -273,4 +273,20 @@ struct SSHLaunchPlannerTests {
             try ssh.validate()
         }
     }
+
+    @Test func sshSystemIconDefaultsAndRoundTrips() throws {
+        var ssh = HostProfile(name: "ubuntu-box", address: "10.0.0.1", username: "ubuntu")
+        #expect(ssh.systemIcon == .default)
+        ssh.systemIcon = .ubuntu
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(HostProfile.self, from: encoder.encode(ssh))
+        #expect(decoded.systemIcon == .ubuntu)
+
+        var rdp = HostProfile(name: "win", protocolKind: .rdp, address: "10.0.0.2")
+        rdp.systemIcon = .centos
+        #expect(rdp.normalized().systemIcon == .default)
+    }
 }
