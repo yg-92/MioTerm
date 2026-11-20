@@ -1,10 +1,12 @@
 #include "CFreeRDPShim.h"
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // FreeRDP 3.x ABI offsets (verified on arm64 macOS FreeRDP 3.33.1)
 #define RDP_CONTEXT_SIZE 1024
@@ -81,6 +83,29 @@ typedef struct {
 
     int (*client_parse_args)(void* settings, int argc, char** argv, RdpBool allow_unknown);
     RdpBool (*client_load_addins)(void* channels, void* settings);
+
+    void* (*clipboard_create)(void);
+    void (*clipboard_destroy)(void* clipboard);
+    RdpBool (*clipboard_empty)(void* clipboard);
+    RdpUInt32 (*clipboard_get_format_id)(void* clipboard, const char* name);
+    const char* (*clipboard_get_format_name)(void* clipboard, RdpUInt32 format_id);
+    RdpUInt32 (*clipboard_register_format)(void* clipboard, const char* name);
+    RdpBool (*clipboard_set_data)(void* clipboard, RdpUInt32 format_id, const void* data, RdpUInt32 size);
+    void* (*clipboard_get_data)(void* clipboard, RdpUInt32 format_id, RdpUInt32* size);
+    void (*clipboard_lock)(void* clipboard);
+    void (*clipboard_unlock)(void* clipboard);
+
+    void* (*clip_file_new)(void* context);
+    void (*clip_file_free)(void* file);
+    RdpBool (*clip_file_init)(void* file, void* cliprdr);
+    RdpBool (*clip_file_uninit)(void* file, void* cliprdr);
+    RdpBool (*clip_file_clear)(void* file);
+    RdpBool (*clip_file_set_locally_available)(void* file, RdpBool available);
+    RdpBool (*clip_file_remote_set_flags)(void* file, RdpUInt32 flags);
+    RdpUInt32 (*clip_file_notify_new_server_format_list)(void* file);
+    RdpUInt32 (*clip_file_notify_new_client_format_list)(void* file);
+    RdpBool (*clip_file_update_client_data)(void* file, const char* data, size_t size);
+    RdpBool (*clip_file_set_local_clipboard_data)(void* file, const void* (*fkt)(void*, const char*, size_t*), void* userdata, const char** mime_types, size_t count);
 } FreeRDPFunctions;
 
 static pthread_mutex_t g_loader_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -158,10 +183,31 @@ static bool try_load_from_dir(const char* dir) {
     #undef LOAD_SYM
 
     g_fn.pubsub_subscribe = dlsym(winpr, "PubSub_Subscribe");
+    g_fn.clipboard_create = dlsym(winpr, "ClipboardCreate");
+    g_fn.clipboard_destroy = dlsym(winpr, "ClipboardDestroy");
+    g_fn.clipboard_empty = dlsym(winpr, "ClipboardEmpty");
+    g_fn.clipboard_get_format_id = dlsym(winpr, "ClipboardGetFormatId");
+    g_fn.clipboard_get_format_name = dlsym(winpr, "ClipboardGetFormatName");
+    g_fn.clipboard_register_format = dlsym(winpr, "ClipboardRegisterFormat");
+    g_fn.clipboard_set_data = dlsym(winpr, "ClipboardSetData");
+    g_fn.clipboard_get_data = dlsym(winpr, "ClipboardGetData");
+    g_fn.clipboard_lock = dlsym(winpr, "ClipboardLock");
+    g_fn.clipboard_unlock = dlsym(winpr, "ClipboardUnlock");
 
     if (client) {
         g_fn.client_parse_args = dlsym(client, "freerdp_client_settings_parse_command_line_arguments");
         g_fn.client_load_addins = dlsym(client, "freerdp_client_load_addins");
+        g_fn.clip_file_new = dlsym(client, "cliprdr_file_context_new");
+        g_fn.clip_file_free = dlsym(client, "cliprdr_file_context_free");
+        g_fn.clip_file_init = dlsym(client, "cliprdr_file_context_init");
+        g_fn.clip_file_uninit = dlsym(client, "cliprdr_file_context_uninit");
+        g_fn.clip_file_clear = dlsym(client, "cliprdr_file_context_clear");
+        g_fn.clip_file_set_locally_available = dlsym(client, "cliprdr_file_context_set_locally_available");
+        g_fn.clip_file_remote_set_flags = dlsym(client, "cliprdr_file_context_remote_set_flags");
+        g_fn.clip_file_notify_new_server_format_list = dlsym(client, "cliprdr_file_context_notify_new_server_format_list");
+        g_fn.clip_file_notify_new_client_format_list = dlsym(client, "cliprdr_file_context_notify_new_client_format_list");
+        g_fn.clip_file_update_client_data = dlsym(client, "cliprdr_file_context_update_client_data");
+        g_fn.clip_file_set_local_clipboard_data = dlsym(client, "cliprdr_file_context_set_local_clipboard_data");
     }
 
     g_fn.winpr_handle = winpr;
@@ -215,6 +261,118 @@ struct MioRdpSession {
     bool resize_pending;
     bool gdi_initialized;
     bool connected;
+
+    void* cliprdr;
+    void* clip_file;
+    void* clipboard;
+    pthread_mutex_t clip_lock;
+    pthread_cond_t clip_cond;
+    bool closing;
+    bool clip_ready;
+    bool server_has_text;
+    uint32_t server_text_format_id;
+    bool server_has_files;
+    uint32_t server_fgd_format_id;
+    uint32_t client_fgd_format_id;
+    bool pending_response_ready;
+    uint8_t* pending_response_data;
+    uint32_t pending_response_size;
+    uint8_t* remote_fgd_cache;
+    size_t remote_fgd_cache_size;
+    uint8_t* remote_text_cache;
+    size_t remote_text_cache_size;
+};
+
+#define MIO_CF_TEXT 1u
+#define MIO_CF_UNICODETEXT 13u
+#define MIO_CB_FORMAT_LIST 0x0002u
+#define MIO_CB_FORMAT_LIST_RESPONSE 0x0003u
+#define MIO_CB_FORMAT_DATA_REQUEST 0x0004u
+#define MIO_CB_FORMAT_DATA_RESPONSE 0x0005u
+#define MIO_CB_CLIP_CAPS 0x0007u
+#define MIO_CB_RESPONSE_OK 0x0001u
+#define MIO_CB_RESPONSE_FAIL 0x0002u
+#define MIO_CB_CAPSTYPE_GENERAL 0x0001u
+#define MIO_CB_CAPSTYPE_GENERAL_LEN 12u
+#define MIO_CB_CAPS_VERSION_2 0x00000002u
+#define MIO_CB_USE_LONG_FORMAT_NAMES 0x00000002u
+#define MIO_CB_STREAM_FILECLIP_ENABLED 0x00000004u
+#define MIO_CB_FILECLIP_NO_FILE_PATHS 0x00000008u
+#define MIO_CB_CAN_LOCK_CLIPDATA 0x00000010u
+#define MIO_CB_HUGE_FILE_SUPPORT_ENABLED 0x00000020u
+
+typedef struct {
+    uint16_t msgType;
+    uint16_t msgFlags;
+    uint32_t dataLen;
+} MioCliprdrHeader;
+
+typedef struct {
+    uint16_t capabilitySetType;
+    uint16_t capabilitySetLength;
+    uint32_t version;
+    uint32_t generalFlags;
+} MioCliprdrGeneralCapSet;
+
+typedef struct {
+    MioCliprdrHeader common;
+    uint32_t cCapabilitiesSets;
+    void* capabilitySets;
+} MioCliprdrCapabilities;
+
+typedef struct {
+    uint32_t formatId;
+    char* formatName;
+} MioCliprdrFormat;
+
+typedef struct {
+    MioCliprdrHeader common;
+    uint32_t numFormats;
+    MioCliprdrFormat* formats;
+} MioCliprdrFormatList;
+
+typedef struct {
+    MioCliprdrHeader common;
+} MioCliprdrFormatListResponse;
+
+typedef struct {
+    MioCliprdrHeader common;
+    uint32_t requestedFormatId;
+} MioCliprdrFormatDataRequest;
+
+typedef struct {
+    MioCliprdrHeader common;
+    const uint8_t* requestedFormatData;
+} MioCliprdrFormatDataResponse;
+
+typedef struct MioCliprdrClientContext MioCliprdrClientContext;
+typedef RdpUInt32 (*MioCliprdrFn)(MioCliprdrClientContext* context, const void* arg);
+
+struct MioCliprdrClientContext {
+    void* handle;
+    void* custom;
+    MioCliprdrFn ServerCapabilities;
+    MioCliprdrFn ClientCapabilities;
+    MioCliprdrFn MonitorReady;
+    MioCliprdrFn TempDirectory;
+    MioCliprdrFn ClientFormatList;
+    MioCliprdrFn ServerFormatList;
+    MioCliprdrFn ClientFormatListResponse;
+    MioCliprdrFn ServerFormatListResponse;
+    MioCliprdrFn ClientLockClipboardData;
+    MioCliprdrFn ServerLockClipboardData;
+    MioCliprdrFn ClientUnlockClipboardData;
+    MioCliprdrFn ServerUnlockClipboardData;
+    MioCliprdrFn ClientFormatDataRequest;
+    MioCliprdrFn ServerFormatDataRequest;
+    MioCliprdrFn ClientFormatDataResponse;
+    MioCliprdrFn ServerFormatDataResponse;
+    MioCliprdrFn ClientFileContentsRequest;
+    MioCliprdrFn ServerFileContentsRequest;
+    MioCliprdrFn ClientFileContentsResponse;
+    MioCliprdrFn ServerFileContentsResponse;
+    uint32_t lastRequestedFormatId;
+    void* rdpcontext;
 };
 
 typedef struct {
@@ -237,6 +395,160 @@ static MioRdpSession* session_from_context(void* context) {
     return (MioRdpSession*)ptr_at(context, RDP_CONTEXT_SIZE);
 }
 
+static MioRdpSession* session_from_cliprdr(MioCliprdrClientContext* cliprdr) {
+    if (!cliprdr) return NULL;
+    return session_from_context(cliprdr->rdpcontext);
+}
+
+static RdpUInt32 cb_cliprdr_server_capabilities(MioCliprdrClientContext* cliprdr, const void* arg) {
+    MioRdpSession* session = session_from_cliprdr(cliprdr);
+    const MioCliprdrCapabilities* caps = (const MioCliprdrCapabilities*)arg;
+    if (!session || !caps) return 0;
+    if (session->clip_file && g_fn.clip_file_remote_set_flags && caps->cCapabilitiesSets > 0 && caps->capabilitySets) {
+        const MioCliprdrGeneralCapSet* set = (const MioCliprdrGeneralCapSet*)caps->capabilitySets;
+        if (set->capabilitySetType == MIO_CB_CAPSTYPE_GENERAL) {
+            g_fn.clip_file_remote_set_flags(session->clip_file, set->generalFlags);
+        }
+    }
+    return 0;
+}
+
+static RdpUInt32 cb_cliprdr_monitor_ready(MioCliprdrClientContext* cliprdr, const void* arg) {
+    (void)arg;
+    MioRdpSession* session = session_from_cliprdr(cliprdr);
+    if (!session || !cliprdr || !cliprdr->ClientCapabilities) return 0;
+
+    MioCliprdrGeneralCapSet gen = {0};
+    gen.capabilitySetType = MIO_CB_CAPSTYPE_GENERAL;
+    gen.capabilitySetLength = MIO_CB_CAPSTYPE_GENERAL_LEN;
+    gen.version = MIO_CB_CAPS_VERSION_2;
+    gen.generalFlags = MIO_CB_USE_LONG_FORMAT_NAMES |
+                       MIO_CB_STREAM_FILECLIP_ENABLED |
+                       MIO_CB_FILECLIP_NO_FILE_PATHS |
+                       MIO_CB_CAN_LOCK_CLIPDATA |
+                       MIO_CB_HUGE_FILE_SUPPORT_ENABLED;
+
+    MioCliprdrCapabilities caps = {0};
+    caps.common.msgType = MIO_CB_CLIP_CAPS;
+    caps.common.dataLen = 4 + MIO_CB_CAPSTYPE_GENERAL_LEN;
+    caps.cCapabilitiesSets = 1;
+    caps.capabilitySets = &gen;
+    cliprdr->ClientCapabilities(cliprdr, &caps);
+
+    pthread_mutex_lock(&session->clip_lock);
+    session->clip_ready = true;
+    pthread_mutex_unlock(&session->clip_lock);
+
+    if (session->callbacks.on_clipboard_ready) {
+        session->callbacks.on_clipboard_ready(session->userdata);
+    }
+    return 0;
+}
+
+static RdpUInt32 cb_cliprdr_server_format_list(MioCliprdrClientContext* cliprdr, const void* arg) {
+    MioRdpSession* session = session_from_cliprdr(cliprdr);
+    const MioCliprdrFormatList* list = (const MioCliprdrFormatList*)arg;
+    if (!session || !list) return 0;
+
+    bool has_text = false;
+    uint32_t text_fmt = 0;
+    bool has_files = false;
+    uint32_t fgd_fmt = 0;
+
+    for (uint32_t i = 0; i < list->numFormats; i++) {
+        uint32_t fid = list->formats[i].formatId;
+        const char* fname = list->formats[i].formatName;
+        if (fid == MIO_CF_UNICODETEXT) {
+            has_text = true;
+            text_fmt = MIO_CF_UNICODETEXT;
+        } else if (fid == MIO_CF_TEXT && !has_text) {
+            has_text = true;
+            text_fmt = MIO_CF_TEXT;
+        } else if (fname && strcmp(fname, "FileGroupDescriptorW") == 0) {
+            has_files = true;
+            fgd_fmt = fid;
+        }
+    }
+
+    pthread_mutex_lock(&session->clip_lock);
+    session->server_has_text = has_text;
+    session->server_text_format_id = text_fmt;
+    session->server_has_files = has_files;
+    session->server_fgd_format_id = fgd_fmt;
+    pthread_mutex_unlock(&session->clip_lock);
+
+    if (session->clip_file && g_fn.clip_file_notify_new_server_format_list) {
+        g_fn.clip_file_notify_new_server_format_list(session->clip_file);
+    }
+
+    if (cliprdr->ClientFormatListResponse) {
+        MioCliprdrFormatListResponse resp = {0};
+        resp.common.msgType = MIO_CB_FORMAT_LIST_RESPONSE;
+        resp.common.msgFlags = MIO_CB_RESPONSE_OK;
+        cliprdr->ClientFormatListResponse(cliprdr, &resp);
+    }
+
+    if ((has_text || has_files) && session->callbacks.on_clipboard_formats) {
+        session->callbacks.on_clipboard_formats(session->userdata, has_text, has_files);
+    }
+    return 0;
+}
+
+static RdpUInt32 cb_cliprdr_server_format_list_response(MioCliprdrClientContext* cliprdr, const void* arg) {
+    (void)cliprdr;
+    (void)arg;
+    return 0;
+}
+
+static RdpUInt32 cb_cliprdr_server_format_data_request(MioCliprdrClientContext* cliprdr, const void* arg) {
+    MioRdpSession* session = session_from_cliprdr(cliprdr);
+    const MioCliprdrFormatDataRequest* req = (const MioCliprdrFormatDataRequest*)arg;
+    if (!session || !req || !cliprdr->ClientFormatDataResponse) return 0;
+
+    void* data = NULL;
+    uint32_t data_size = 0;
+
+    pthread_mutex_lock(&session->clip_lock);
+    if (session->clipboard && g_fn.clipboard_get_data) {
+        data = g_fn.clipboard_get_data(session->clipboard, req->requestedFormatId, &data_size);
+    }
+    pthread_mutex_unlock(&session->clip_lock);
+
+    MioCliprdrFormatDataResponse resp = {0};
+    resp.common.msgType = MIO_CB_FORMAT_DATA_RESPONSE;
+    resp.common.msgFlags = data ? MIO_CB_RESPONSE_OK : MIO_CB_RESPONSE_FAIL;
+    resp.common.dataLen = data ? data_size : 0;
+    resp.requestedFormatData = (const uint8_t*)data;
+    cliprdr->ClientFormatDataResponse(cliprdr, &resp);
+    free(data);
+    return 0;
+}
+
+static RdpUInt32 cb_cliprdr_server_format_data_response(MioCliprdrClientContext* cliprdr, const void* arg) {
+    MioRdpSession* session = session_from_cliprdr(cliprdr);
+    const MioCliprdrFormatDataResponse* resp = (const MioCliprdrFormatDataResponse*)arg;
+    if (!session || !resp) return 0;
+
+    pthread_mutex_lock(&session->clip_lock);
+    free(session->pending_response_data);
+    session->pending_response_data = NULL;
+    session->pending_response_size = 0;
+
+    if ((resp->common.msgFlags & MIO_CB_RESPONSE_OK) &&
+        resp->requestedFormatData &&
+        resp->common.dataLen > 0) {
+        session->pending_response_data = (uint8_t*)malloc(resp->common.dataLen);
+        if (session->pending_response_data) {
+            memcpy(session->pending_response_data, resp->requestedFormatData, resp->common.dataLen);
+            session->pending_response_size = resp->common.dataLen;
+        }
+    }
+    session->pending_response_ready = true;
+    pthread_cond_broadcast(&session->clip_cond);
+    pthread_mutex_unlock(&session->clip_lock);
+    return 0;
+}
+
 static void cb_channel_connected(void* context, const void* e) {
     MioRdpSession* session = session_from_context(context);
     if (!session || !e) return;
@@ -246,6 +558,32 @@ static void cb_channel_connected(void* context, const void* e) {
         pthread_mutex_lock(&session->lock);
         session->disp = iface;
         pthread_mutex_unlock(&session->lock);
+    } else if (name && strcmp(name, "cliprdr") == 0 && iface) {
+        MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)iface;
+        pthread_mutex_lock(&session->clip_lock);
+        session->cliprdr = cliprdr;
+        if (!session->clipboard && g_fn.clipboard_create) {
+            session->clipboard = g_fn.clipboard_create();
+            if (session->clipboard && g_fn.clipboard_get_format_id) {
+                session->client_fgd_format_id = g_fn.clipboard_get_format_id(session->clipboard, "FileGroupDescriptorW");
+            }
+        }
+        if (!session->clip_file && g_fn.clip_file_new) {
+            session->clip_file = g_fn.clip_file_new(session);
+        }
+        if (session->clip_file && g_fn.clip_file_init) {
+            g_fn.clip_file_init(session->clip_file, cliprdr);
+            if (g_fn.clip_file_set_locally_available) {
+                g_fn.clip_file_set_locally_available(session->clip_file, 1);
+            }
+        }
+        cliprdr->ServerCapabilities = cb_cliprdr_server_capabilities;
+        cliprdr->MonitorReady = cb_cliprdr_monitor_ready;
+        cliprdr->ServerFormatList = cb_cliprdr_server_format_list;
+        cliprdr->ServerFormatListResponse = cb_cliprdr_server_format_list_response;
+        cliprdr->ServerFormatDataRequest = cb_cliprdr_server_format_data_request;
+        cliprdr->ServerFormatDataResponse = cb_cliprdr_server_format_data_response;
+        pthread_mutex_unlock(&session->clip_lock);
     }
 }
 
@@ -257,6 +595,23 @@ static void cb_channel_disconnected(void* context, const void* e) {
         pthread_mutex_lock(&session->lock);
         session->disp = NULL;
         pthread_mutex_unlock(&session->lock);
+    } else if (name && strcmp(name, "cliprdr") == 0) {
+        pthread_mutex_lock(&session->clip_lock);
+        if (session->clip_file && session->cliprdr && g_fn.clip_file_uninit) {
+            g_fn.clip_file_uninit(session->clip_file, session->cliprdr);
+        }
+        if (session->clip_file && g_fn.clip_file_free) {
+            g_fn.clip_file_free(session->clip_file);
+            session->clip_file = NULL;
+        }
+        if (session->clipboard && g_fn.clipboard_destroy) {
+            g_fn.clipboard_destroy(session->clipboard);
+            session->clipboard = NULL;
+        }
+        session->cliprdr = NULL;
+        session->clip_ready = false;
+        pthread_cond_broadcast(&session->clip_cond);
+        pthread_mutex_unlock(&session->clip_lock);
     }
 }
 
@@ -435,6 +790,8 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
     session->callbacks = callbacks;
     session->userdata = userdata;
     pthread_mutex_init(&session->lock, NULL);
+    pthread_mutex_init(&session->clip_lock, NULL);
+    pthread_cond_init(&session->clip_cond, NULL);
     set_ptr_at(context, RDP_CONTEXT_SIZE, session);
 
     void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
@@ -547,11 +904,38 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
 
 void mio_rdp_disconnect(MioRdpSession* session) {
     if (!session || !session->instance) return;
+    pthread_mutex_lock(&session->clip_lock);
+    session->closing = true;
+    pthread_cond_broadcast(&session->clip_cond);
+    pthread_mutex_unlock(&session->clip_lock);
     g_fn.freerdp_disconnect(session->instance);
 }
 
 void mio_rdp_destroy(MioRdpSession* session) {
     if (!session) return;
+    pthread_mutex_lock(&session->clip_lock);
+    session->closing = true;
+    pthread_cond_broadcast(&session->clip_cond);
+    if (session->clip_file && session->cliprdr && g_fn.clip_file_uninit) {
+        g_fn.clip_file_uninit(session->clip_file, session->cliprdr);
+    }
+    if (session->clip_file && g_fn.clip_file_free) {
+        g_fn.clip_file_free(session->clip_file);
+        session->clip_file = NULL;
+    }
+    if (session->clipboard && g_fn.clipboard_destroy) {
+        g_fn.clipboard_destroy(session->clipboard);
+        session->clipboard = NULL;
+    }
+    session->cliprdr = NULL;
+    free(session->pending_response_data);
+    session->pending_response_data = NULL;
+    free(session->remote_fgd_cache);
+    session->remote_fgd_cache = NULL;
+    free(session->remote_text_cache);
+    session->remote_text_cache = NULL;
+    pthread_mutex_unlock(&session->clip_lock);
+
     if (session->instance) {
         if (session->gdi_initialized) {
             g_fn.gdi_free(session->instance);
@@ -562,6 +946,8 @@ void mio_rdp_destroy(MioRdpSession* session) {
         session->instance = NULL;
         session->context = NULL;
     }
+    pthread_cond_destroy(&session->clip_cond);
+    pthread_mutex_destroy(&session->clip_lock);
     pthread_mutex_destroy(&session->lock);
     free(session);
 }
@@ -602,4 +988,240 @@ void mio_rdp_send_unicode(MioRdpSession* session, bool down, uint16_t code) {
         // KBD_FLAGS_RELEASE = 0x8000
         g_fn.input_send_unicode_keyboard_event(input, down ? 0 : 0x8000, code);
     }
+}
+
+static uint8_t* request_remote_format_data(MioRdpSession* session, uint32_t format_id, uint32_t* out_size) {
+    if (!session || !out_size) return NULL;
+    *out_size = 0;
+
+    pthread_mutex_lock(&session->clip_lock);
+    if (session->closing || !session->clip_ready || !session->cliprdr) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return NULL;
+    }
+    MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)session->cliprdr;
+    if (!cliprdr->ClientFormatDataRequest) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return NULL;
+    }
+    free(session->pending_response_data);
+    session->pending_response_data = NULL;
+    session->pending_response_size = 0;
+    session->pending_response_ready = false;
+    pthread_mutex_unlock(&session->clip_lock);
+
+    MioCliprdrFormatDataRequest req = {0};
+    req.common.msgType = MIO_CB_FORMAT_DATA_REQUEST;
+    req.common.dataLen = 4;
+    req.requestedFormatId = format_id;
+    if (cliprdr->ClientFormatDataRequest(cliprdr, &req) != 0) {
+        return NULL;
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 4;
+
+    pthread_mutex_lock(&session->clip_lock);
+    while (!session->pending_response_ready && !session->closing) {
+        int rc = pthread_cond_timedwait(&session->clip_cond, &session->clip_lock, &ts);
+        if (rc == ETIMEDOUT) break;
+    }
+    uint8_t* result = session->pending_response_data;
+    uint32_t size = session->pending_response_size;
+    session->pending_response_data = NULL;
+    session->pending_response_size = 0;
+    session->pending_response_ready = false;
+    pthread_mutex_unlock(&session->clip_lock);
+
+    if (result && size > 0) {
+        *out_size = size;
+        return result;
+    }
+    free(result);
+    return NULL;
+}
+
+bool mio_rdp_clipboard_send_text(MioRdpSession* session, const char* utf8_text) {
+    if (!session || !utf8_text) return false;
+
+    pthread_mutex_lock(&session->clip_lock);
+    if (!session->clip_ready || !session->cliprdr || !session->clipboard ||
+        !g_fn.clipboard_empty || !g_fn.clipboard_set_data || !g_fn.clipboard_get_format_id) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return false;
+    }
+    MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)session->cliprdr;
+    if (!cliprdr->ClientFormatList) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return false;
+    }
+    if (session->clip_file && g_fn.clip_file_clear) {
+        g_fn.clip_file_clear(session->clip_file);
+    }
+    g_fn.clipboard_empty(session->clipboard);
+    uint32_t utf8_id = g_fn.clipboard_get_format_id(session->clipboard, "UTF8_STRING");
+    g_fn.clipboard_set_data(session->clipboard, utf8_id, utf8_text, (uint32_t)(strlen(utf8_text) + 1));
+    pthread_mutex_unlock(&session->clip_lock);
+
+    MioCliprdrFormat formats[2] = {
+        { .formatId = MIO_CF_UNICODETEXT, .formatName = NULL },
+        { .formatId = MIO_CF_TEXT, .formatName = NULL }
+    };
+    MioCliprdrFormatList list = {0};
+    list.common.msgType = MIO_CB_FORMAT_LIST;
+    list.numFormats = 2;
+    list.formats = formats;
+    return cliprdr->ClientFormatList(cliprdr, &list) == 0;
+}
+
+bool mio_rdp_clipboard_send_files(MioRdpSession* session, const char* uri_list) {
+    if (!session || !uri_list) return false;
+
+    pthread_mutex_lock(&session->clip_lock);
+    if (!session->clip_ready || !session->cliprdr || !session->clipboard || !session->clip_file ||
+        !g_fn.clipboard_empty || !g_fn.clipboard_set_data || !g_fn.clipboard_get_format_id ||
+        !g_fn.clip_file_update_client_data) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return false;
+    }
+    MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)session->cliprdr;
+    if (!cliprdr->ClientFormatList) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return false;
+    }
+
+    size_t len = strlen(uri_list);
+    if (g_fn.clip_file_clear) {
+        g_fn.clip_file_clear(session->clip_file);
+    }
+    g_fn.clipboard_empty(session->clipboard);
+    uint32_t uri_id = g_fn.clipboard_get_format_id(session->clipboard, "text/uri-list");
+    g_fn.clipboard_set_data(session->clipboard, uri_id, uri_list, (uint32_t)(len + 1));
+    g_fn.clip_file_update_client_data(session->clip_file, uri_list, len);
+    if (g_fn.clip_file_notify_new_client_format_list) {
+        g_fn.clip_file_notify_new_client_format_list(session->clip_file);
+    }
+    uint32_t fgd_id = session->client_fgd_format_id;
+    pthread_mutex_unlock(&session->clip_lock);
+
+    MioCliprdrFormat formats[1] = {
+        { .formatId = fgd_id, .formatName = "FileGroupDescriptorW" }
+    };
+    MioCliprdrFormatList list = {0};
+    list.common.msgType = MIO_CB_FORMAT_LIST;
+    list.numFormats = 1;
+    list.formats = formats;
+    return cliprdr->ClientFormatList(cliprdr, &list) == 0;
+}
+
+char* mio_rdp_clipboard_fetch_remote_text(MioRdpSession* session) {
+    if (!session || !g_fn.clipboard_create || !g_fn.clipboard_destroy ||
+        !g_fn.clipboard_set_data || !g_fn.clipboard_get_data || !g_fn.clipboard_get_format_id) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&session->clip_lock);
+    bool has_text = session->server_has_text;
+    uint32_t fmt_id = session->server_text_format_id;
+    pthread_mutex_unlock(&session->clip_lock);
+    if (!has_text || fmt_id == 0) return NULL;
+
+    uint32_t raw_size = 0;
+    uint8_t* raw = request_remote_format_data(session, fmt_id, &raw_size);
+    if (!raw || raw_size == 0) {
+        free(raw);
+        return NULL;
+    }
+
+    void* tmp = g_fn.clipboard_create();
+    if (!tmp) {
+        free(raw);
+        return NULL;
+    }
+    g_fn.clipboard_set_data(tmp, fmt_id, raw, raw_size);
+    free(raw);
+
+    uint32_t utf8_id = g_fn.clipboard_get_format_id(tmp, "UTF8_STRING");
+    uint32_t utf8_size = 0;
+    char* utf8 = (char*)g_fn.clipboard_get_data(tmp, utf8_id, &utf8_size);
+    g_fn.clipboard_destroy(tmp);
+
+    if (!utf8 || utf8_size == 0) {
+        free(utf8);
+        return NULL;
+    }
+    char* out = (char*)malloc((size_t)utf8_size + 1);
+    if (out) {
+        memcpy(out, utf8, utf8_size);
+        out[utf8_size] = '\0';
+    }
+    free(utf8);
+    return out;
+}
+
+static const void* cb_remote_data_fkt(void* userdata, const char* mime_type, size_t* size) {
+    MioRdpSession* session = (MioRdpSession*)userdata;
+    if (!session || !mime_type || !size) return NULL;
+    *size = 0;
+
+    if (strcmp(mime_type, "FileGroupDescriptorW") == 0) {
+        pthread_mutex_lock(&session->clip_lock);
+        bool has_files = session->server_has_files;
+        uint32_t fgd_fmt = session->server_fgd_format_id;
+        pthread_mutex_unlock(&session->clip_lock);
+        if (!has_files || fgd_fmt == 0) return NULL;
+
+        uint32_t raw_size = 0;
+        uint8_t* raw = request_remote_format_data(session, fgd_fmt, &raw_size);
+        if (!raw || raw_size == 0) {
+            free(raw);
+            return NULL;
+        }
+        pthread_mutex_lock(&session->clip_lock);
+        free(session->remote_fgd_cache);
+        session->remote_fgd_cache = raw;
+        session->remote_fgd_cache_size = raw_size;
+        pthread_mutex_unlock(&session->clip_lock);
+        *size = raw_size;
+        return raw;
+    }
+
+    if (strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
+        strcmp(mime_type, "text/plain") == 0 ||
+        strcmp(mime_type, "UTF8_STRING") == 0) {
+        char* text = mio_rdp_clipboard_fetch_remote_text(session);
+        if (!text) return NULL;
+        size_t len = strlen(text);
+        pthread_mutex_lock(&session->clip_lock);
+        free(session->remote_text_cache);
+        session->remote_text_cache = (uint8_t*)text;
+        session->remote_text_cache_size = len;
+        pthread_mutex_unlock(&session->clip_lock);
+        *size = len;
+        return text;
+    }
+
+    return NULL;
+}
+
+bool mio_rdp_clipboard_publish_remote_files(MioRdpSession* session) {
+    if (!session || !session->clip_file || !g_fn.clip_file_set_local_clipboard_data) return false;
+    pthread_mutex_lock(&session->clip_lock);
+    bool has_files = session->server_has_files;
+    bool has_text = session->server_has_text;
+    pthread_mutex_unlock(&session->clip_lock);
+    if (!has_files) return false;
+
+    const char* mimes[2];
+    size_t count = 0;
+    mimes[count++] = "text/uri-list";
+    if (has_text) {
+        mimes[count++] = "text/plain;charset=utf-8";
+    }
+    return g_fn.clip_file_set_local_clipboard_data(session->clip_file, cb_remote_data_fkt, session, mimes, count) != 0;
+}
+
+void mio_rdp_free_string(char* str) {
+    free(str);
 }

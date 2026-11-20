@@ -38,6 +38,10 @@ final class RDPController: SessionControlling {
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
+    private var clipboardPollTask: Task<Void, Never>?
+    private var clipboardFetchTask: Task<Void, Never>?
+    private var lastSyncedPasteboardChangeCount: Int = -1
+    private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
     private var activeModifierFlags: NSEvent.ModifierFlags = []
     private var keyMapping = AppEnvironment.shared.settings.settings.remoteKeyMapping
@@ -68,6 +72,7 @@ final class RDPController: SessionControlling {
             self?.keyMapping.commandKey != .disabled
         }
         desktopView.onFocus = { [weak self] in
+            self?.syncLocalPasteboardToRemote()
             self?.onFocus?()
         }
         desktopView.onResize = { [weak self] size in
@@ -135,6 +140,21 @@ final class RDPController: SessionControlling {
             height: height
         )
         self.client = rdpClient
+        rdpClient.onClipboardReady = { [weak self, weak rdpClient] in
+            Task { @MainActor [weak self, weak rdpClient] in
+                guard let self, let rdpClient, self.client === rdpClient else { return }
+                self.clipboardReady = true
+                self.lastSyncedPasteboardChangeCount = -1
+                self.syncLocalPasteboardToRemote()
+                self.startClipboardPolling()
+            }
+        }
+        rdpClient.onRemoteClipboardChanged = { [weak self, weak rdpClient] hasText, hasFiles in
+            Task { @MainActor [weak self, weak rdpClient] in
+                guard let self, let rdpClient, self.client === rdpClient else { return }
+                self.handleRemoteClipboardChanged(hasText: hasText, hasFiles: hasFiles, client: rdpClient)
+            }
+        }
 
         eventTask = Task { @MainActor [weak self, weak rdpClient] in
             guard let self, let rdpClient else { return }
@@ -183,11 +203,66 @@ final class RDPController: SessionControlling {
     func stop() {
         resizeTask?.cancel()
         resizeTask = nil
+        clipboardPollTask?.cancel()
+        clipboardPollTask = nil
+        clipboardFetchTask?.cancel()
+        clipboardFetchTask = nil
+        clipboardReady = false
+        lastSyncedPasteboardChangeCount = -1
         syncModifiers([])
         eventTask?.cancel()
         eventTask = nil
         client?.stop()
         client = nil
+    }
+
+    private func startClipboardPolling() {
+        clipboardPollTask?.cancel()
+        clipboardPollTask = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled, self.clipboardReady {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled, self.clipboardReady else { break }
+                self.syncLocalPasteboardToRemote()
+            }
+        }
+    }
+
+    private func syncLocalPasteboardToRemote() {
+        guard clipboardReady, let client else { return }
+        let pasteboard = NSPasteboard.general
+        let changeCount = pasteboard.changeCount
+        guard changeCount != lastSyncedPasteboardChangeCount else { return }
+        lastSyncedPasteboardChangeCount = changeCount
+
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            client.sendClipboardFiles(urls)
+            return
+        }
+        if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            client.sendClipboardText(text)
+        }
+    }
+
+    private func handleRemoteClipboardChanged(hasText: Bool, hasFiles: Bool, client: RDPClient) {
+        clipboardFetchTask?.cancel()
+        if hasFiles {
+            if client.publishRemoteClipboardFiles() {
+                lastSyncedPasteboardChangeCount = NSPasteboard.general.changeCount
+            }
+            return
+        }
+        guard hasText else { return }
+        clipboardFetchTask = Task.detached(priority: .userInitiated) { [weak self, weak client] in
+            guard let client, let text = client.fetchRemoteClipboardText(), !text.isEmpty else { return }
+            await MainActor.run { [weak self, weak client] in
+                guard let self, let client, self.client === client, !Task.isCancelled else { return }
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(text, forType: .string)
+                self.lastSyncedPasteboardChangeCount = pasteboard.changeCount
+            }
+        }
     }
 
     private func scheduleResize(for size: CGSize) {
@@ -223,6 +298,10 @@ final class RDPController: SessionControlling {
         guard let client else { return }
         if down {
             syncModifiers(event.modifierFlags)
+            if Int(event.keyCode) == kVK_ANSI_V,
+               event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
+                syncLocalPasteboardToRemote()
+            }
         }
         if let scancode = Self.rdpScancode(for: Int(event.keyCode)) {
             client.sendScancode(scancode, down: down)

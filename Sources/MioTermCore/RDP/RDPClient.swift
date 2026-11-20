@@ -15,6 +15,9 @@ public final class RDPClient: @unchecked Sendable {
     private let initialWidth: Int
     private let initialHeight: Int
 
+    public var onClipboardReady: (@Sendable () -> Void)?
+    public var onRemoteClipboardChanged: (@Sendable (_ hasText: Bool, _ hasFiles: Bool) -> Void)?
+
     private let stateLock = NSLock()
     private var session: OpaquePointer?
     private var stopped = false
@@ -128,6 +131,51 @@ public final class RDPClient: @unchecked Sendable {
         mio_rdp_resize(activeSession, UInt32(width), UInt32(height))
     }
 
+    @discardableResult
+    public func sendClipboardText(_ text: String) -> Bool {
+        stateLock.lock()
+        let activeSession = session
+        stateLock.unlock()
+        guard let activeSession else { return false }
+        return text.withCString { ptr in
+            mio_rdp_clipboard_send_text(activeSession, ptr)
+        }
+    }
+
+    @discardableResult
+    public func sendClipboardFiles(_ urls: [URL]) -> Bool {
+        let fileURLs = urls.filter(\.isFileURL)
+        guard !fileURLs.isEmpty else { return false }
+        stateLock.lock()
+        let activeSession = session
+        stateLock.unlock()
+        guard let activeSession else { return false }
+        let uriList = fileURLs.map(\.absoluteString).joined(separator: "\r\n") + "\r\n"
+        return uriList.withCString { ptr in
+            mio_rdp_clipboard_send_files(activeSession, ptr)
+        }
+    }
+
+    public func fetchRemoteClipboardText() -> String? {
+        stateLock.lock()
+        let activeSession = session
+        stateLock.unlock()
+        guard let activeSession else { return nil }
+        guard let ptr = mio_rdp_clipboard_fetch_remote_text(activeSession) else { return nil }
+        let text = String(cString: ptr)
+        mio_rdp_free_string(ptr)
+        return text
+    }
+
+    @discardableResult
+    public func publishRemoteClipboardFiles() -> Bool {
+        stateLock.lock()
+        let activeSession = session
+        stateLock.unlock()
+        guard let activeSession else { return false }
+        return mio_rdp_clipboard_publish_remote_files(activeSession)
+    }
+
     // MARK: - 会话循环
 
     private func runSession() {
@@ -153,6 +201,16 @@ public final class RDPClient: @unchecked Sendable {
             let box = Unmanaged<CallbackBox>.fromOpaque(userdata).takeUnretainedValue()
             let text = msg.map { String(cString: $0) } ?? L10n.tr(.rdpConnectFailed)
             box.owner?.handleError(text)
+        }
+        callbacks.on_clipboard_ready = { userdata in
+            guard let userdata else { return }
+            let box = Unmanaged<CallbackBox>.fromOpaque(userdata).takeUnretainedValue()
+            box.owner?.onClipboardReady?()
+        }
+        callbacks.on_clipboard_formats = { userdata, hasText, hasFiles in
+            guard let userdata else { return }
+            let box = Unmanaged<CallbackBox>.fromOpaque(userdata).takeUnretainedValue()
+            box.owner?.onRemoteClipboardChanged?(hasText, hasFiles)
         }
 
         let created: OpaquePointer? = host.withCString { hostC in

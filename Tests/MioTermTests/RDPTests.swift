@@ -46,4 +46,13 @@ struct RDPTests {
         let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
         #expect(decoded.remoteKeyMapping == mapping)
     }
+
+    @Test func rdpClientClipboardMethodsReturnSafelyBeforeConnect() {
+        let client = RDPClient(host: "127.0.0.1")
+        #expect(!client.sendClipboardText("hello"))
+        #expect(!client.sendClipboardFiles([]))
+        #expect(!client.sendClipboardFiles([URL(string: "https://example.com/file.txt")!]))
+        #expect(client.fetchRemoteClipboardText() == nil)
+        #expect(!client.publishRemoteClipboardFiles())
+    }
 }
