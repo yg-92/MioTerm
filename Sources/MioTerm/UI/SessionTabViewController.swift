@@ -987,6 +987,7 @@ final class SessionTabBarView: NSView {
 /// 分屏后的两个标签在顶部标签栏归为一组胶囊，组内两个标签均可独立点击切换焦点或关闭。
 @MainActor
 private final class SessionTabGroupView: NSView {
+    private let leadingMarker = NSView()
     private let divider = NSView()
     private var active = false
 
@@ -997,18 +998,24 @@ private final class SessionTabGroupView: NSView {
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
 
+        leadingMarker.wantsLayer = true
+        leadingMarker.layer?.cornerRadius = 1.5
+        leadingMarker.translatesAutoresizingMaskIntoConstraints = false
+
         divider.wantsLayer = true
         divider.translatesAutoresizingMaskIntoConstraints = false
 
-        let row = NSStackView(views: [left, divider, right])
+        let row = NSStackView(views: [leadingMarker, left, divider, right])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 2
-        row.edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
+        row.edgeInsets = NSEdgeInsets(top: 2, left: 5, bottom: 2, right: 2)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
 
         NSLayoutConstraint.activate([
+            leadingMarker.widthAnchor.constraint(equalToConstant: 3),
+            leadingMarker.heightAnchor.constraint(equalToConstant: 18),
             divider.widthAnchor.constraint(equalToConstant: 1),
             divider.heightAnchor.constraint(equalToConstant: 16),
             row.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -1027,6 +1034,7 @@ private final class SessionTabGroupView: NSView {
     }
 
     func refreshAppearance() {
+        leadingMarker.layer?.backgroundColor = Theme.layerColor(.systemGreen, for: self)
         layer?.backgroundColor = active
             ? Theme.layerColor(Theme.accent.withAlphaComponent(0.10), for: self)
             : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.55), for: self)
