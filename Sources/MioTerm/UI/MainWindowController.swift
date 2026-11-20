@@ -146,14 +146,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             window.isOpaque = false
             window.backgroundColor = .clear
             window.alphaValue = 1.0
-            workspace.applyFrameOpacity(effectiveAlpha)
+            workspace.applyFrameOpacity(effectiveAlpha, blurActive: true)
         } else {
             backdropBlurView.isHidden = true
             tintOverlayView.isHidden = true
             window.isOpaque = true
             window.backgroundColor = Theme.background
             window.alphaValue = CGFloat(opacity)
-            workspace.applyFrameOpacity(1.0)
+            workspace.applyFrameOpacity(1.0, blurActive: false)
         }
     }
 

@@ -234,9 +234,9 @@ final class TerminalController: NSObject, SessionControlling, LocalProcessTermin
         let resolvedDark = dark ?? Theme.isDark(terminalView.window?.effectiveAppearance)
         let base = Theme.terminalBackground(dark: resolvedDark)
         if opacity < 0.999 && blur > 0.001 {
-            let effectiveAlpha = CGFloat(opacity)
-            terminalView.nativeBackgroundColor = base.withAlphaComponent(effectiveAlpha)
-            terminalView.backgroundOpacity = effectiveAlpha
+            // 主窗口已有统一的 tintOverlayView 负责底色不透明度，终端背景设为全透明避免双重叠加。
+            terminalView.nativeBackgroundColor = base.withAlphaComponent(0)
+            terminalView.backgroundOpacity = 0
             terminalView.layer?.isOpaque = false
         } else {
             terminalView.nativeBackgroundColor = base
