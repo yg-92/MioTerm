@@ -129,7 +129,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 for: tintOverlayView
             )
             window.isOpaque = false
-            window.backgroundColor = .clear
+            window.backgroundColor = Theme.background.withAlphaComponent(0.001)
             window.alphaValue = 1.0
             workspace.applyFrameOpacity(effectiveAlpha, blurActive: true)
             setWindowBlurRadius(radius)
@@ -397,9 +397,6 @@ private final class MainWindowBackdropController: NSViewController {
 
     override func loadView() {
         let root = AppearanceAwareView(frame: NSRect(x: 0, y: 0, width: 1240, height: 780))
-        root.wantsLayer = true
-        root.layer?.masksToBounds = true
-        root.layer?.cornerCurve = .continuous
         root.onAppearanceChange = { [weak self] in self?.onAppearanceChange?() }
         addChild(content)
         tintOverlay.translatesAutoresizingMaskIntoConstraints = false
@@ -418,16 +415,5 @@ private final class MainWindowBackdropController: NSViewController {
             content.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
         view = root
-    }
-
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        if view.window?.styleMask.contains(.fullScreen) == true {
-            view.layer?.cornerRadius = 0
-        } else if #available(macOS 26.0, *) {
-            view.layer?.cornerRadius = 16
-        } else {
-            view.layer?.cornerRadius = 10
-        }
     }
 }
