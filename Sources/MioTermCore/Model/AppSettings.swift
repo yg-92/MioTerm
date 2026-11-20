@@ -49,6 +49,60 @@ public enum AccentColor: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum RemoteModifierTarget: String, Codable, CaseIterable, Sendable {
+    case control
+    case alt
+    case win
+    case shift
+    case disabled
+
+    public var displayName: String {
+        switch self {
+        case .control: return L10n.tr(.remoteModifierControl)
+        case .alt: return L10n.tr(.remoteModifierAlt)
+        case .win: return L10n.tr(.remoteModifierWin)
+        case .shift: return L10n.tr(.remoteModifierShift)
+        case .disabled: return L10n.tr(.remoteModifierDisabled)
+        }
+    }
+
+    public var rdpScancode: UInt32? {
+        switch self {
+        case .control: return 0x1D
+        case .alt: return 0x38
+        case .win: return 0x15B
+        case .shift: return 0x2A
+        case .disabled: return nil
+        }
+    }
+
+    public var x11Keysym: UInt32? {
+        switch self {
+        case .control: return 0xFFE3
+        case .alt: return 0xFFE9
+        case .win: return 0xFFEB
+        case .shift: return 0xFFE1
+        case .disabled: return nil
+        }
+    }
+}
+
+public struct RemoteKeyMapping: Codable, Equatable, Sendable {
+    public var commandKey: RemoteModifierTarget
+    public var controlKey: RemoteModifierTarget
+    public var optionKey: RemoteModifierTarget
+
+    public init(
+        commandKey: RemoteModifierTarget = .win,
+        controlKey: RemoteModifierTarget = .control,
+        optionKey: RemoteModifierTarget = .alt
+    ) {
+        self.commandKey = commandKey
+        self.controlKey = controlKey
+        self.optionKey = optionKey
+    }
+}
+
 /// 界面与连接的可调项。除监听/路径类配置外，这里的改动即时生效，
 /// 对齐 webterm “页面配置热更新” 的行为。
 public struct AppSettings: Codable, Equatable, Sendable {
@@ -76,6 +130,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var maxConcurrentTransfers: Int
     public var defaultConnectTimeout: Int
     public var defaultKeepaliveInterval: Int
+    public var remoteKeyMapping: RemoteKeyMapping
 
     public init(
         language: AppLanguage = .system,
@@ -95,7 +150,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         uploadChunkBytes: Int = 8 * 1024 * 1024,
         maxConcurrentTransfers: Int = 3,
         defaultConnectTimeout: Int = 10,
-        defaultKeepaliveInterval: Int = 30
+        defaultKeepaliveInterval: Int = 30,
+        remoteKeyMapping: RemoteKeyMapping = RemoteKeyMapping()
     ) {
         self.language = language
         self.themeCustomization = themeCustomization.normalized()
@@ -115,6 +171,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.maxConcurrentTransfers = maxConcurrentTransfers
         self.defaultConnectTimeout = defaultConnectTimeout
         self.defaultKeepaliveInterval = defaultKeepaliveInterval
+        self.remoteKeyMapping = remoteKeyMapping
     }
 
     public static let `default` = AppSettings()
@@ -145,6 +202,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         maxConcurrentTransfers = (try? c.decodeIfPresent(Int.self, forKey: .maxConcurrentTransfers)) ?? 3
         defaultConnectTimeout = (try? c.decodeIfPresent(Int.self, forKey: .defaultConnectTimeout)) ?? 10
         defaultKeepaliveInterval = (try? c.decodeIfPresent(Int.self, forKey: .defaultKeepaliveInterval)) ?? 30
+        remoteKeyMapping = (try? c.decodeIfPresent(RemoteKeyMapping.self, forKey: .remoteKeyMapping)) ?? RemoteKeyMapping()
     }
 
     public func normalized() -> AppSettings {

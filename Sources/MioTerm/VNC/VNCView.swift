@@ -12,6 +12,7 @@ final class VNCView: NSView {
     var onRawKeyDown: ((NSEvent) -> Bool)?
     var onRawKeyUp: ((NSEvent) -> Bool)?
     var onRawFlagsChanged: ((NSEvent) -> Bool)?
+    var shouldInterceptCommandEquivalent: ((NSEvent) -> Bool)?
     var onFocus: (() -> Void)?
     var onSendCtrlAltDel: (() -> Void)?
     var onSyncClipboard: (() -> Void)?
@@ -232,6 +233,36 @@ final class VNCView: NSView {
 
     // MARK: - 键盘输入
 
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self else {
+            return super.performKeyEquivalent(with: event)
+        }
+        // Esc（含 Ctrl+Shift+Esc）及 Ctrl / Option 组合键直接发给远端桌面，避免被 macOS 窗口/菜单拦截。
+        if Int(event.keyCode) == kVK_Escape {
+            keyDown(with: event)
+            return true
+        }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) {
+            let chars = (event.charactersIgnoringModifiers ?? "").lowercased()
+            let keepLocalAppShortcuts: Set<String> = ["q", "w", "h", "m", ","]
+            if !keepLocalAppShortcuts.contains(chars) && shouldInterceptCommandEquivalent?(event) == true {
+                keyDown(with: event)
+                return true
+            }
+            return super.performKeyEquivalent(with: event)
+        }
+        if flags.contains(.control) || flags.contains(.option) {
+            keyDown(with: event)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        // Esc 由 keyDown/performKeyEquivalent 转发到远端，不在此吞掉。
+    }
+
     override func keyDown(with event: NSEvent) {
         if onRawKeyDown?(event) == true { return }
         for keysym in keysyms(for: event) {
@@ -252,13 +283,15 @@ final class VNCView: NSView {
             return
         }
         let next = event.modifierFlags
-        let mappings: [(NSEvent.ModifierFlags, UInt32)] = [
+        let mapping = AppEnvironment.shared.settings.settings.remoteKeyMapping
+        let mappings: [(NSEvent.ModifierFlags, UInt32?)] = [
             (.shift, 0xFFE1),   // Shift_L
-            (.control, 0xFFE3), // Control_L
-            (.option, 0xFFE9),  // Alt_L
-            (.command, 0xFFEB), // Super_L
+            (.control, mapping.controlKey.x11Keysym),
+            (.option, mapping.optionKey.x11Keysym),
+            (.command, mapping.commandKey.x11Keysym),
         ]
         for (flag, keysym) in mappings {
+            guard let keysym else { continue }
             let wasDown = activeModifierFlags.contains(flag)
             let isDown = next.contains(flag)
             if wasDown != isDown {

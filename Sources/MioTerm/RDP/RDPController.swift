@@ -38,6 +38,7 @@ final class RDPController: SessionControlling {
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
     private var activeModifierFlags: NSEvent.ModifierFlags = []
+    private var keyMapping = AppEnvironment.shared.settings.settings.remoteKeyMapping
 
     init(host: HostProfile) {
         self.host = host
@@ -60,6 +61,9 @@ final class RDPController: SessionControlling {
         desktopView.onRawFlagsChanged = { [weak self] event in
             self?.syncModifiers(event.modifierFlags)
             return true
+        }
+        desktopView.shouldInterceptCommandEquivalent = { [weak self] _ in
+            self?.keyMapping.commandKey != .disabled
         }
         desktopView.onFocus = { [weak self] in
             self?.onFocus?()
@@ -203,13 +207,14 @@ final class RDPController: SessionControlling {
 
     private func syncModifiers(_ flags: NSEvent.ModifierFlags) {
         guard let client else { return }
-        let mappings: [(NSEvent.ModifierFlags, UInt32)] = [
-            (.shift, 0x2A),    // Shift_L
-            (.control, 0x1D),  // Control_L
-            (.option, 0x38),   // Alt_L
-            (.command, 0x15B), // Win_L
+        let mappings: [(NSEvent.ModifierFlags, UInt32?)] = [
+            (.shift, 0x2A),
+            (.control, keyMapping.controlKey.rdpScancode),
+            (.option, keyMapping.optionKey.rdpScancode),
+            (.command, keyMapping.commandKey.rdpScancode),
         ]
         for (flag, scancode) in mappings {
+            guard let scancode else { continue }
             let wasDown = activeModifierFlags.contains(flag)
             let isDown = flags.contains(flag)
             if wasDown != isDown {
@@ -305,7 +310,12 @@ final class RDPController: SessionControlling {
     }
 
     func applyTheme() {}
-    func apply(_ settings: AppSettings) {}
+    func apply(_ settings: AppSettings) {
+        if keyMapping != settings.remoteKeyMapping {
+            syncModifiers([])
+            keyMapping = settings.remoteKeyMapping
+        }
+    }
 
     func failStart(reason: String) {
         stop()

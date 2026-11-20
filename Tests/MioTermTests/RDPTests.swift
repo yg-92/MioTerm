@@ -26,10 +26,24 @@ struct RDPTests {
 
     @Test func blocksAddingRDPWhenFreeRDPDependencyIsMissing() {
         let host = HostProfile(name: "Win11", protocolKind: .rdp, address: "10.0.0.8", port: 3389)
-        FreeRDPAvailability.withOverride(false) {
+        _ = FreeRDPAvailability.withOverride(false) {
             #expect(throws: HostProfile.ValidationError.rdpDependencyMissing) {
                 try host.validate()
             }
         }
+    }
+
+    @Test func remoteKeyMappingSupportsCommandToControlAndRoundTrips() throws {
+        let mapping = RemoteKeyMapping(commandKey: .control, controlKey: .win, optionKey: .alt)
+        #expect(mapping.commandKey.rdpScancode == 0x1D)
+        #expect(mapping.controlKey.rdpScancode == 0x15B)
+        #expect(mapping.optionKey.rdpScancode == 0x38)
+        #expect(RemoteModifierTarget.disabled.rdpScancode == nil)
+
+        var settings = AppSettings.default
+        settings.remoteKeyMapping = mapping
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+        #expect(decoded.remoteKeyMapping == mapping)
     }
 }

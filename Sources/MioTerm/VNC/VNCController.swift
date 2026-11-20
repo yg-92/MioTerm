@@ -51,6 +51,9 @@ final class VNCController: SessionControlling {
         vncView.onSyncClipboard = { [weak self] in
             self?.syncLocalClipboardToRemote()
         }
+        vncView.shouldInterceptCommandEquivalent = { _ in
+            AppEnvironment.shared.settings.settings.remoteKeyMapping.commandKey != .disabled
+        }
     }
 
     func start(password: String?) {

@@ -305,6 +305,15 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case rdpFileCopiedTitle
     case rdpFileCopiedMsg
     case rdpFileCopyFailedTitle
+    case remoteModifierControl
+    case remoteModifierAlt
+    case remoteModifierWin
+    case remoteModifierShift
+    case remoteModifierDisabled
+    case prefRemoteKeySection
+    case prefRemoteCommandKey
+    case prefRemoteControlKey
+    case prefRemoteOptionKey
     case authAutomatic
     case authPassword
     case authPrivateKey

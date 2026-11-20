@@ -40,6 +40,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     private let concurrencyField = NSTextField()
     private let timeoutField = NSTextField()
     private let keepaliveField = NSTextField()
+    private let commandKeyPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+    private let controlKeyPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+    private let optionKeyPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
 
     private let styleButton = NSButton(title: L10n.tr(.prefStyleButton), target: nil, action: nil)
     private var localizedLabels: [(NSTextField, L10nKey)] = []
@@ -116,11 +119,16 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         terminalTypeCombo.numberOfVisibleItems = 8
         terminalTypeCombo.delegate = self
         terminalTypeHint.stringValue = L10n.tr(.prefTerminalTypeHint)
+        for popup in [commandKeyPopup, controlKeyPopup, optionKeyPopup] {
+            popup.addItems(withTitles: RemoteModifierTarget.allCases.map { $0.displayName })
+            popup.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        }
 
         for control: NSControl in [
             languagePopup, appearancePopup, contrastPopup, accentPopup,
             fontPopup, fontSizePopup, treeFontSizePopup, treeIconSizePopup,
             bellCheckbox, followCheckbox,
+            commandKeyPopup, controlKeyPopup, optionKeyPopup,
         ] {
             control.target = self
             control.action = #selector(controlChanged(_:))
@@ -179,6 +187,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
             [label(.prefMaxConcurrent), concurrencyField],
             [label(.prefConnectTimeout), timeoutField],
             [label(.prefKeepalive), keepaliveField],
+            [label(.prefRemoteCommandKey), commandKeyPopup],
+            [label(.prefRemoteControlKey), controlKeyPopup],
+            [label(.prefRemoteOptionKey), optionKeyPopup],
         ])
         grid.rowSpacing = 10
         grid.columnSpacing = 12
@@ -279,6 +290,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         concurrencyField.stringValue = "\(settings.maxConcurrentTransfers)"
         timeoutField.stringValue = "\(settings.defaultConnectTimeout)"
         keepaliveField.stringValue = "\(settings.defaultKeepaliveInterval)"
+        commandKeyPopup.selectItem(at: RemoteModifierTarget.allCases.firstIndex(of: settings.remoteKeyMapping.commandKey) ?? 0)
+        controlKeyPopup.selectItem(at: RemoteModifierTarget.allCases.firstIndex(of: settings.remoteKeyMapping.controlKey) ?? 0)
+        optionKeyPopup.selectItem(at: RemoteModifierTarget.allCases.firstIndex(of: settings.remoteKeyMapping.optionKey) ?? 0)
     }
 
     /// 下拉框选项顺序就是枚举 allCases 的顺序，按索引反查即可。
@@ -343,6 +357,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
                 settings.maxConcurrentTransfers = Int(concurrencyField.stringValue) ?? settings.maxConcurrentTransfers
                 settings.defaultConnectTimeout = Int(timeoutField.stringValue) ?? settings.defaultConnectTimeout
                 settings.defaultKeepaliveInterval = Int(keepaliveField.stringValue) ?? settings.defaultKeepaliveInterval
+                settings.remoteKeyMapping = RemoteKeyMapping(
+                    commandKey: selected(commandKeyPopup, RemoteModifierTarget.allCases),
+                    controlKey: selected(controlKeyPopup, RemoteModifierTarget.allCases),
+                    optionKey: selected(optionKeyPopup, RemoteModifierTarget.allCases)
+                )
             }
         } catch {
             AlertPresenter.fail(title: L10n.tr(.prefSaveFailedTitle), message: error.localizedDescription, in: window)
