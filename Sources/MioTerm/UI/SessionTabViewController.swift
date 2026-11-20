@@ -970,7 +970,7 @@ final class SessionTabBarView: NSView {
             symbolColor: tab.kind.tint,
             statusColor: Theme.color(for: tab.state),
             kindBadge: isCompact ? nil : tab.kind.badge,
-            closable: true,
+            closable: !isCompact,
             fixedWidth: nil,
             compact: isCompact
         )
@@ -1155,11 +1155,11 @@ private final class SessionTabGroupView: NSView {
     func refreshAppearance() {
         leadingMarker.layer?.backgroundColor = Theme.layerColor(.systemGreen, for: self)
         layer?.backgroundColor = active
-            ? Theme.layerColor(Theme.accent.withAlphaComponent(0.10), for: self)
-            : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.55), for: self)
+            ? Theme.layerColor(Theme.selectedTab, for: self)
+            : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.24), for: self)
         layer?.borderColor = active
-            ? Theme.layerColor(Theme.accent.withAlphaComponent(0.45), for: self)
-            : Theme.layerColor(Theme.borderStrong, for: self)
+            ? Theme.layerColor(Theme.accent.withAlphaComponent(0.55), for: self)
+            : Theme.layerColor(Theme.borderStrong.withAlphaComponent(0.5), for: self)
         divider.layer?.backgroundColor = Theme.layerColor(Theme.borderStrong, for: self)
     }
 
@@ -1311,7 +1311,12 @@ final class SessionTabChip: NSView, NSDraggingSource {
             ])
         }
 
-        if closable {
+        if let fixedWidth {
+            NSLayoutConstraint.activate([
+                widthAnchor.constraint(equalToConstant: fixedWidth),
+                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            ])
+        } else if closable {
             let minWidth: CGFloat = compact ? 66 : 124
             let maxWidth: CGFloat = compact ? 112 : 250
             let trailingInset: CGFloat = compact ? -4 : -6
@@ -1332,8 +1337,9 @@ final class SessionTabChip: NSView, NSDraggingSource {
             ])
         } else {
             NSLayoutConstraint.activate([
-                widthAnchor.constraint(equalToConstant: fixedWidth ?? 84),
-                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+                widthAnchor.constraint(greaterThanOrEqualToConstant: 60),
+                widthAnchor.constraint(lessThanOrEqualToConstant: 108),
+                titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6),
             ])
         }
         closeButton.isHidden = true
@@ -1362,13 +1368,21 @@ final class SessionTabChip: NSView, NSDraggingSource {
     }
 
     private func updateAppearance() {
-        let idleBackground: CGColor = compact
-            ? NSColor.clear.cgColor
-            : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.24), for: self)
+        if compact {
+            layer?.backgroundColor = hovering
+                ? Theme.layerColor(Theme.hoverFill, for: self)
+                : NSColor.clear.cgColor
+            layer?.borderWidth = 0
+            layer?.borderColor = nil
+            titleLabel.textColor = (selected || hovering) ? Theme.textPrimary : Theme.textSecondary
+            closeButton.isHidden = true
+            return
+        }
+        let idleBackground = Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.24), for: self)
         layer?.backgroundColor = selected
             ? Theme.layerColor(Theme.selectedTab, for: self)
             : (hovering ? Theme.layerColor(Theme.hoverFill, for: self) : idleBackground)
-        if compact || !selected {
+        if !selected {
             layer?.borderWidth = 0
             layer?.borderColor = nil
         } else {
