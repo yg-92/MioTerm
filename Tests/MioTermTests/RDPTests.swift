@@ -2,7 +2,7 @@ import Foundation
 @testable import MioTermCore
 import Testing
 
-@Suite("RDP 协议与 FreeRDP 依赖检测")
+@Suite("RDP 协议与 FreeRDP 依赖检测", .serialized)
 struct RDPTests {
     @Test func freeRDPDetectedOnLocalSystem() {
         #expect(FreeRDPAvailability.isInstalled)

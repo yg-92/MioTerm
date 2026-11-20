@@ -110,8 +110,13 @@ public enum SSHLaunchPlanner {
         return try make(arguments: arguments, host: host, secrets: secrets, context: context)
     }
 
-    /// 只做认证与密钥交换、不开 shell 的连通性测试。
-    public static func probeLaunch(host: HostProfile, secrets: TerminalSecrets?, context: Context) throws -> ProcessLaunch {
+    /// 只做认证与密钥交换、不开 shell 的连通性测试或远端轻量探测。
+    public static func probeLaunch(
+        host: HostProfile,
+        secrets: TerminalSecrets?,
+        context: Context,
+        remoteCommand: String = "true"
+    ) throws -> ProcessLaunch {
         var arguments = commonOptions(for: host, context: context)
         arguments.append("-T")
         if secrets?.hasContent != true {
@@ -119,7 +124,7 @@ public enum SSHLaunchPlanner {
             arguments.append(contentsOf: ["-o", "BatchMode=yes", "-o", "NumberOfPasswordPrompts=0"])
         }
         arguments.append(contentsOf: destinationArguments(for: host))
-        arguments.append("true")
+        arguments.append(remoteCommand)
         return try make(arguments: arguments, host: host, secrets: secrets, context: context)
     }
 

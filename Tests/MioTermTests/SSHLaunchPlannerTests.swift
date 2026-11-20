@@ -18,6 +18,7 @@ private func makeContext(knownHosts: URL = URL(fileURLWithPath: "/tmp/mio test/k
     )
 }
 
+@Suite(.serialized)
 struct SSHLaunchPlannerTests {
     @Test func terminalLaunchForcesPTYAndIsolatesKnownHosts() throws {
         let host = HostProfile(name: "web", address: "10.0.0.5", username: "root", authMethod: .automatic)
@@ -288,5 +289,16 @@ struct SSHLaunchPlannerTests {
         var rdp = HostProfile(name: "win", protocolKind: .rdp, address: "10.0.0.2")
         rdp.systemIcon = .centos
         #expect(rdp.normalized().systemIcon == .default)
+    }
+
+    @Test func detectsSSHSystemIconFromOSReleaseAndUname() {
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "NAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n") == .ubuntu)
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "NAME=\"CentOS Linux\"\nID=\"centos\"\nID_LIKE=\"rhel fedora\"\n") == .centos)
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "NAME=\"Kylin Linux Advanced Server\"\nID=\"kylin\"\n") == .kylin)
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "NAME=\"openKylin\"\nID=openkylin\n") == .kylin)
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "NAME=\"Rocky Linux\"\nID=\"rocky\"\n") == .rhel)
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "NAME=\"Debian GNU/Linux\"\nID=debian\n") == .debian)
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "Darwin\n") == .macos)
+        #expect(SSHSystemIcon.detect(fromOSReleaseOutput: "") == .default)
     }
 }

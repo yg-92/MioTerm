@@ -212,6 +212,7 @@ enum Theme {
         case .fedora: return rgba(0x51, 0xA2, 0xDA)
         case .arch: return rgba(0x17, 0x93, 0xD1)
         case .alpine: return rgba(0x0D, 0x59, 0x7F)
+        case .kylin: return rgba(0x1A, 0x73, 0xE8)
         case .macos: return textPrimary
         case .windows: return rgba(0x00, 0x78, 0xD4)
         case .linux: return rgba(0xE0, 0x9F, 0x1F)
@@ -244,16 +245,36 @@ enum Theme {
                     NSBezierPath(ovalIn: NSRect(x: cx - 1.5, y: cy - 1.5, width: 3, height: 3)).fill()
                 }
             case .centos:
-                let box = NSBezierPath(roundedRect: NSRect(x: 2, y: 2, width: 10, height: 10), xRadius: 2, yRadius: 2)
-                box.lineWidth = 1.5
-                box.stroke()
-                let cross = NSBezierPath()
-                cross.lineWidth = 1.4
-                cross.move(to: NSPoint(x: 7, y: 2))
-                cross.line(to: NSPoint(x: 7, y: 12))
-                cross.move(to: NSPoint(x: 2, y: 7))
-                cross.line(to: NSPoint(x: 12, y: 7))
-                cross.stroke()
+                // 经典 CentOS 四向箭头 + 中心菱形核
+                let arrows = NSBezierPath()
+                arrows.lineWidth = 1.4
+                arrows.lineCapStyle = .round
+                arrows.lineJoinStyle = .round
+                // 上箭头
+                arrows.move(to: NSPoint(x: 5.0, y: 10.3))
+                arrows.line(to: NSPoint(x: 7.0, y: 12.6))
+                arrows.line(to: NSPoint(x: 9.0, y: 10.3))
+                // 下箭头
+                arrows.move(to: NSPoint(x: 5.0, y: 3.7))
+                arrows.line(to: NSPoint(x: 7.0, y: 1.4))
+                arrows.line(to: NSPoint(x: 9.0, y: 3.7))
+                // 左箭头
+                arrows.move(to: NSPoint(x: 3.7, y: 5.0))
+                arrows.line(to: NSPoint(x: 1.4, y: 7.0))
+                arrows.line(to: NSPoint(x: 3.7, y: 9.0))
+                // 右箭头
+                arrows.move(to: NSPoint(x: 10.3, y: 5.0))
+                arrows.line(to: NSPoint(x: 12.6, y: 7.0))
+                arrows.line(to: NSPoint(x: 10.3, y: 9.0))
+                arrows.stroke()
+                let diamond = NSBezierPath()
+                diamond.move(to: NSPoint(x: 7.0, y: 9.6))
+                diamond.line(to: NSPoint(x: 9.6, y: 7.0))
+                diamond.line(to: NSPoint(x: 7.0, y: 4.4))
+                diamond.line(to: NSPoint(x: 4.4, y: 7.0))
+                diamond.close()
+                diamond.lineWidth = 1.4
+                diamond.stroke()
             case .debian:
                 let spiral = NSBezierPath()
                 spiral.lineWidth = 1.6
@@ -307,6 +328,29 @@ enum Theme {
                 peak.line(to: NSPoint(x: 10.2, y: 8.5))
                 peak.line(to: NSPoint(x: 12.5, y: 3))
                 peak.stroke()
+            case .kylin:
+                // 六边形盾牌 + 麒麟 K 翼
+                let hex = NSBezierPath()
+                hex.lineWidth = 1.4
+                hex.lineJoinStyle = .round
+                hex.move(to: NSPoint(x: 7.0, y: 12.6))
+                hex.line(to: NSPoint(x: 11.8, y: 9.8))
+                hex.line(to: NSPoint(x: 11.8, y: 4.2))
+                hex.line(to: NSPoint(x: 7.0, y: 1.4))
+                hex.line(to: NSPoint(x: 2.2, y: 4.2))
+                hex.line(to: NSPoint(x: 2.2, y: 9.8))
+                hex.close()
+                hex.stroke()
+                let k = NSBezierPath()
+                k.lineWidth = 1.5
+                k.lineCapStyle = .round
+                k.lineJoinStyle = .round
+                k.move(to: NSPoint(x: 5.2, y: 4.2))
+                k.line(to: NSPoint(x: 5.2, y: 9.8))
+                k.move(to: NSPoint(x: 9.2, y: 9.5))
+                k.line(to: NSPoint(x: 5.4, y: 7.0))
+                k.line(to: NSPoint(x: 9.4, y: 4.3))
+                k.stroke()
             case .macos:
                 let screen = NSBezierPath(roundedRect: NSRect(x: 2, y: 4, width: 10, height: 7.5), xRadius: 1.5, yRadius: 1.5)
                 screen.lineWidth = 1.5

@@ -84,6 +84,7 @@ public enum SSHSystemIcon: String, Codable, CaseIterable, Sendable {
     case fedora
     case arch
     case alpine
+    case kylin
     case macos
     case windows
     case linux
@@ -98,10 +99,43 @@ public enum SSHSystemIcon: String, Codable, CaseIterable, Sendable {
         case .fedora: return "Fedora"
         case .arch: return "Arch Linux"
         case .alpine: return "Alpine Linux"
+        case .kylin: return "麒麟 Kylin"
         case .macos: return "macOS"
         case .windows: return "Windows"
         case .linux: return "Linux"
         }
+    }
+
+    /// 根据远端 `cat /etc/os-release || uname -s` 输出识别系统类型。
+    public static func detect(fromOSReleaseOutput output: String) -> SSHSystemIcon {
+        let lines = output.split(whereSeparator: \.isNewline).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var idValue = ""
+        var nameValue = ""
+        for line in lines {
+            let lower = line.lowercased()
+            if lower.hasPrefix("id=") {
+                idValue = lower.dropFirst(3).trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+            } else if lower.hasPrefix("name=") || lower.hasPrefix("pretty_name=") {
+                nameValue += " " + lower
+            }
+        }
+        let primary = idValue.isEmpty ? output.lowercased() : idValue
+        if primary.contains("kylin") || nameValue.contains("kylin") { return .kylin }
+        if primary == "ubuntu" { return .ubuntu }
+        if primary == "debian" { return .debian }
+        if primary == "centos" { return .centos }
+        if primary == "rhel" || primary == "rocky" || primary == "almalinux" { return .rhel }
+        if primary == "fedora" { return .fedora }
+        if primary == "arch" || primary == "manjaro" { return .arch }
+        if primary == "alpine" { return .alpine }
+
+        let all = output.lowercased()
+        if all.contains("darwin") { return .macos }
+        if all.contains("windows") || all.contains("mingw") || all.contains("msys") || all.contains("cygwin") { return .windows }
+        if all.contains("linux") { return .linux }
+        return .default
     }
 }
 

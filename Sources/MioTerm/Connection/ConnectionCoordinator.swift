@@ -181,8 +181,45 @@ final class ConnectionCoordinator {
     /// 会话状态统一登记。
     private func observe(_ controller: any SessionControlling, host: HostProfile) {
         let logger = environment.logger
-        _ = controller.addStateObserver { state in
+        var attemptedOSDetect = false
+        _ = controller.addStateObserver { [weak self] state in
             logger.info("会话 \(host.displayName) 状态：\(state.label)")
+            guard state == .running, !attemptedOSDetect else { return }
+            attemptedOSDetect = true
+            self?.detectSystemIconIfNeeded(for: host)
+        }
+    }
+
+    private func detectSystemIconIfNeeded(for host: HostProfile) {
+        guard host.protocolKind == .ssh,
+              environment.hosts.host(id: host.id)?.systemIcon == .default else { return }
+        let secrets = environment.secrets(for: host)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let launch = try SSHLaunchPlanner.probeLaunch(
+                    host: host,
+                    secrets: secrets,
+                    context: .live(),
+                    remoteCommand: "cat /etc/os-release 2>/dev/null || uname -s"
+                )
+                defer { AskpassHelper.destroy(fileAt: launch.askpassFile) }
+                let result = try await self.runner.run(
+                    executable: launch.executable,
+                    arguments: launch.arguments,
+                    environment: launch.environmentDictionary,
+                    timeout: 10
+                )
+                guard result.succeeded else { return }
+                let detected = SSHSystemIcon.detect(fromOSReleaseOutput: result.outputText)
+                guard detected != .default,
+                      var latest = self.environment.hosts.host(id: host.id),
+                      latest.systemIcon == .default else { return }
+                latest.systemIcon = detected
+                _ = try? self.environment.hosts.save(latest)
+            } catch {
+                // 自动识别失败不影响正常终端会话，保留默认图标即可。
+            }
         }
     }
 
