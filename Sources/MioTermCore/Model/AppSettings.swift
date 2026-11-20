@@ -115,6 +115,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var contrast: UIContrast
     public var accent: AccentColor
     public var windowOpacity: Double
+    public var windowBackgroundBlur: Double
     public var terminalFontName: String
     public var terminalFontSize: Double
     /// 新建主机时预填的 TERM，也是主机留空时的兜底；本地终端不吃这一项，
@@ -139,6 +140,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         contrast: UIContrast = .soft,
         accent: AccentColor = .blue,
         windowOpacity: Double = 1.0,
+        windowBackgroundBlur: Double = 0.0,
         terminalFontName: String = "Menlo Regular",
         terminalFontSize: Double = 13,
         terminalType: String = TerminalTypes.fallback,
@@ -159,6 +161,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.contrast = contrast
         self.accent = accent
         self.windowOpacity = windowOpacity
+        self.windowBackgroundBlur = windowBackgroundBlur
         self.terminalFontName = terminalFontName
         self.terminalFontSize = terminalFontSize
         self.terminalType = terminalType
@@ -186,6 +189,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         contrast = (try? c.decodeIfPresent(UIContrast.self, forKey: .contrast)) ?? .soft
         accent = (try? c.decodeIfPresent(AccentColor.self, forKey: .accent)) ?? .blue
         windowOpacity = (try? c.decodeIfPresent(Double.self, forKey: .windowOpacity)) ?? 1.0
+        windowBackgroundBlur = (try? c.decodeIfPresent(Double.self, forKey: .windowBackgroundBlur)) ?? 0.0
         terminalFontName = (try? c.decodeIfPresent(String.self, forKey: .terminalFontName)) ?? "Menlo Regular"
         terminalFontSize = (try? c.decodeIfPresent(Double.self, forKey: .terminalFontSize)) ?? 13
         // 老文件没有这一项；解析不出来时也退回兜底值，绝不能留空串当 TERM 传给子进程。
@@ -209,6 +213,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         var copy = self
         copy.themeCustomization = themeCustomization.normalized()
         copy.windowOpacity = min(Self.maximumWindowOpacity, max(Self.minimumWindowOpacity, windowOpacity))
+        copy.windowBackgroundBlur = min(1.0, max(0.0, windowBackgroundBlur))
         copy.terminalFontSize = min(32, max(9, terminalFontSize))
         copy.terminalType = TerminalTypes.resolved(terminalType, default: TerminalTypes.fallback)
         copy.fileTreeFontSize = min(20, max(10, fileTreeFontSize))

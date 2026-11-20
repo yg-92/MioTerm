@@ -91,6 +91,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case prefCustomTheme
     case prefStyleButton
     case prefWindowOpacity
+    case prefBackgroundBlur
     case prefTerminalFont
     case prefTerminalFontSize
     case prefTerminalType

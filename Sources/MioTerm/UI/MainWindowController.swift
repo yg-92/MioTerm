@@ -8,6 +8,14 @@ import MioTermCore
 @MainActor
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let workspace = WorkspaceViewController()
+    private let backdropBlurView: NSVisualEffectView = {
+        let blur = NSVisualEffectView()
+        blur.blendingMode = .behindWindow
+        blur.material = .underWindowBackground
+        blur.state = .active
+        blur.isHidden = true
+        return blur
+    }()
     private static let pageActions = NSToolbarItem.Identifier("mio.pageActions")
     private static let actionsSpacer = NSToolbarItem.Identifier("mio.actionsSpacer")
     private static let windowActions = NSToolbarItem.Identifier("mio.windowActions")
@@ -38,16 +46,19 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
         self.init(window: window)
-        window.contentViewController = workspace
+        let rootController = MainWindowBackdropController(backdrop: backdropBlurView, content: workspace)
+        window.contentViewController = rootController
         // 赋 contentViewController 时窗口会缩到工作区的 fitting size，
         // 首次启动想要的是设计稿尺寸，已保存的窗口帧在后面恢复。
         window.setContentSize(NSSize(width: 1240, height: 780))
         window.title = "MioTerm"
-        applyWindowOpacity(AppEnvironment.shared.settings.settings.windowOpacity)
+        let initial = AppEnvironment.shared.settings.settings
+        applyWindowOpacity(initial.windowOpacity, blur: initial.windowBackgroundBlur)
         workspace.onPresentationChange = { [weak self] controller in
             guard let self else { return }
             self.setSessionActive(controller != nil)
-            self.applyWindowOpacity(AppEnvironment.shared.settings.settings.windowOpacity)
+            let s = AppEnvironment.shared.settings.settings
+            self.applyWindowOpacity(s.windowOpacity, blur: s.windowBackgroundBlur)
         }
         installToolbar()
         settingsObserver = NotificationCenter.default.addObserver(
@@ -57,7 +68,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.applyToolbarItems()
-                self?.applyWindowOpacity(AppEnvironment.shared.settings.settings.windowOpacity)
+                let s = AppEnvironment.shared.settings.settings
+                self?.applyWindowOpacity(s.windowOpacity, blur: s.windowBackgroundBlur)
             }
         }
         opacityPreviewObserver = NotificationCenter.default.addObserver(
@@ -66,9 +78,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             queue: .main
         ) { [weak self] notification in
             let previewOpacity = notification.userInfo?["opacity"] as? Double
+            let previewBlur = notification.userInfo?["blur"] as? Double
             MainActor.assumeIsolated {
-                let opacity = previewOpacity ?? AppEnvironment.shared.settings.settings.windowOpacity
-                self?.applyWindowOpacity(opacity)
+                let s = AppEnvironment.shared.settings.settings
+                let opacity = previewOpacity ?? s.windowOpacity
+                let blur = previewBlur ?? s.windowBackgroundBlur
+                self?.applyWindowOpacity(opacity, blur: blur)
             }
         }
         // 首次启动按设计尺寸来，但屏幕装不下时先缩到 visibleFrame 内，
@@ -87,16 +102,35 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         }
     }
 
-    private func applyWindowOpacity(_ opacity: Double) {
+    private func applyWindowOpacity(_ opacity: Double, blur: Double) {
         guard let window else { return }
-        if workspace.isShowingDesktopSession && opacity < 0.999 {
-            // 处于 VNC/RDP 桌面会话时，主窗口保持 1.0 不透明，仅让外围框架与普通终端继承透明度，
-            // 确保远程桌面内部视图始终 100% 不透明。
-            window.alphaValue = 1.0
+        if workspace.isShowingDesktopSession {
+            // 处于 VNC/RDP 桌面会话时，禁用背景虚化且保持远程桌面内部视图 100% 不透明，
+            // 仅让外围框架继承透明度。
+            backdropBlurView.isHidden = true
+            if opacity < 0.999 {
+                window.alphaValue = 1.0
+                window.isOpaque = false
+                window.backgroundColor = Theme.background.withAlphaComponent(CGFloat(opacity))
+                workspace.applyFrameOpacity(CGFloat(opacity))
+            } else {
+                window.isOpaque = true
+                window.backgroundColor = Theme.background
+                window.alphaValue = 1.0
+                workspace.applyFrameOpacity(1.0)
+            }
+            return
+        }
+
+        if blur > 0.001 {
+            backdropBlurView.isHidden = false
+            backdropBlurView.alphaValue = CGFloat(blur)
             window.isOpaque = false
             window.backgroundColor = Theme.background.withAlphaComponent(CGFloat(opacity))
+            window.alphaValue = 1.0
             workspace.applyFrameOpacity(CGFloat(opacity))
         } else {
+            backdropBlurView.isHidden = true
             window.isOpaque = true
             window.backgroundColor = Theme.background
             window.alphaValue = CGFloat(opacity)
@@ -308,5 +342,41 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [Self.pageActions, Self.actionsSpacer, Self.windowActions, .space, .flexibleSpace]
+    }
+}
+
+/// 将全窗背景虚化视图铺在工作区下方，不干扰 `WorkspaceViewController` 的分栏布局。
+@MainActor
+private final class MainWindowBackdropController: NSViewController {
+    private let backdrop: NSVisualEffectView
+    private let content: NSViewController
+
+    init(backdrop: NSVisualEffectView, content: NSViewController) {
+        self.backdrop = backdrop
+        self.content = content
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func loadView() {
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1240, height: 780))
+        addChild(content)
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        content.view.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(backdrop)
+        root.addSubview(content.view)
+        NSLayoutConstraint.activate([
+            backdrop.topAnchor.constraint(equalTo: root.topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
+            content.view.topAnchor.constraint(equalTo: root.topAnchor),
+            content.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            content.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            content.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+        ])
+        view = root
     }
 }

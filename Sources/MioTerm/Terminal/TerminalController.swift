@@ -146,6 +146,22 @@ final class TerminalController: NSObject, SessionControlling, LocalProcessTermin
         process?.onFocus = { [weak self] in self?.onFocus?() }
         (terminalView as? StreamTerminalView)?.onFocus = { [weak self] in self?.onFocus?() }
         applyTheme()
+        NotificationCenter.default.addObserver(
+            forName: .mioTermWindowOpacityPreview,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let previewOpacity = notification.userInfo?["opacity"] as? Double
+            let previewBlur = notification.userInfo?["blur"] as? Double
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let s = AppEnvironment.shared.settings.settings
+                self.applyTerminalBackdrop(
+                    opacity: previewOpacity ?? s.windowOpacity,
+                    blur: previewBlur ?? s.windowBackgroundBlur
+                )
+            }
+        }
         // 解析线程只负责戳时间戳，主线程据此把读屏往后推；不轮询。
         outputClock.onActivity = { [weak self] in
             guard let self else { return }
@@ -195,6 +211,7 @@ final class TerminalController: NSObject, SessionControlling, LocalProcessTermin
             appliedScrollbackLines = settings.scrollbackLines
         }
         terminalView.bellStyle = settings.playBellSound ? .sound : .none
+        applyTerminalBackdrop(opacity: settings.windowOpacity, blur: settings.windowBackgroundBlur)
     }
 
     /// 终端配色只认具体色值，切换深浅外观后要重新装一遍；`apply(settings)` 不负责外观。
@@ -203,13 +220,26 @@ final class TerminalController: NSObject, SessionControlling, LocalProcessTermin
         // effectiveAppearance：外观变化是自上而下派发的，父视图收到回调那一刻子视图还是旧值，
         // 读它等于把刚换掉的配色又装回去，终端就一直停在切换前的深浅。
         let dark = Theme.isDark(terminalView.window?.effectiveAppearance)
-        terminalView.nativeBackgroundColor = Theme.terminalBackground(dark: dark)
+        let s = AppEnvironment.shared.settings.settings
+        applyTerminalBackdrop(opacity: s.windowOpacity, blur: s.windowBackgroundBlur, dark: dark)
         terminalView.nativeForegroundColor = Theme.terminalForeground(dark: dark)
         terminalView.selectedTextBackgroundColor = Theme.terminalColor(.selectionBackground, dark: dark)
         terminalView.selectedTextForegroundColor = Theme.terminalColor(.selectionForeground, dark: dark)
         terminalView.caretColor = Theme.terminalColor(.cursor, dark: dark)
         terminalView.installColors(Theme.terminalPalette(dark: dark))
         terminalView.needsDisplay = true
+    }
+
+    private func applyTerminalBackdrop(opacity: Double, blur: Double, dark: Bool? = nil) {
+        let resolvedDark = dark ?? Theme.isDark(terminalView.window?.effectiveAppearance)
+        let base = Theme.terminalBackground(dark: resolvedDark)
+        if blur > 0.001 {
+            terminalView.nativeBackgroundColor = base.withAlphaComponent(CGFloat(opacity))
+            terminalView.layer?.isOpaque = false
+        } else {
+            terminalView.nativeBackgroundColor = base
+            terminalView.layer?.isOpaque = true
+        }
     }
 
     static func font(for settings: AppSettings) -> NSFont {

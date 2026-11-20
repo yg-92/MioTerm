@@ -26,6 +26,18 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         return slider
     }()
     private let opacityValueLabel = NSTextField(labelWithString: "100%")
+    private lazy var blurSlider: NSSlider = {
+        let slider = NSSlider(
+            value: 0.0,
+            minValue: 0.0,
+            maxValue: 1.0,
+            target: self,
+            action: #selector(blurChanged(_:))
+        )
+        slider.isContinuous = true
+        return slider
+    }()
+    private let blurValueLabel = NSTextField(labelWithString: "0%")
     private let fontPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let fontSizePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 24))
     /// 终端类型既能从常用 TERM 里挑，也能直接输入对端要求的名字。
@@ -186,6 +198,14 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         opacityRow.orientation = .horizontal
         opacityRow.spacing = 8
 
+        blurSlider.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        blurValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        blurValueLabel.alignment = .right
+        blurValueLabel.widthAnchor.constraint(equalToConstant: 42).isActive = true
+        let blurRow = NSStackView(views: [blurSlider, blurValueLabel])
+        blurRow.orientation = .horizontal
+        blurRow.spacing = 8
+
         categorySwitcher.onChange = { [weak self] index in
             self?.tabView.selectTabViewItem(at: index)
         }
@@ -205,6 +225,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
                 [label(.prefAccent), accentPopup],
                 [label(.prefCustomTheme), styleButton],
                 [label(.prefWindowOpacity), opacityRow],
+                [label(.prefBackgroundBlur), blurRow],
                 [label(.prefTreeFontSize), treeFontSizePopup],
                 [label(.prefTreeIconSize), treeIconSizePopup],
             ]),
@@ -349,6 +370,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         accentPopup.selectItem(at: AccentColor.allCases.firstIndex(of: settings.accent) ?? 0)
         opacitySlider.doubleValue = settings.windowOpacity
         updateOpacityLabel(settings.windowOpacity)
+        blurSlider.doubleValue = settings.windowBackgroundBlur
+        updateBlurLabel(settings.windowBackgroundBlur)
         applyWindowOpacity(settings.windowOpacity)
         if let index = availableFonts.firstIndex(of: settings.terminalFontName) {
             fontPopup.selectItem(at: index)
@@ -426,6 +449,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
                 settings.contrast = selected(contrastPopup, UIContrast.allCases)
                 settings.accent = selected(accentPopup, AccentColor.allCases)
                 settings.windowOpacity = opacitySlider.doubleValue
+                settings.windowBackgroundBlur = blurSlider.doubleValue
                 settings.terminalFontName = fontName
                 settings.terminalFontSize = Double(fontSizePopup.titleOfSelectedItem ?? "13") ?? 13
                 // 输入框可以留空，但设置里的默认值必须是能直接当 TERM 用的具体名字。
@@ -474,10 +498,22 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         let value = sender.doubleValue
         updateOpacityLabel(value)
         applyWindowOpacity(value)
+        postAppearancePreview()
+    }
+
+    @objc private func blurChanged(_ sender: NSSlider) {
+        updateBlurLabel(sender.doubleValue)
+        postAppearancePreview()
+    }
+
+    private func postAppearancePreview() {
         NotificationCenter.default.post(
             name: .mioTermWindowOpacityPreview,
             object: nil,
-            userInfo: ["opacity": value]
+            userInfo: [
+                "opacity": opacitySlider.doubleValue,
+                "blur": blurSlider.doubleValue,
+            ]
         )
         opacitySaveWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -493,6 +529,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
 
     private func updateOpacityLabel(_ value: Double) {
         opacityValueLabel.stringValue = "\(Int(round(value * 100)))%"
+    }
+
+    private func updateBlurLabel(_ value: Double) {
+        blurValueLabel.stringValue = "\(Int(round(value * 100)))%"
     }
 
     @objc private func openStyles(_ sender: Any?) { showStyles() }
