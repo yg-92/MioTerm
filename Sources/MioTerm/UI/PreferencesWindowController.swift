@@ -16,16 +16,16 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     private let accentPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private lazy var opacitySlider: NSSlider = {
         let slider = NSSlider(
-            value: 1.0,
-            minValue: AppSettings.minimumWindowOpacity,
-            maxValue: AppSettings.maximumWindowOpacity,
+            value: 0.0,
+            minValue: 0.0,
+            maxValue: AppSettings.maximumWindowOpacity - AppSettings.minimumWindowOpacity,
             target: self,
             action: #selector(opacityChanged(_:))
         )
         slider.isContinuous = true
         return slider
     }()
-    private let opacityValueLabel = NSTextField(labelWithString: "100%")
+    private let opacityValueLabel = NSTextField(labelWithString: "0%")
     private lazy var blurSlider: NSSlider = {
         let slider = NSSlider(
             value: 0.0,
@@ -368,9 +368,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         appearancePopup.selectItem(at: AppearanceMode.allCases.firstIndex(of: settings.appearance) ?? 0)
         contrastPopup.selectItem(at: UIContrast.allCases.firstIndex(of: settings.contrast) ?? 0)
         accentPopup.selectItem(at: AccentColor.allCases.firstIndex(of: settings.accent) ?? 0)
-        opacitySlider.doubleValue = settings.windowOpacity
-        updateOpacityLabel(settings.windowOpacity)
+        let transparency = max(0.0, min(1.0 - AppSettings.minimumWindowOpacity, 1.0 - settings.windowOpacity))
+        opacitySlider.doubleValue = transparency
+        updateOpacityLabel(transparency)
         blurSlider.doubleValue = settings.windowBackgroundBlur
+        blurSlider.isEnabled = transparency > 0.001
         updateBlurLabel(settings.windowBackgroundBlur)
         applyWindowOpacity(settings.windowOpacity)
         if let index = availableFonts.firstIndex(of: settings.terminalFontName) {
@@ -448,7 +450,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
                 settings.appearance = selected(appearancePopup, AppearanceMode.allCases)
                 settings.contrast = selected(contrastPopup, UIContrast.allCases)
                 settings.accent = selected(accentPopup, AccentColor.allCases)
-                settings.windowOpacity = opacitySlider.doubleValue
+                settings.windowOpacity = 1.0 - opacitySlider.doubleValue
                 settings.windowBackgroundBlur = blurSlider.doubleValue
                 settings.terminalFontName = fontName
                 settings.terminalFontSize = Double(fontSizePopup.titleOfSelectedItem ?? "13") ?? 13
@@ -495,9 +497,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     }
 
     @objc private func opacityChanged(_ sender: NSSlider) {
-        let value = sender.doubleValue
-        updateOpacityLabel(value)
-        applyWindowOpacity(value)
+        let transparency = sender.doubleValue
+        updateOpacityLabel(transparency)
+        blurSlider.isEnabled = transparency > 0.001
+        applyWindowOpacity(1.0 - transparency)
         postAppearancePreview()
     }
 
@@ -511,7 +514,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
             name: .mioTermWindowOpacityPreview,
             object: nil,
             userInfo: [
-                "opacity": opacitySlider.doubleValue,
+                "opacity": 1.0 - opacitySlider.doubleValue,
                 "blur": blurSlider.doubleValue,
             ]
         )

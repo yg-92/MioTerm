@@ -233,8 +233,8 @@ final class TerminalController: NSObject, SessionControlling, LocalProcessTermin
     private func applyTerminalBackdrop(opacity: Double, blur: Double, dark: Bool? = nil) {
         let resolvedDark = dark ?? Theme.isDark(terminalView.window?.effectiveAppearance)
         let base = Theme.terminalBackground(dark: resolvedDark)
-        if blur > 0.001 {
-            let effectiveAlpha = Theme.effectiveBackgroundAlpha(opacity: opacity, blur: blur)
+        if opacity < 0.999 && blur > 0.001 {
+            let effectiveAlpha = CGFloat(opacity)
             terminalView.nativeBackgroundColor = base.withAlphaComponent(effectiveAlpha)
             terminalView.backgroundOpacity = effectiveAlpha
             terminalView.layer?.isOpaque = false

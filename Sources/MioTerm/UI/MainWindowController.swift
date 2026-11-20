@@ -133,8 +133,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             return
         }
 
-        if blur > 0.001 {
-            let effectiveAlpha = Theme.effectiveBackgroundAlpha(opacity: opacity, blur: blur)
+        if opacity < 0.999 && blur > 0.001 {
+            let effectiveAlpha = CGFloat(opacity)
             backdropBlurView.material = Theme.isDark(window.effectiveAppearance) ? .hudWindow : .popover
             backdropBlurView.isHidden = false
             backdropBlurView.alphaValue = CGFloat(blur)
@@ -145,7 +145,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             )
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.alphaValue = CGFloat(opacity)
+            window.alphaValue = 1.0
             workspace.applyFrameOpacity(effectiveAlpha)
         } else {
             backdropBlurView.isHidden = true
