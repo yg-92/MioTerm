@@ -294,6 +294,18 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         persistSettings()
     }
 
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            close()
+            return true
+        }
+        return false
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        close()
+    }
+
     func comboBoxSelectionDidChange(_ notification: Notification) {
         // 下拉选择变更时 stringValue 尚未同步为选中项，延后一个主循环周期读取。
         DispatchQueue.main.async { [weak self] in

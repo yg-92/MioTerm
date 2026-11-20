@@ -80,7 +80,7 @@ final class HostSidebarViewController: NSViewController {
         // 这里关掉它，选中态只留 SidebarRowView 自己的细色条。
         outlineView.selectionHighlightStyle = .none
         outlineView.floatsGroupRows = false
-        outlineView.allowsMultipleSelection = false
+        outlineView.allowsMultipleSelection = true
         outlineView.backgroundColor = .clear
         outlineView.dataSource = self
         outlineView.delegate = self
@@ -238,7 +238,14 @@ final class HostSidebarViewController: NSViewController {
     }
 
     var selectedHost: HostProfile? {
-        (outlineView.item(atRow: outlineView.selectedRow) as? Row)?.host
+        selectedHosts.first
+    }
+
+    var selectedHosts: [HostProfile] {
+        outlineView.selectedRowIndexes.compactMap { row in
+            guard row >= 0, let item = outlineView.item(atRow: row) as? Row else { return nil }
+            return item.host
+        }
     }
 
     private func restoreSelection(id: String?) {

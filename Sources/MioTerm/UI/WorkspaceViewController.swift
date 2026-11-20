@@ -292,7 +292,8 @@ final class WorkspaceViewController: NSSplitViewController {
     }
 
     @objc func connectSelectedHost(_ sender: Any?) {
-        guard let host = sidebar.selectedHost else {
+        let hosts = sidebar.selectedHosts
+        guard !hosts.isEmpty else {
             AlertPresenter.notify(
                 title: L10n.tr(.workspaceNoHostSelectedTitle),
                 message: L10n.tr(.workspaceNoHostSelectedMsg),
@@ -300,7 +301,9 @@ final class WorkspaceViewController: NSSplitViewController {
             )
             return
         }
-        connect(host: host)
+        for host in hosts {
+            connect(host: host)
+        }
     }
 
     /// 串口控制台的 BREAK：交换机与老设备靠它唤出提示符。
