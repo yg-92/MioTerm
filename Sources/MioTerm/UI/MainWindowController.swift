@@ -9,6 +9,7 @@ import MioTermCore
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let workspace = WorkspaceViewController()
     private static let pageActions = NSToolbarItem.Identifier("mio.pageActions")
+    private static let actionsSpacer = NSToolbarItem.Identifier("mio.actionsSpacer")
     private static let windowActions = NSToolbarItem.Identifier("mio.windowActions")
     private var showingSession = false
     private var settingsObserver: NSObjectProtocol?
@@ -129,7 +130,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         while !toolbar.items.isEmpty {
             toolbar.removeItem(at: 0)
         }
-        let identifiers: [NSToolbarItem.Identifier] = [Self.pageActions, .flexibleSpace, Self.windowActions]
+        let identifiers: [NSToolbarItem.Identifier] = [Self.pageActions, .flexibleSpace, Self.actionsSpacer, Self.windowActions]
         for (index, identifier) in identifiers.enumerated() {
             toolbar.insertItem(withItemIdentifier: identifier, at: index)
         }
@@ -141,11 +142,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         switch itemIdentifier {
         case Self.pageActions:
             return pageActionsItem(itemIdentifier)
+        case Self.actionsSpacer:
+            return spacerItem(itemIdentifier, width: 14)
         case Self.windowActions:
             return windowActionsItem(itemIdentifier)
         default:
             return nil
         }
+    }
+
+    private func spacerItem(_ identifier: NSToolbarItem.Identifier, width: CGFloat) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 1))
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalToConstant: width).isActive = true
+        view.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        item.view = view
+        item.isEnabled = false
+        item.autovalidates = false
+        return item
     }
 
     /// 左侧：侧栏开关 + 随上下文变化的页面动作，统一收进一块玻璃。
@@ -265,10 +280,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.pageActions, .flexibleSpace, Self.windowActions]
+        [Self.pageActions, .flexibleSpace, Self.actionsSpacer, Self.windowActions]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.pageActions, Self.windowActions, .space, .flexibleSpace]
+        [Self.pageActions, Self.actionsSpacer, Self.windowActions, .space, .flexibleSpace]
     }
 }
