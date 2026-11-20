@@ -11,10 +11,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let backdropBlurView: NSVisualEffectView = {
         let blur = NSVisualEffectView()
         blur.blendingMode = .behindWindow
-        blur.material = .popover
+        blur.material = .hudWindow
         blur.state = .active
         blur.isHidden = true
         return blur
+    }()
+    private let tintOverlayView: NSView = {
+        let view = NSView()
+        view.wantsLayer = true
+        view.isHidden = true
+        return view
     }()
     private static let pageActions = NSToolbarItem.Identifier("mio.pageActions")
     private static let actionsSpacer = NSToolbarItem.Identifier("mio.actionsSpacer")
@@ -46,7 +52,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
         self.init(window: window)
-        let rootController = MainWindowBackdropController(backdrop: backdropBlurView, content: workspace)
+        let rootController = MainWindowBackdropController(
+            backdrop: backdropBlurView,
+            tintOverlay: tintOverlayView,
+            content: workspace
+        )
         window.contentViewController = rootController
         // 赋 contentViewController 时窗口会缩到工作区的 fitting size，
         // 首次启动想要的是设计稿尺寸，已保存的窗口帧在后面恢复。
@@ -108,6 +118,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             // 处于 VNC/RDP 桌面会话时，禁用背景虚化且保持远程桌面内部视图 100% 不透明，
             // 仅让外围框架继承透明度。
             backdropBlurView.isHidden = true
+            tintOverlayView.isHidden = true
             if opacity < 0.999 {
                 window.alphaValue = 1.0
                 window.isOpaque = false
@@ -124,15 +135,21 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
         if blur > 0.001 {
             let effectiveAlpha = Theme.effectiveBackgroundAlpha(opacity: opacity, blur: blur)
+            backdropBlurView.material = Theme.isDark(window.effectiveAppearance) ? .hudWindow : .popover
             backdropBlurView.isHidden = false
-            // 用平滑曲线渐进叠加虚化强度，避免刚离开 0% 就突然变厚重。
-            backdropBlurView.alphaValue = CGFloat(pow(blur, 1.8))
+            backdropBlurView.alphaValue = CGFloat(blur)
+            tintOverlayView.isHidden = false
+            tintOverlayView.layer?.backgroundColor = Theme.layerColor(
+                Theme.background.withAlphaComponent(effectiveAlpha),
+                for: tintOverlayView
+            )
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.alphaValue = 1.0
+            window.alphaValue = CGFloat(opacity)
             workspace.applyFrameOpacity(effectiveAlpha)
         } else {
             backdropBlurView.isHidden = true
+            tintOverlayView.isHidden = true
             window.isOpaque = true
             window.backgroundColor = Theme.background
             window.alphaValue = CGFloat(opacity)
@@ -351,10 +368,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 @MainActor
 private final class MainWindowBackdropController: NSViewController {
     private let backdrop: NSVisualEffectView
+    private let tintOverlay: NSView
     private let content: NSViewController
 
-    init(backdrop: NSVisualEffectView, content: NSViewController) {
+    init(backdrop: NSVisualEffectView, tintOverlay: NSView, content: NSViewController) {
         self.backdrop = backdrop
+        self.tintOverlay = tintOverlay
         self.content = content
         super.init(nibName: nil, bundle: nil)
     }
@@ -365,14 +384,21 @@ private final class MainWindowBackdropController: NSViewController {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 1240, height: 780))
         addChild(content)
         backdrop.translatesAutoresizingMaskIntoConstraints = false
+        tintOverlay.translatesAutoresizingMaskIntoConstraints = false
         content.view.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(backdrop)
+        root.addSubview(tintOverlay)
         root.addSubview(content.view)
         NSLayoutConstraint.activate([
             backdrop.topAnchor.constraint(equalTo: root.topAnchor),
             backdrop.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             backdrop.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             backdrop.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
+            tintOverlay.topAnchor.constraint(equalTo: root.topAnchor),
+            tintOverlay.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            tintOverlay.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            tintOverlay.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
             content.view.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
             content.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),

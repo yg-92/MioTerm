@@ -624,9 +624,9 @@ final class SessionTabViewController: NSViewController {
         view.layer?.backgroundColor = opacity < 0.999
             ? NSColor.clear.cgColor
             : Theme.layerColor(Theme.background, for: view)
-        tabBar.alphaValue = opacity
-        statusBar.alphaValue = opacity
-        welcome.view.alphaValue = opacity
+        tabBar.alphaValue = 1.0
+        statusBar.alphaValue = 1.0
+        welcome.view.alphaValue = 1.0
         for tab in tabControllers.values {
             let isDesktop = tab.controller is VNCController || tab.controller is RDPController
             if isDesktop {
