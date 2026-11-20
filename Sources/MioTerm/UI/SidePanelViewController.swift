@@ -32,6 +32,7 @@ final class SidePanelViewController: NSViewController {
     }()
     private let content = ContainerViewController()
     private let divider = NSView()
+    private var backgroundView: SidePanelBackgroundView?
     private var filesAvailable = false
     private var hasActiveSession = false
     private var contentTopWithSwitcher: NSLayoutConstraint?
@@ -42,6 +43,7 @@ final class SidePanelViewController: NSViewController {
     override func loadView() {
         let root = SidePanelBackgroundView(frame: NSRect(x: 0, y: 0, width: 280, height: 620))
         root.onAppearanceChange = { [weak self] in self?.refreshAppearance() }
+        backgroundView = root
 
         modeSwitcher.onChange = { [weak self] index in
             self?.select(Mode(rawValue: index) ?? .hosts)
@@ -153,6 +155,10 @@ final class SidePanelViewController: NSViewController {
         select(.hosts)
     }
 
+    func applyBackgroundOpacity(_ opacity: CGFloat) {
+        backgroundView?.backgroundOpacity = opacity
+    }
+
     private func refreshAppearance() {
         divider.layer?.backgroundColor = Theme.layerColor(Theme.border, for: divider)
     }
@@ -162,9 +168,17 @@ final class SidePanelViewController: NSViewController {
 @MainActor
 private final class SidePanelBackgroundView: NSView {
     var onAppearanceChange: (() -> Void)?
+    var backgroundOpacity: CGFloat = 1.0 {
+        didSet {
+            guard abs(backgroundOpacity - oldValue) > 0.001 else { return }
+            needsDisplay = true
+        }
+    }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSGradient(colors: [Theme.sidebarTop, Theme.sidebarBottom])?.draw(in: bounds, angle: -90)
+        let top = Theme.sidebarTop.withAlphaComponent(backgroundOpacity)
+        let bottom = Theme.sidebarBottom.withAlphaComponent(backgroundOpacity)
+        NSGradient(colors: [top, bottom])?.draw(in: bounds, angle: -90)
     }
 
     override func viewDidChangeEffectiveAppearance() {

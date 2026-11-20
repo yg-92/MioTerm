@@ -11,7 +11,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let backdropBlurView: NSVisualEffectView = {
         let blur = NSVisualEffectView()
         blur.blendingMode = .behindWindow
-        blur.material = .underWindowBackground
+        blur.material = .popover
         blur.state = .active
         blur.isHidden = true
         return blur
@@ -35,7 +35,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     convenience init() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -124,7 +124,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
         if blur > 0.001 {
             backdropBlurView.isHidden = false
-            backdropBlurView.alphaValue = CGFloat(blur)
+            // 用平滑曲线渐进叠加虚化强度，避免刚离开 0% 就突然变厚重。
+            backdropBlurView.alphaValue = CGFloat(pow(blur, 1.8))
             window.isOpaque = false
             window.backgroundColor = Theme.background.withAlphaComponent(CGFloat(opacity))
             window.alphaValue = 1.0
@@ -372,7 +373,7 @@ private final class MainWindowBackdropController: NSViewController {
             backdrop.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             backdrop.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
-            content.view.topAnchor.constraint(equalTo: root.topAnchor),
+            content.view.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
             content.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             content.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             content.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),

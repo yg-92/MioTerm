@@ -31,7 +31,8 @@ final class WorkspaceViewController: NSSplitViewController {
     var isShowingDesktopSession: Bool { sessions.hasVisibleDesktopSession }
 
     func applyFrameOpacity(_ opacity: CGFloat) {
-        sidePanel.view.alphaValue = opacity
+        sidePanel.view.alphaValue = 1.0
+        sidePanel.applyBackgroundOpacity(opacity)
         sessions.applyFrameOpacity(opacity)
     }
 
