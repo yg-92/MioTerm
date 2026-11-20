@@ -45,8 +45,23 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     private let optionKeyPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
 
     private let styleButton = NSButton(title: L10n.tr(.prefStyleButton), target: nil, action: nil)
+    private static let tabKeys: [L10nKey] = [
+        .prefTabAppearance,
+        .prefTabTerminal,
+        .prefTabConnection,
+        .prefTabRemoteDesktop,
+    ]
+    private let categorySwitcher = CapsuleSegmentedView(titles: tabKeys.map { L10n.tr($0) })
+    private lazy var categoryBar: GlassBarView = {
+        categorySwitcher.drawsTrack = false
+        return GlassBarView(
+            content: categorySwitcher,
+            padding: NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        )
+    }()
+    private let rootView = PreferencesBackdropView(isCard: false)
+    private let cardView = PreferencesBackdropView(isCard: true)
     private let tabView = NSTabView()
-    private var tabItems: [(NSTabViewItem, L10nKey)] = []
     private var localizedLabels: [(NSTextField, L10nKey)] = []
 
     private static let labelWidth: CGFloat = 128
@@ -82,6 +97,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
             defer: false
         )
         window.title = L10n.tr(.preferencesTitle)
+        window.backgroundColor = Theme.background
+        window.titlebarAppearsTransparent = true
         // 窗口归控制器长期持有：关掉再打开时要能复用，不然第二次打开控件会失灵。
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -169,9 +186,19 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         opacityRow.orientation = .horizontal
         opacityRow.spacing = 8
 
-        tabView.tabViewType = .topTabsBezelBorder
-        tabItems = [
-            makeTab(key: .prefTabAppearance, rows: [
+        categorySwitcher.onChange = { [weak self] index in
+            self?.tabView.selectTabViewItem(at: index)
+        }
+        categorySwitcher.selectedIndex = 0
+        categorySwitcher.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            categorySwitcher.widthAnchor.constraint(equalToConstant: 420),
+            categorySwitcher.heightAnchor.constraint(equalToConstant: 32),
+        ])
+
+        tabView.tabViewType = .noTabsNoBorder
+        let pages: [(L10nKey, [[NSView]])] = [
+            (.prefTabAppearance, [
                 [label(.prefLanguage), languagePopup],
                 [label(.prefAppearance), appearancePopup],
                 [label(.prefContrast), contrastPopup],
@@ -181,7 +208,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
                 [label(.prefTreeFontSize), treeFontSizePopup],
                 [label(.prefTreeIconSize), treeIconSizePopup],
             ]),
-            makeTab(key: .prefTabTerminal, rows: [
+            (.prefTabTerminal, [
                 [label(.prefTerminalFont), fontPopup],
                 [label(.prefTerminalFontSize), fontSizePopup],
                 [label(.prefTerminalType), terminalTypeCombo],
@@ -190,38 +217,50 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
                 [label(.prefBell), bellCheckbox],
                 [label(.prefFollowDirectory), followCheckbox],
             ]),
-            makeTab(key: .prefTabConnection, rows: [
+            (.prefTabConnection, [
                 [label(.prefConnectTimeout), timeoutField],
                 [label(.prefKeepalive), keepaliveField],
                 [label(.prefUploadChunk), chunkField],
                 [label(.prefMaxConcurrent), concurrencyField],
             ]),
-            makeTab(key: .prefTabRemoteDesktop, rows: [
+            (.prefTabRemoteDesktop, [
                 [label(.prefRemoteCommandKey), commandKeyPopup],
                 [label(.prefRemoteControlKey), controlKeyPopup],
                 [label(.prefRemoteOptionKey), optionKeyPopup],
             ]),
         ]
-        for (item, _) in tabItems {
-            tabView.addTabViewItem(item)
+        for (key, rows) in pages {
+            tabView.addTabViewItem(makeTab(key: key, rows: rows))
         }
 
-        let container = NSView()
+        categoryBar.translatesAutoresizingMaskIntoConstraints = false
+        cardView.translatesAutoresizingMaskIntoConstraints = false
         tabView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(tabView)
+        cardView.addSubview(tabView)
+        rootView.addSubview(categoryBar)
+        rootView.addSubview(cardView)
         NSLayoutConstraint.activate([
-            tabView.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
-            tabView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            tabView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            tabView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
+            categoryBar.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 12),
+            categoryBar.centerXAnchor.constraint(equalTo: rootView.centerXAnchor),
+
+            cardView.topAnchor.constraint(equalTo: categoryBar.bottomAnchor, constant: 14),
+            cardView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: 18),
+            cardView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -18),
+            cardView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -18),
+
+            tabView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 4),
+            tabView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 4),
+            tabView.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -4),
+            tabView.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -4),
         ])
-        window.contentView = container
+        window.contentView = rootView
+        refreshTheme()
         // 按内容定高宽：以前写死 420，行数一多底部按钮就被裁掉，点起来像没反应。
-        window.setContentSize(container.fittingSize)
+        window.setContentSize(rootView.fittingSize)
         window.minSize = window.frame.size
     }
 
-    private func makeTab(key: L10nKey, rows: [[NSView]]) -> (NSTabViewItem, L10nKey) {
+    private func makeTab(key: L10nKey, rows: [[NSView]]) -> NSTabViewItem {
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 10
         grid.columnSpacing = 12
@@ -232,16 +271,23 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         grid.translatesAutoresizingMaskIntoConstraints = false
         page.addSubview(grid)
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: page.topAnchor, constant: 18),
+            grid.topAnchor.constraint(equalTo: page.topAnchor, constant: 16),
             grid.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 18),
             grid.trailingAnchor.constraint(lessThanOrEqualTo: page.trailingAnchor, constant: -18),
-            grid.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor, constant: -18),
+            grid.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor, constant: -16),
         ])
 
         let item = NSTabViewItem(identifier: key)
         item.label = L10n.tr(key)
         item.view = page
-        return (item, key)
+        return item
+    }
+
+    private func refreshTheme() {
+        window?.backgroundColor = Theme.background
+        rootView.refreshColors()
+        cardView.refreshColors()
+        categorySwitcher.needsDisplay = true
     }
 
     /// 标签与内容都靠左；固定标签列宽，右侧控件才会在同一条竖线上。
@@ -255,13 +301,12 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
 
     @objc private func settingsDidChange() {
         applyLocalization()
+        refreshTheme()
     }
 
     private func applyLocalization() {
         window?.title = L10n.tr(.preferencesTitle)
-        for (item, key) in tabItems {
-            item.label = L10n.tr(key)
-        }
+        categorySwitcher.setTitles(Self.tabKeys.map { L10n.tr($0) })
         for (field, key) in localizedLabels {
             field.stringValue = L10n.tr(key)
         }
@@ -450,6 +495,36 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         opacitySaveWorkItem = nil
         window?.makeFirstResponder(nil)
         persistSettings()
+    }
+}
+
+@MainActor
+private final class PreferencesBackdropView: NSView {
+    private let isCard: Bool
+
+    init(isCard: Bool) {
+        self.isCard = isCard
+        super.init(frame: .zero)
+        wantsLayer = true
+        if isCard {
+            layer?.cornerRadius = 12
+            layer?.borderWidth = 1
+        }
+        refreshColors()
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshColors()
+    }
+
+    func refreshColors() {
+        layer?.backgroundColor = Theme.layerColor(isCard ? Theme.surface : Theme.background, for: self)
+        if isCard {
+            layer?.borderColor = Theme.layerColor(Theme.border, for: self)
+        }
     }
 }
 
