@@ -187,12 +187,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 action: #selector(WorkspaceViewController.connectSelectedHost(_:)),
                 target: workspace
             ))
-            row.addArrangedSubview(glassButton(
-                symbol: "plus.circle",
-                label: L10n.tr(.toolbarNewHost),
-                action: #selector(WorkspaceViewController.newHost(_:)),
-                target: workspace
-            ))
         }
         return glassItem(identifier, content: row, label: L10n.tr(.toolbarPageActionsGroup))
     }
@@ -267,22 +261,26 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         return button
     }
 
-    /// 品牌图标只作标识，不参与点击与键盘导航。
-    private func brandView() -> NSImageView {
+    /// 点击品牌图标返回主页。
+    private func brandView() -> NSButton {
         // 复制一份再改尺寸：applicationIconImage 是全局对象，直接改会连带影响 Dock 与关于面板。
         let icon = NSApp.applicationIconImage?.copy() as? NSImage
         icon?.size = NSSize(width: 22, height: 22)
-        let imageView = NSImageView()
-        imageView.image = icon
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.toolTip = "MioTerm"
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.setContentHuggingPriority(.required, for: .horizontal)
+        let button = NSButton()
+        button.image = icon
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyUpOrDown
+        button.target = workspace
+        button.action = #selector(WorkspaceViewController.showHome(_:))
+        button.toolTip = L10n.tr(.toolbarHome)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setContentHuggingPriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
-            imageView.widthAnchor.constraint(equalToConstant: 22),
-            imageView.heightAnchor.constraint(equalToConstant: 22),
+            button.widthAnchor.constraint(equalToConstant: 24),
+            button.heightAnchor.constraint(equalToConstant: 24),
         ])
-        return imageView
+        return button
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
