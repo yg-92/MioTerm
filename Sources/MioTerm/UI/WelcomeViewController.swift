@@ -47,6 +47,9 @@ final class WelcomeViewController: NSViewController {
 
     func applyBackgroundOpacity(_ opacity: CGFloat) {
         backgroundView?.backgroundOpacity = opacity
+        for card in [localCard, newHostCard, connectCard, settingsCard] {
+            card.backgroundOpacity = opacity
+        }
     }
 
     override func loadView() {
@@ -189,8 +192,16 @@ private final class WelcomeActionCard: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let shortcutLabel = NSTextField(labelWithString: "")
+    private var glassBackdrop: NSView?
+    private var blurBackdrop: NSVisualEffectView?
     private var trackingArea: NSTrackingArea?
     private var hovering = false
+    var backgroundOpacity: CGFloat = 1.0 {
+        didSet {
+            guard abs(backgroundOpacity - oldValue) > 0.001 else { return }
+            updateAppearance()
+        }
+    }
 
     init(symbol: String, title: String, detail: String, shortcut: String, action: Selector) {
         self.action = action
@@ -199,6 +210,40 @@ private final class WelcomeActionCard: NSView {
         layer?.cornerRadius = 12
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
+
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = 12
+            glass.isHidden = true
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(glass)
+            glassBackdrop = glass
+            NSLayoutConstraint.activate([
+                glass.topAnchor.constraint(equalTo: topAnchor),
+                glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+                glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+        } else {
+            let blur = NSVisualEffectView()
+            blur.material = .popover
+            blur.blendingMode = .withinWindow
+            blur.state = .active
+            blur.wantsLayer = true
+            blur.layer?.cornerRadius = 12
+            blur.layer?.cornerCurve = .continuous
+            blur.isHidden = true
+            blur.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(blur)
+            blurBackdrop = blur
+            NSLayoutConstraint.activate([
+                blur.topAnchor.constraint(equalTo: topAnchor),
+                blur.bottomAnchor.constraint(equalTo: bottomAnchor),
+                blur.leadingAnchor.constraint(equalTo: leadingAnchor),
+                blur.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+        }
 
         iconBadge.wantsLayer = true
         iconBadge.layer?.cornerRadius = 8
@@ -290,7 +335,16 @@ private final class WelcomeActionCard: NSView {
 
     private func updateAppearance() {
         iconBadge.layer?.backgroundColor = Theme.layerColor(Theme.accentSoft, for: iconBadge)
-        layer?.backgroundColor = Theme.layerColor(hovering ? Theme.surfaceRaised : Theme.surface, for: self)
+        let isTranslucent = backgroundOpacity < 0.999
+        glassBackdrop?.isHidden = !isTranslucent
+        blurBackdrop?.isHidden = !isTranslucent
+        if #available(macOS 26.0, *), let glass = glassBackdrop as? NSGlassEffectView {
+            glass.tintColor = hovering ? Theme.accentSoft : .clear
+        }
+        let surface = hovering ? Theme.surfaceRaised : Theme.surface
+        layer?.backgroundColor = isTranslucent
+            ? Theme.layerColor(surface.withAlphaComponent(0.32), for: self)
+            : Theme.layerColor(surface, for: self)
         layer?.borderColor = Theme.layerColor(
             hovering ? Theme.accent.withAlphaComponent(0.55) : Theme.border,
             for: self
