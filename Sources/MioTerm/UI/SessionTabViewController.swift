@@ -202,6 +202,10 @@ final class SessionTabViewController: NSViewController {
         }
         let tab = TerminalTabViewController(controller: controller)
         tab.onReconnect = { [weak self] controller in self?.onReconnect?(controller) }
+        tab.onClose = { [weak self] controller in
+            guard let self, let index = self.order.firstIndex(where: { $0 === controller }) else { return }
+            _ = self.closeTab(at: index)
+        }
         let isDesktop = controller is VNCController || controller is RDPController
         tab.view.alphaValue = isDesktop ? 1.0 : frameOpacity
         tabControllers[controller.sessionID] = tab
@@ -1622,6 +1626,7 @@ private final class SplitDropOverlayView: NSView {
 final class TerminalTabViewController: NSViewController {
     let controller: any SessionControlling
     var onReconnect: ((any SessionControlling) -> Void)?
+    var onClose: ((any SessionControlling) -> Void)?
 
     private let banner = ReconnectBannerView()
     private let paneHeader = TerminalPaneHeaderView()
@@ -1648,6 +1653,10 @@ final class TerminalTabViewController: NSViewController {
         controller.sessionView.translatesAutoresizingMaskIntoConstraints = false
         paneHeader.translatesAutoresizingMaskIntoConstraints = false
         paneHeader.onActivate = { [weak self] in self?.controller.focus() }
+        paneHeader.onClose = { [weak self] in
+            guard let self else { return }
+            self.onClose?(self.controller)
+        }
         container.addSubview(controller.sessionView)
         container.addSubview(paneHeader)
         headerHeight = paneHeader.heightAnchor.constraint(equalToConstant: 0)
