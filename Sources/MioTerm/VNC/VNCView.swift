@@ -272,7 +272,7 @@ final class VNCView: NSView {
     // MARK: - 像素操作
 
     private func blitRawRect(x: Int, y: Int, width: Int, height: Int, bgra: Data) {
-        guard fbWidth > 0, fbHeight > 0, width > 0, height > 0 else { return }
+        guard fbWidth > 0, fbHeight > 0, width > 0, height > 0, x >= 0, y >= 0 else { return }
         let copyWidth = min(width, max(0, fbWidth - x))
         let copyHeight = min(height, max(0, fbHeight - y))
         guard copyWidth > 0, copyHeight > 0 else { return }
@@ -282,13 +282,15 @@ final class VNCView: NSView {
         let copyRowBytes = copyWidth * 4
 
         framebuffer.withUnsafeMutableBytes { dstRaw in
+            let dstCount = dstRaw.count
             bgra.withUnsafeBytes { srcRaw in
+                let srcCount = srcRaw.count
                 guard let dstBase = dstRaw.baseAddress, let srcBase = srcRaw.baseAddress else { return }
                 for row in 0..<copyHeight {
                     let srcOffset = row * srcRowBytes
                     let dstOffset = (y + row) * dstRowBytes + x * 4
-                    guard srcOffset + copyRowBytes <= bgra.count,
-                          dstOffset + copyRowBytes <= framebuffer.count else { break }
+                    guard srcOffset + copyRowBytes <= srcCount,
+                          dstOffset + copyRowBytes <= dstCount else { break }
                     memcpy(dstBase + dstOffset, srcBase + srcOffset, copyRowBytes)
                 }
             }
@@ -296,18 +298,22 @@ final class VNCView: NSView {
     }
 
     private func copyRect(x: Int, y: Int, width: Int, height: Int, srcX: Int, srcY: Int) {
-        guard fbWidth > 0, fbHeight > 0, width > 0, height > 0 else { return }
+        guard fbWidth > 0, fbHeight > 0, width > 0, height > 0,
+              x >= 0, y >= 0, srcX >= 0, srcY >= 0 else { return }
         let rowBytes = fbWidth * 4
         let copyRowBytes = min(width, min(fbWidth - x, fbWidth - srcX)) * 4
         let copyHeight = min(height, min(fbHeight - y, fbHeight - srcY))
         guard copyRowBytes > 0, copyHeight > 0 else { return }
 
         framebuffer.withUnsafeMutableBytes { raw in
+            let count = raw.count
             guard let base = raw.baseAddress else { return }
             let rows = y > srcY ? Array((0..<copyHeight).reversed()) : Array(0..<copyHeight)
             for row in rows {
                 let srcOffset = (srcY + row) * rowBytes + srcX * 4
                 let dstOffset = (y + row) * rowBytes + x * 4
+                guard srcOffset + copyRowBytes <= count,
+                      dstOffset + copyRowBytes <= count else { continue }
                 memmove(base + dstOffset, base + srcOffset, copyRowBytes)
             }
         }
