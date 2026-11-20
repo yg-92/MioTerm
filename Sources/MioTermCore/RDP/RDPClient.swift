@@ -197,7 +197,6 @@ public final class RDPClient: @unchecked Sendable {
             stateLock.lock()
             session = nil
             stateLock.unlock()
-            mio_rdp_disconnect(created)
             mio_rdp_destroy(created)
             box.release()
         }
