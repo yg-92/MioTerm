@@ -27,11 +27,14 @@ final class TerminalSplitViewController: NSViewController, NSSplitViewDelegate {
     func clear() {
         left.clear()
         right.clear()
+        splitView.removeArrangedSubview(right.view)
         right.view.removeFromSuperview()
         right.removeFromParent()
         primary = nil
         secondary = nil
         splitView.adjustSubviews()
+        splitView.needsLayout = true
+        splitView.needsDisplay = true
     }
 
     func show(primary: NSViewController, secondary: NSViewController?) {
@@ -55,10 +58,14 @@ final class TerminalSplitViewController: NSViewController, NSSplitViewDelegate {
                 splitView.setPosition((splitView.bounds.width - splitView.dividerThickness) / 2, ofDividerAt: 0)
             }
         } else {
+            splitView.removeArrangedSubview(right.view)
             right.view.removeFromSuperview()
             right.removeFromParent()
             left.show(primary)
+            left.view.frame = splitView.bounds
             splitView.adjustSubviews()
+            splitView.needsLayout = true
+            splitView.needsDisplay = true
         }
     }
 
