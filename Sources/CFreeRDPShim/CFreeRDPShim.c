@@ -346,19 +346,19 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
 
     void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
     if (settings) {
-        set_str_setting(settings, "ServerHostname", config->host);
-        set_u32_setting(settings, "ServerPort", config->port > 0 ? config->port : 3389);
-        set_str_setting(settings, "Username", config->username);
-        set_str_setting(settings, "Password", config->password);
-        set_str_setting(settings, "Domain", config->domain);
-        set_u32_setting(settings, "DesktopWidth", config->width > 0 ? config->width : 1280);
-        set_u32_setting(settings, "DesktopHeight", config->height > 0 ? config->height : 800);
-        set_u32_setting(settings, "ColorDepth", 32);
-        set_bool_setting(settings, "SoftwareGdi", true);
-        set_bool_setting(settings, "IgnoreCertificate", true);
-        set_bool_setting(settings, "NlaSecurity", true);
-        set_bool_setting(settings, "TlsSecurity", true);
-        set_bool_setting(settings, "RdpSecurity", true);
+        set_str_setting(settings, "FreeRDP_ServerHostname", config->host);
+        set_u32_setting(settings, "FreeRDP_ServerPort", config->port > 0 ? config->port : 3389);
+        set_str_setting(settings, "FreeRDP_Username", config->username);
+        set_str_setting(settings, "FreeRDP_Password", config->password);
+        set_str_setting(settings, "FreeRDP_Domain", config->domain);
+        set_u32_setting(settings, "FreeRDP_DesktopWidth", config->width > 0 ? config->width : 1280);
+        set_u32_setting(settings, "FreeRDP_DesktopHeight", config->height > 0 ? config->height : 800);
+        set_u32_setting(settings, "FreeRDP_ColorDepth", 32);
+        set_bool_setting(settings, "FreeRDP_SoftwareGdi", true);
+        set_bool_setting(settings, "FreeRDP_IgnoreCertificate", true);
+        set_bool_setting(settings, "FreeRDP_NlaSecurity", true);
+        set_bool_setting(settings, "FreeRDP_TlsSecurity", true);
+        set_bool_setting(settings, "FreeRDP_RdpSecurity", true);
     }
 
     return session;
