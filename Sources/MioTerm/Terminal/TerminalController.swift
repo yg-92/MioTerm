@@ -8,7 +8,7 @@ import SwiftTerm
 /// 两种通道共用这一个控制器：SSH 与本地铁壳靠 OpenSSH 子进程，Telnet/串口靠
 /// TerminalStream 的字节事件流。二者的区别只在于“谁在另一端”，界面行为一致。
 @MainActor
-final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, TerminalViewDelegate {
+final class TerminalController: NSObject, SessionControlling, LocalProcessTerminalViewDelegate, TerminalViewDelegate {
     enum State: Equatable {
         case idle
         case starting
@@ -36,6 +36,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     let host: HostProfile?
     /// 标签容器只关心视图；子进程专属的操作走 processView。
     let terminalView: TerminalView
+    var sessionView: NSView { terminalView }
     private var processView: LocalProcessTerminalView?
     private var keyboardMonitor: TerminalKeyboardMonitor?
     private var keypadNormalizer: TerminalKeypadNormalizer?

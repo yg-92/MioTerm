@@ -26,7 +26,7 @@ final class WorkspaceViewController: NSSplitViewController {
     /// 重连也要去重：指纹确认期间连点会同时拉起两条 ssh。
     private var reconnectingSessions: Set<UUID> = []
     /// 当前是否停在某个终端上：工具栏据此在“主机动作”和“主页”之间切换。
-    var onPresentationChange: ((TerminalController?) -> Void)?
+    var onPresentationChange: (((any SessionControlling)?) -> Void)?
 
     /// 侧栏折叠态与分栏宽度都要跨启动保留，对齐 webterm 记住面板布局的行为。
     private static let splitAutosaveName = "MioTermWorkspaceSplit"
@@ -109,7 +109,7 @@ final class WorkspaceViewController: NSSplitViewController {
     }
 
     /// 会话增删与选中变化统一走这里，保证左右两侧的状态一次到位。
-    private func apply(selected controller: TerminalController?) {
+    private func apply(selected controller: (any SessionControlling)?) {
         mainArea.show(sessions)
         commands.bind(to: controller)
         if let controller {
@@ -126,10 +126,10 @@ final class WorkspaceViewController: NSSplitViewController {
 
     // MARK: - 侧栏自动收起
 
-    /// 本地 shell、串口、Telnet 没有文件通道，开启时自动收起侧栏把宽度让给终端。
+    /// 本地 shell、串口、Telnet、VNC 没有文件通道，开启时自动收起侧栏把宽度让给内容。
     private var sidebarCollapse = SidebarAutoCollapse()
 
-    private func applySidebarCollapse(for controller: TerminalController?) {
+    private func applySidebarCollapse(for controller: (any SessionControlling)?) {
         guard let panelItem else { return }
         guard let collapsed = sidebarCollapse.selectionChanged(
             sessionID: controller?.sessionID,
@@ -147,11 +147,11 @@ final class WorkspaceViewController: NSSplitViewController {
 
     // MARK: - 标题栏
 
-    private var contextController: TerminalController?
+    private var contextController: (any SessionControlling)?
     private var contextToken: UUID?
 
     /// 只订阅当前标签：其余标签还在输出，不能拿来改标题。
-    private func observeContext(of controller: TerminalController?) {
+    private func observeContext(of controller: (any SessionControlling)?) {
         guard controller !== contextController else {
             updateTitlebar(for: controller)
             return
@@ -167,7 +167,7 @@ final class WorkspaceViewController: NSSplitViewController {
     }
 
     /// 标签页自己已经带了主机名与状态点，标题栏补的是“此刻在哪个目录”。
-    private func updateTitlebar(for controller: TerminalController?) {
+    private func updateTitlebar(for controller: (any SessionControlling)?) {
         guard let window = view.window else { return }
         guard let controller else {
             window.title = "MioTerm"
@@ -308,7 +308,7 @@ final class WorkspaceViewController: NSSplitViewController {
 
     /// 串口控制台的 BREAK：交换机与老设备靠它唤出提示符。
     @objc func sendSerialBreak(_ sender: Any?) {
-        sessions.selectedController?.sendBreak()
+        (sessions.selectedController as? TerminalController)?.sendBreak()
     }
 
     @objc func configureTerminalSplit(_ sender: Any?) {
@@ -325,7 +325,7 @@ final class WorkspaceViewController: NSSplitViewController {
     }
 
     /// 断线后原地重连：标签位置、滚动历史和当前目录都不动，换掉的只有传输通道。
-    private func reconnect(_ controller: TerminalController) {
+    private func reconnect(_ controller: any SessionControlling) {
         guard !controller.state.isAlive else {
             AlertPresenter.notify(
                 title: L10n.tr(.workspaceSessionRunningTitle),
@@ -337,14 +337,14 @@ final class WorkspaceViewController: NSSplitViewController {
         guard !reconnectingSessions.contains(controller.sessionID) else { return }
         // 本地 shell 没有远端可连：同一个视图里重开一个登录 shell 就够。
         guard controller.host != nil else {
-            controller.startLocalShell()
+            (controller as? TerminalController)?.startLocalShell()
             return
         }
         reconnectingSessions.insert(controller.sessionID)
         sessions.setReconnecting(controller, busy: true)
         environment.logger.info("重连 \(controller.title)：开始")
-        Task { @MainActor [weak self, weak controller] in
-            guard let self, let controller else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             defer {
                 self.reconnectingSessions.remove(controller.sessionID)
                 self.sessions.setReconnecting(controller, busy: false)
@@ -356,7 +356,9 @@ final class WorkspaceViewController: NSSplitViewController {
             }
             self.environment.logger.info("重连 \(controller.title)：已连上，换一条新的文件通道")
             // 旧文件通道挂在已经断开的那条 ssh 上，重连成功后换一条新的。
-            self.environment.closeSFTPSession(for: controller)
+            if let terminal = controller as? TerminalController {
+                self.environment.closeSFTPSession(for: terminal)
+            }
             self.sidePanel.bind(to: controller)
         }
     }
@@ -542,7 +544,7 @@ extension WorkspaceViewController: NSMenuItemValidation {
         case #selector(selectTerminalTab(_:)):
             return sessions.controllers.count >= menuItem.tag
         case #selector(sendSerialBreak(_:)):
-            return sessions.selectedController?.supportsBreak == true
+            return (sessions.selectedController as? TerminalController)?.supportsBreak == true
         case #selector(showCommandLibrary(_:)):
             return !sessions.isEmpty
         default:

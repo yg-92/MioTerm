@@ -98,11 +98,11 @@ final class SidePanelViewController: NSViewController {
     }
 
     /// 当前标签是否是能用文件面板的 SSH 会话。
-    static func supportsFiles(_ controller: TerminalController?) -> Bool {
+    static func supportsFiles(_ controller: (any SessionControlling)?) -> Bool {
         controller?.host?.supportsSFTP == true
     }
 
-    func bind(to controller: TerminalController?) {
+    func bind(to controller: (any SessionControlling)?) {
         let canBrowse = Self.supportsFiles(controller)
         filesAvailable = canBrowse
         modeSwitcher.setEnabled(canBrowse, at: Mode.files.rawValue)
@@ -113,11 +113,11 @@ final class SidePanelViewController: NSViewController {
             if mode == .files { select(.hosts) }
             return
         }
-        guard let controller else { return }
-        files.bind(to: controller)
+        guard let terminal = controller as? TerminalController else { return }
+        files.bind(to: terminal)
         // 只在换会话时自动跳到文件视图，手动点回主机不该被抢回去。
-        if autoSwitchedFor != controller.sessionID {
-            autoSwitchedFor = controller.sessionID
+        if autoSwitchedFor != terminal.sessionID {
+            autoSwitchedFor = terminal.sessionID
             select(.files)
         }
     }

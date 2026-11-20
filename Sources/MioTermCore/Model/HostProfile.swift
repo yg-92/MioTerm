@@ -4,12 +4,14 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Sendable {
     case ssh
     case telnet
     case serial
+    case vnc
 
     public var displayName: String {
         switch self {
         case .ssh: return L10n.tr(.protocolSSH)
         case .telnet: return L10n.tr(.protocolTelnet)
         case .serial: return L10n.tr(.protocolSerial)
+        case .vnc: return L10n.tr(.protocolVNC)
         }
     }
 
@@ -23,6 +25,7 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Sendable {
         case .ssh: return 22
         case .telnet: return 23
         case .serial: return nil
+        case .vnc: return 5900
         }
     }
 }
@@ -285,8 +288,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     /// 侧栏展示用的 “地址:端口”、串口设备与速率。
     public var subtitle: String {
         switch protocolKind {
-        case .ssh: return "\(address):\(port)"
-        case .telnet: return "\(address):\(port)"
+        case .ssh, .telnet, .vnc: return "\(address):\(port)"
         case .serial: return serial.device.isEmpty ? L10n.tr(.hostSerialNotSelected) : "\(serial.device) · \(serial.baudRate) baud"
         }
     }
@@ -313,6 +315,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         // Telnet/串口没有 ssh 可以转发，档位留着只会让人以为窗口会出来。
         if copy.protocolKind != .ssh { copy.x11Forwarding = .off }
         if copy.port == 22, copy.protocolKind == .telnet { copy.port = 23 }
+        if copy.port == 22, copy.protocolKind == .vnc { copy.port = 5900 }
         if copy.port <= 0 || copy.port > 65535 { copy.port = copy.protocolKind.defaultPort ?? 22 }
         copy.connectTimeout = max(1, min(300, copy.connectTimeout))
         copy.keepaliveInterval = max(0, min(600, copy.keepaliveInterval))
@@ -345,7 +348,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     public func validate() throws {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.nameRequired }
         switch protocolKind {
-        case .ssh, .telnet:
+        case .ssh, .telnet, .vnc:
             if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.addressRequired }
         case .serial:
             if serial.device.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.serialDeviceRequired }

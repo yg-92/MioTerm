@@ -316,13 +316,15 @@ final class HostFormWindowController: NSWindowController {
     }
 
     private func secretExists(_ host: HostProfile) -> Bool {
-        guard let kind = credentialKind(for: host.authMethod) else { return false }
+        guard let kind = credentialKind(for: host) else { return false }
         return environment.vault.hasSecret(hostID: host.id, kind: kind)
     }
 
     /// 自动模式交给 ssh 自己处理，没有需要托管的口令字段。
-    private func credentialKind(for method: AuthMethod) -> KeychainVault.CredentialKind? {
-        switch method {
+    private func credentialKind(for host: HostProfile) -> KeychainVault.CredentialKind? {
+        if host.protocolKind == .vnc { return .password }
+        guard host.protocolKind == .ssh else { return nil }
+        switch host.authMethod {
         case .automatic: return nil
         case .password: return .password
         case .privateKey: return .passphrase
@@ -332,9 +334,11 @@ final class HostFormWindowController: NSWindowController {
     @objc private func authChanged(_ sender: NSPopUpButton) { updateRowVisibility() }
 
     @objc private func protocolChanged(_ sender: NSPopUpButton) {
-        // 端口默认值跟着协议走：留着 22 去连 Telnet 一定失败，用户不必自己想到。
+        // 端口默认值跟着协议走：留着 22 去连 Telnet/VNC 一定失败，用户不必自己想到。
         let entered = Int(portField.stringValue) ?? 0
-        if entered == 22 || entered == 23 { portField.stringValue = selectedProtocol.defaultPort.map(String.init) ?? "" }
+        if entered == 0 || entered == 22 || entered == 23 || entered == 5900 {
+            portField.stringValue = selectedProtocol.defaultPort.map(String.init) ?? ""
+        }
         updateRowVisibility()
     }
 
@@ -346,15 +350,14 @@ final class HostFormWindowController: NSWindowController {
     // 行按视图查，不按索引：串口面板插进主表单后，硬编码的行号一错就是整片。
     private func updateRowVisibility() {
         let isSerial = selectedProtocol == .serial
-        // Telnet 的登录发生在会话里（设备提示 login:），既没有可托管的凭据，
-        // 也没有保活、启动目录和宿主指纹这些概念。
         let isSSH = selectedProtocol == .ssh
+        let isVNC = selectedProtocol == .vnc
 
         setRowHidden(serialPanel, hidden: !isSerial)
         setRowHidden(addressField, hidden: isSerial)
         setRowHidden(portField, hidden: isSerial)
         setRowHidden(timeoutField, hidden: isSerial)
-        setRowHidden(terminalTypeField, hidden: isSerial)
+        setRowHidden(terminalTypeField, hidden: isSerial || isVNC)
         setRowHidden(usernameField, hidden: !isSSH)
         setRowHidden(authPopup, hidden: !isSSH)
         setRowHidden(keepaliveField, hidden: !isSSH)
@@ -365,13 +368,13 @@ final class HostFormWindowController: NSWindowController {
 
         let method = selectedMethod
         setRowHidden(identityStack, hidden: !isSSH || method == .password)
-        let showsSecret = isSSH && method != .automatic
+        let showsSecret = (isSSH && method != .automatic) || isVNC
         setRowHidden(secretField, hidden: !showsSecret)
         setRowHidden(clearSecretCheckbox, hidden: !showsSecret)
         clearSecretCheckbox.isEnabled = showsSecret
-        if method == .automatic { clearSecretCheckbox.state = .off }
+        if !showsSecret { clearSecretCheckbox.state = .off }
         secretField.isEnabled = clearSecretCheckbox.state != .on
-        portField.placeholderString = isSSH ? "22" : "23"
+        portField.placeholderString = selectedProtocol.defaultPort.map(String.init) ?? "22"
     }
 
     private func setRowHidden(_ view: NSView, hidden: Bool) {
@@ -441,7 +444,7 @@ final class HostFormWindowController: NSWindowController {
     /// 口令写入 Keychain 的时机在配置落盘之后：新建主机的 ID 是那时才定型的，
     /// 先写会留下无人认领的条目。
     private func storeSecrets(for host: HostProfile) throws {
-        guard let kind = credentialKind(for: host.authMethod) else { return }
+        guard let kind = credentialKind(for: host) else { return }
         if clearSecretCheckbox.state == .on {
             try environment.vault.setSecret(nil, hostID: host.id, kind: kind)
             return

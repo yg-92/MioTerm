@@ -11,9 +11,9 @@ final class SessionTabViewController: NSViewController {
 
     /// 外层要同时知道“选中了哪个会话”和“还剩几个标签”：
     /// 侧栏模式、标题栏与工具栏都靠这一个回调。
-    var onSessionsChange: ((TerminalController?) -> Void)?
+    var onSessionsChange: (((any SessionControlling)?) -> Void)?
     /// 断线后的“重新连接”：工作区负责重建传输，标签这边只负责把入口露出来。
-    var onReconnect: ((TerminalController) -> Void)?
+    var onReconnect: ((any SessionControlling) -> Void)?
     /// 新建远端连接仍由工作区处理认证；保留用户发起分屏时的基准会话。
     var onSplitHost: ((HostProfile, UUID) -> Void)?
     private let tabBar = SessionTabBarView()
@@ -23,7 +23,7 @@ final class SessionTabViewController: NSViewController {
     private let splitDropOverlay = SplitDropOverlayView()
     private var paneLayout = TerminalPaneLayout()
     private let welcome = WelcomeViewController()
-    private var order: [TerminalController] = []
+    private var order: [any SessionControlling] = []
     private var tabControllers: [UUID: TerminalTabViewController] = [:]
     private var modeTokens: [UUID: UUID] = [:]
     private var stateTokens: [UUID: UUID] = [:]
@@ -36,12 +36,12 @@ final class SessionTabViewController: NSViewController {
     private var contentTopToBar: NSLayoutConstraint!
     private var contentTopToRoot: NSLayoutConstraint!
 
-    var selectedController: TerminalController? {
+    var selectedController: (any SessionControlling)? {
         guard let selectedIndex, order.indices.contains(selectedIndex) else { return nil }
         return order[selectedIndex]
     }
 
-    var controllers: [TerminalController] { order }
+    var controllers: [any SessionControlling] { order }
     var isEmpty: Bool { order.isEmpty }
     var isShowingHome: Bool { selectedIndex == nil }
 
@@ -125,12 +125,12 @@ final class SessionTabViewController: NSViewController {
         }
     }
 
-    private func controller(id: UUID) -> TerminalController? {
+    private func controller(id: UUID) -> (any SessionControlling)? {
         order.first { $0.sessionID == id }
     }
 
     /// 落点所在屏的会话：未分屏时整块画面就是当前会话。
-    private func splitDropBase(side: TerminalTabDropSide) -> TerminalController? {
+    private func splitDropBase(side: TerminalTabDropSide) -> (any SessionControlling)? {
         switch side {
         case .single: return selectedController
         case .left: return paneLayout.primary.flatMap(controller(id:))
@@ -165,7 +165,7 @@ final class SessionTabViewController: NSViewController {
         splitDropOverlay.show(hint: hint)
     }
 
-    func append(_ controller: TerminalController, beside baseID: UUID? = nil) {
+    func append(_ controller: any SessionControlling, beside baseID: UUID? = nil) {
         order.append(controller)
         controller.onFocus = { [weak self, weak controller] in
             guard let self, let controller, !self.isShowingHome,
@@ -204,7 +204,7 @@ final class SessionTabViewController: NSViewController {
     }
 
     /// 重连进行中要在提示条上给出反馈：这条路上要重新确认指纹、读凭据，慢的时候好几秒。
-    func setReconnecting(_ controller: TerminalController, busy: Bool) {
+    func setReconnecting(_ controller: any SessionControlling, busy: Bool) {
         tabControllers[controller.sessionID]?.setReconnecting(busy)
     }
 
@@ -219,7 +219,7 @@ final class SessionTabViewController: NSViewController {
         guard order.indices.contains(index) else { return false }
         let wasShowingHome = isShowingHome
         let controller = order[index]
-        if view.window?.firstResponder === controller.terminalView {
+        if view.window?.firstResponder === controller.sessionView {
             view.window?.makeFirstResponder(nil)
         }
         controller.stop()
@@ -289,7 +289,7 @@ final class SessionTabViewController: NSViewController {
         select(nil)
     }
 
-    func select(controller: TerminalController) {
+    func select(controller: any SessionControlling) {
         guard let index = order.firstIndex(where: { $0 === controller }) else { return }
         select(index)
     }
@@ -324,7 +324,7 @@ final class SessionTabViewController: NSViewController {
     }
 
     /// 用户明确选择两个已存在的会话，保留连接、滚动历史与原有标签。
-    func split(with other: TerminalController, beside baseID: UUID) {
+    func split(with other: any SessionControlling, beside baseID: UUID) {
         guard other.sessionID != baseID,
               order.contains(where: { $0.sessionID == baseID }),
               order.contains(where: { $0 === other }) else { return }
@@ -354,7 +354,7 @@ final class SessionTabViewController: NSViewController {
     }
 
     /// 菜单按会话 ID 绑定动作，显示相同名称的连接也能通过序号和地址区分。
-    func splitMenu(beside base: TerminalController) -> NSMenu {
+    func splitMenu(beside base: any SessionControlling) -> NSMenu {
         let menu = NSMenu(title: L10n.tr(.tabSplitTip))
         menu.autoenablesItems = false
         let caption = NSMenuItem(title: L10n.tr(.tabSplitMenuCaption, base.title), action: nil, keyEquivalent: "")
@@ -468,7 +468,7 @@ final class SessionTabViewController: NSViewController {
     /// 收起终端时把第一响应者摘掉，否则键盘事件还会往已经离开层级的视图里送。
     private func clearTerminalFocus() {
         guard let responder = view.window?.firstResponder as? NSView,
-              tabControllers.values.contains(where: { $0.controller.terminalView === responder })
+              tabControllers.values.contains(where: { $0.controller.sessionView === responder })
         else { return }
         view.window?.makeFirstResponder(nil)
     }
@@ -1184,8 +1184,8 @@ private final class SplitDropOverlayView: NSView {
 /// 断线后终端顶部浮出一条“重新连接”，入口跟着会话走，不用去菜单里找。
 @MainActor
 final class TerminalTabViewController: NSViewController {
-    let controller: TerminalController
-    var onReconnect: ((TerminalController) -> Void)?
+    let controller: any SessionControlling
+    var onReconnect: ((any SessionControlling) -> Void)?
 
     private let banner = ReconnectBannerView()
     private let paneHeader = TerminalPaneHeaderView()
@@ -1194,7 +1194,7 @@ final class TerminalTabViewController: NSViewController {
     private var headerHeight: NSLayoutConstraint!
     private var terminalInsets: [NSLayoutConstraint] = []
 
-    init(controller: TerminalController) {
+    init(controller: any SessionControlling) {
         self.controller = controller
         super.init(nibName: nil, bundle: nil)
     }
@@ -1206,17 +1206,17 @@ final class TerminalTabViewController: NSViewController {
         container.wantsLayer = true
         container.layer?.backgroundColor = Theme.layerColor(Theme.terminalBackground, for: container)
         container.onAppearanceChange = { [weak self] in self?.refreshAppearance() }
-        controller.terminalView.translatesAutoresizingMaskIntoConstraints = false
+        controller.sessionView.translatesAutoresizingMaskIntoConstraints = false
         paneHeader.translatesAutoresizingMaskIntoConstraints = false
         paneHeader.onActivate = { [weak self] in self?.controller.focus() }
-        container.addSubview(controller.terminalView)
+        container.addSubview(controller.sessionView)
         container.addSubview(paneHeader)
         headerHeight = paneHeader.heightAnchor.constraint(equalToConstant: 0)
         terminalInsets = [
-            controller.terminalView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            container.trailingAnchor.constraint(equalTo: controller.terminalView.trailingAnchor),
-            controller.terminalView.topAnchor.constraint(equalTo: paneHeader.bottomAnchor),
-            container.bottomAnchor.constraint(equalTo: controller.terminalView.bottomAnchor),
+            controller.sessionView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: controller.sessionView.trailingAnchor),
+            controller.sessionView.topAnchor.constraint(equalTo: paneHeader.bottomAnchor),
+            container.bottomAnchor.constraint(equalTo: controller.sessionView.bottomAnchor),
         ]
         NSLayoutConstraint.activate(terminalInsets + [
             paneHeader.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -1236,7 +1236,7 @@ final class TerminalTabViewController: NSViewController {
         let preferredWidth = banner.widthAnchor.constraint(equalToConstant: 360)
         preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            banner.topAnchor.constraint(equalTo: controller.terminalView.topAnchor, constant: 10),
+            banner.topAnchor.constraint(equalTo: controller.sessionView.topAnchor, constant: 10),
             banner.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             preferredWidth,
             banner.heightAnchor.constraint(equalToConstant: 38),
@@ -1744,7 +1744,7 @@ final class TerminalStatusBarView: NSView {
         modeTrailingToEdge.isActive = !hasVersion
     }
 
-    func update(_ controller: TerminalController?) {
+    func update(_ controller: (any SessionControlling)?) {
         let hasSession = controller != nil
         for view in [dot, stateLabel, identityLabel, pathIcon, pathLabel] {
             view.isHidden = !hasSession

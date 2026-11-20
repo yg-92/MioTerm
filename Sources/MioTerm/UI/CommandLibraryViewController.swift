@@ -164,9 +164,10 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
     }
 
     /// 跟随当前标签。bind 可能早于视图加载，所以先把会话记下来。
-    func bind(to controller: TerminalController?) {
-        let switched = session !== controller
-        session = controller
+    func bind(to controller: (any SessionControlling)?) {
+        let terminal = controller as? TerminalController
+        let switched = session !== terminal
+        session = terminal
         guard isViewLoaded else { return }
         // 换标签时清掉搜索：否则新主机的列表看起来像空的。
         if switched, !query.isEmpty {

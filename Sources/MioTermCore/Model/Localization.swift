@@ -286,6 +286,16 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case protocolSSH
     case protocolTelnet
     case protocolSerial
+    case protocolVNC
+    case vncHandshakeFailed
+    case vncUnsupportedAuth
+    case vncPasswordRequired
+    case vncAuthFailed
+    case vncAuthInvalid
+    case vncProtocolError
+    case vncDesktopTitle
+    case vncSendCtrlAltDel
+    case vncSendClipboard
     case authAutomatic
     case authPassword
     case authPrivateKey

@@ -14,30 +14,38 @@ final class ConnectionCoordinator {
         self.environment = environment ?? .shared
     }
 
-    /// 先同步建立控制器与终端视图，调用方可立即切到新终端页面，再异步完成密钥探测与建连。
-    func prepareController(for rawHost: HostProfile) -> TerminalController {
+    /// 先同步建立控制器与会话视图，调用方可立即切到新页面，再异步完成密钥探测与建连。
+    func prepareController(for rawHost: HostProfile) -> any SessionControlling {
         let host = resolved(environment.hosts.host(id: rawHost.id) ?? rawHost)
-        let controller = TerminalController(host: host, settings: environment.settings.settings)
+        let controller: any SessionControlling = host.protocolKind == .vnc
+            ? VNCController(host: host)
+            : TerminalController(host: host, settings: environment.settings.settings)
         observe(controller, host: host)
         environment.register(controller)
         return controller
     }
 
-    /// 启动已经挂入标签栏的终端会话；失败时直接在该新页面报错，不回退或弹窗阻断跳转。
-    func start(_ controller: TerminalController, in window: NSWindow?) async {
+    /// 启动已经挂入标签栏的会话；失败时直接在该新页面报错，不回退或弹窗阻断跳转。
+    func start(_ controller: any SessionControlling, in window: NSWindow?) async {
         guard let stored = controller.host else { return }
         let host = resolved(environment.hosts.host(id: stored.id) ?? stored)
+        if let vnc = controller as? VNCController {
+            let password = environment.secrets(for: host)?.password
+            vnc.start(password: password)
+            return
+        }
+        guard let terminal = controller as? TerminalController else { return }
         guard host.protocolKind.usesHostKey else {
             guard let stream = makeStream(for: host) else {
-                controller.failStart(reason: L10n.tr(.connectInternalSSH))
+                terminal.failStart(reason: L10n.tr(.connectInternalSSH))
                 return
             }
-            controller.start(stream)
+            terminal.start(stream)
             return
         }
         do {
             guard try await ensureHostKeyTrusted(host: host, in: window) else {
-                controller.failStart(reason: L10n.tr(.connectCancelConnection))
+                terminal.failStart(reason: L10n.tr(.connectCancelConnection))
                 return
             }
             let context = SSHLaunchPlanner.Context.live()
@@ -47,9 +55,9 @@ final class ConnectionCoordinator {
                 context: context
             )
             logX11Preflight(host, context: context)
-            controller.start(launch)
+            terminal.start(launch)
         } catch {
-            controller.failStart(reason: error.localizedDescription)
+            terminal.failStart(reason: error.localizedDescription)
         }
     }
 
@@ -111,23 +119,28 @@ final class ConnectionCoordinator {
 
     private func makeStream(for host: HostProfile) -> (any TerminalStream)? {
         switch host.protocolKind {
-        case .telnet:
+        case .telnet, .vnc:
             return TelnetStream(host: host.address,
                                 port: host.port,
                                 terminalType: host.terminalType,
                                 connectTimeout: TimeInterval(max(1, host.connectTimeout)))
         case .serial:
             return SerialStream(configuration: host.serial)
-        case .ssh:
+        case .ssh, .vnc:
             return nil
         }
     }
 
-    /// 掉线后原地重连：标签、终端视图和已有输出都保留，只重建传输通道。
+    /// 掉线后原地重连：标签、视图和已有输出都保留，只重建传输通道。
     /// 主机密钥与凭据按当前配置重新取，主机在列表里被改过也能生效。
-    func reconnect(_ controller: TerminalController, in window: NSWindow?) async {
+    func reconnect(_ controller: any SessionControlling, in window: NSWindow?) async {
         guard !controller.state.isAlive, let stored = controller.host else { return }
         let host = resolved(environment.hosts.host(id: stored.id) ?? stored)
+        if let vnc = controller as? VNCController {
+            vnc.start(password: environment.secrets(for: host)?.password)
+            return
+        }
+        guard let terminal = controller as? TerminalController else { return }
         do {
             if host.protocolKind.usesHostKey {
                 // 重连同样走一遍指纹确认：服务器换过密钥时要在这里拦住。
@@ -139,9 +152,9 @@ final class ConnectionCoordinator {
                     context: context
                 )
                 logX11Preflight(host, context: context)
-                controller.start(launch)
+                terminal.start(launch)
             } else if let stream = makeStream(for: host) {
-                controller.start(stream)
+                terminal.start(stream)
             }
         } catch {
             AlertPresenter.fail(title: L10n.tr(.connectReconnectFailed, host.displayName),
@@ -151,10 +164,7 @@ final class ConnectionCoordinator {
     }
 
     /// 会话状态统一登记。
-    ///
-    /// 失败原因已经用红字画在终端里、也浮在断线提示条上，这里不再叠一个模态窗；
-    /// 补的是日志——重连不成时要能从日志看出会话停在哪一步。
-    private func observe(_ controller: TerminalController, host: HostProfile) {
+    private func observe(_ controller: any SessionControlling, host: HostProfile) {
         let logger = environment.logger
         _ = controller.addStateObserver { state in
             logger.info("会话 \(host.displayName) 状态：\(state.label)")
@@ -215,7 +225,7 @@ final class ConnectionCoordinator {
                                         in: window)
                 }
             }
-        case .telnet:
+        case .telnet, .vnc:
             let address = host.address
             let port = host.port
             let timeout = TimeInterval(max(1, host.connectTimeout))

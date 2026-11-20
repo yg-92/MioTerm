@@ -16,7 +16,7 @@ final class AppEnvironment {
     let commands: CommandLibraryStore
 
     /// 会话集中登记，退出应用时才能统一销毁 askpass 临时文件并回收子进程。
-    private(set) var sessions: [UUID: TerminalController] = [:]
+    private(set) var sessions: [UUID: any SessionControlling] = [:]
     /// 文件通道按终端会话一对一持有：切标签不重连，关标签才收进程。
     private(set) var sftpSessions: [UUID: SFTPSession] = [:]
 
@@ -53,18 +53,21 @@ final class AppEnvironment {
         }
     }
 
-    func register(_ controller: TerminalController) {
+    func register(_ controller: any SessionControlling) {
         sessions[controller.sessionID] = controller
+        guard let terminal = controller as? TerminalController else { return }
         // 命令库挂在会话上：只有回车提交的那一行才入库，逐字节不进这里。
-        controller.onCommand = { [weak self, weak controller] line in
-            guard let self, let controller else { return }
-            self.commands.record(scope: controller.commandScope, command: line)
+        terminal.onCommand = { [weak self, weak terminal] line in
+            guard let self, let terminal else { return }
+            self.commands.record(scope: terminal.commandScope, command: line)
         }
     }
 
-    func unregister(_ controller: TerminalController) {
+    func unregister(_ controller: any SessionControlling) {
         sessions.removeValue(forKey: controller.sessionID)
-        closeSFTPSession(for: controller)
+        if let terminal = controller as? TerminalController {
+            closeSFTPSession(for: terminal)
+        }
     }
 
     /// 懒建文件通道；非 SSH 主机返回 nil，文件面板据此显示占位文案。
@@ -105,6 +108,10 @@ final class AppEnvironment {
     func secrets(for host: HostProfile) -> TerminalSecrets? {
         var secrets = TerminalSecrets()
         do {
+            if host.protocolKind == .vnc {
+                secrets.password = try vault.secret(hostID: host.id, kind: .password)
+                return secrets.hasContent ? secrets : nil
+            }
             switch host.authMethod {
             case .password:
                 secrets.password = try vault.secret(hostID: host.id, kind: .password)

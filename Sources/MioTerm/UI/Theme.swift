@@ -124,6 +124,7 @@ enum Theme {
         case .ssh: return "terminal"
         case .telnet: return "network"
         case .serial: return "cable.connector"
+        case .vnc: return "display"
         }
     }
 
@@ -132,6 +133,7 @@ enum Theme {
         case .ssh: return accent
         case .telnet: return teal
         case .serial: return orange
+        case .vnc: return .systemIndigo
         }
     }
 
