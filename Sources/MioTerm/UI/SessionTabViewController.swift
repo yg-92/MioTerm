@@ -1112,6 +1112,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let closable: Bool
+    private let compact: Bool
     private let symbol: String?
     private let symbolColor: NSColor
     private var selected = false
@@ -1120,6 +1121,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
 
     init(title: String, symbol: String?, symbolColor: NSColor, closable: Bool, fixedWidth: CGFloat?, compact: Bool = false) {
         self.closable = closable
+        self.compact = compact
         self.symbol = symbol
         self.symbolColor = symbolColor
         super.init(frame: .zero)
@@ -1215,9 +1217,21 @@ final class SessionTabChip: NSView, NSDraggingSource {
     }
 
     private func updateAppearance() {
+        let idleBackground: CGColor = compact
+            ? NSColor.clear.cgColor
+            : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.55), for: self)
         layer?.backgroundColor = selected
             ? Theme.layerColor(Theme.selectedTab, for: self)
-            : (hovering ? Theme.layerColor(Theme.hoverFill, for: self) : NSColor.clear.cgColor)
+            : (hovering ? Theme.layerColor(Theme.hoverFill, for: self) : idleBackground)
+        if compact {
+            layer?.borderWidth = 0
+            layer?.borderColor = nil
+        } else {
+            layer?.borderWidth = 1
+            layer?.borderColor = selected
+                ? Theme.layerColor(Theme.borderStrong, for: self)
+                : Theme.layerColor(Theme.border, for: self)
+        }
         titleLabel.textColor = selected ? Theme.textPrimary : Theme.textSecondary
         closeButton.isHidden = !closable || !(selected || hovering)
         closeButton.contentTintColor = hovering ? Theme.textPrimary : Theme.textTertiary
