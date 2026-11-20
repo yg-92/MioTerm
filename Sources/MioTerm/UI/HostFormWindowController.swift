@@ -92,6 +92,12 @@ final class HostFormWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
 
+    func show(relativeTo anchorWindow: NSWindow?) {
+        window?.positionCentered(relativeTo: anchorWindow)
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
     private func buildContents() {
         guard let window else { return }
 

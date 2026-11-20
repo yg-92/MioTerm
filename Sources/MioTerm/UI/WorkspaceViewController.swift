@@ -414,8 +414,7 @@ final class WorkspaceViewController: NSSplitViewController {
     private func presentHostForm(_ host: HostProfile) {
         let controller = HostFormWindowController(host: host, environment: environment)
         hostForm = controller
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
+        controller.show(relativeTo: view.window)
         NSApp.activate(ignoringOtherApps: true)
     }
 

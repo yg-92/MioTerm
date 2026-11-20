@@ -8,18 +8,47 @@ struct TerminalPaneLayoutTests {
     private let right = UUID()
     private let third = UUID()
 
-    @Test func switchingTabsReplacesOnlyTheActivePane() {
+    @Test func selectingOutsideTabDoesNotMixIntoSplitGroupAndRestoresGroupOnReturn() {
         var layout = TerminalPaneLayout()
         layout.select(left)
         layout.split(with: right)
         layout.select(third)
-        #expect(layout.primary == left)
-        #expect(layout.secondary == third)
+        #expect(layout.primary == third)
+        #expect(layout.secondary == nil)
         #expect(layout.selected == third)
+        #expect(!layout.isSplit)
+
         layout.select(left)
+        #expect(layout.primary == left)
+        #expect(layout.secondary == right)
+        #expect(layout.selected == left)
+        #expect(layout.isSplit)
+
         layout.select(right)
-        #expect(layout.primary == right)
-        #expect(layout.secondary == third)
+        #expect(layout.primary == left)
+        #expect(layout.secondary == right)
+        #expect(layout.selected == right)
+        #expect(layout.groupID(for: left) != nil)
+        #expect(layout.groupID(for: left) == layout.groupID(for: right))
+        #expect(layout.groupID(for: third) == nil)
+    }
+
+    @Test func supportsIndependentSplitGroupsWithoutMixing() {
+        let fourth = UUID()
+        var layout = TerminalPaneLayout()
+        layout.pair(left, with: right)
+        layout.pair(third, with: fourth)
+        #expect(layout.groupID(for: left) != nil)
+        #expect(layout.groupID(for: third) != nil)
+        #expect(layout.groupID(for: left) != layout.groupID(for: third))
+
+        layout.select(left)
+        #expect(layout.primary == left)
+        #expect(layout.secondary == right)
+
+        layout.select(third)
+        #expect(layout.primary == third)
+        #expect(layout.secondary == fourth)
     }
 
     @Test func selectingTheOtherVisiblePaneDoesNotSwapThem() {

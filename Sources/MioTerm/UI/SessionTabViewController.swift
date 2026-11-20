@@ -149,6 +149,9 @@ final class SessionTabViewController: NSViewController {
         guard let dragged = controller(id: id), let base = splitDropBase(side: side),
               dragged !== base else { return false }
         paneLayout.drop(dragged.sessionID, onto: base.sessionID, baseOnLeft: side != .right)
+        if let primaryID = paneLayout.primary, let secondaryID = paneLayout.secondary {
+            arrangeSplitPairAdjacent(primary: primaryID, secondary: secondaryID)
+        }
         presentSelection()
         return true
     }
@@ -197,6 +200,7 @@ final class SessionTabViewController: NSViewController {
         }
         if let baseID, order.contains(where: { $0.sessionID == baseID && $0 !== controller }) {
             paneLayout.pair(baseID, with: controller.sessionID)
+            arrangeSplitPairAdjacent(primary: baseID, secondary: controller.sessionID)
             presentSelection()
         } else {
             select(order.count - 1)
@@ -259,13 +263,34 @@ final class SessionTabViewController: NSViewController {
         select(nil)
     }
 
-    /// 按稳定 ID 换序，选择与分屏仍按原会话保留，不重新挂载终端视图。
+    /// 按稳定 ID 换序；若会话属于分屏组则整组一起移动，保持组内两标签相邻。
     func moveSession(id: UUID, to destination: Int) {
         guard let source = order.firstIndex(where: { $0.sessionID == id }),
               order.indices.contains(destination), source != destination else { return }
-        let controller = order.remove(at: source)
-        order.insert(controller, at: destination)
+        if let group = paneLayout.group(containing: id),
+           let firstIdx = order.firstIndex(where: { $0.sessionID == group.primary }),
+           let secondIdx = order.firstIndex(where: { $0.sessionID == group.secondary }),
+           abs(firstIdx - secondIdx) == 1 {
+            let groupStart = min(firstIdx, secondIdx)
+            if destination == firstIdx || destination == secondIdx { return }
+            let pair = [order[groupStart], order[groupStart + 1]]
+            order.removeSubrange(groupStart...(groupStart + 1))
+            let adjusted = destination > groupStart ? max(0, destination - 1) : destination
+            order.insert(contentsOf: pair, at: min(adjusted, order.count))
+        } else {
+            let controller = order.remove(at: source)
+            order.insert(controller, at: destination)
+        }
         updateChrome()
+    }
+
+    private func arrangeSplitPairAdjacent(primary: UUID, secondary: UUID) {
+        guard let primaryIndex = order.firstIndex(where: { $0.sessionID == primary }),
+              let secondaryIndex = order.firstIndex(where: { $0.sessionID == secondary }),
+              primaryIndex + 1 != secondaryIndex else { return }
+        let moved = order.remove(at: secondaryIndex)
+        let targetIndex = secondaryIndex < primaryIndex ? primaryIndex : primaryIndex + 1
+        order.insert(moved, at: targetIndex)
     }
 
     func selectNextTab() {
@@ -329,6 +354,7 @@ final class SessionTabViewController: NSViewController {
               order.contains(where: { $0.sessionID == baseID }),
               order.contains(where: { $0 === other }) else { return }
         paneLayout.pair(baseID, with: other.sessionID)
+        arrangeSplitPairAdjacent(primary: baseID, secondary: other.sessionID)
         presentSelection()
     }
 
@@ -483,7 +509,8 @@ final class SessionTabViewController: NSViewController {
                 id: controller.sessionID,
                 title: controller.state.isAlive ? controller.title : "\(controller.title) — \(controller.state.label)",
                 state: controller.state,
-                tooltip: controller.tooltip
+                tooltip: controller.tooltip,
+                splitGroupID: paneLayout.groupID(for: controller.sessionID)
             )
         }
         tabBar.update(tabs: entries, selected: selectedIndex)
@@ -549,6 +576,7 @@ final class SessionTabBarView: NSView {
         let title: String
         let state: TerminalController.State
         let tooltip: String
+        let splitGroupID: UUID?
     }
 
     static let height: CGFloat = 44
@@ -577,6 +605,7 @@ final class SessionTabBarView: NSView {
         closable: false, fixedWidth: 84
     )
     private var chips: [SessionTabChip] = []
+    private var groupViews: [(view: SessionTabGroupView, indices: ClosedRange<Int>)] = []
     private var tabIDs: [UUID] = []
     private var renderedTabs: [Tab] = []
     private var renderedSelection: Int?
@@ -779,6 +808,9 @@ final class SessionTabBarView: NSView {
     func update(tabs: [Tab], selected: Int?) {
         if tabs == renderedTabs {
             for (index, chip) in chips.enumerated() { chip.setSelected(index == selected) }
+            for entry in groupViews {
+                entry.view.setActive(selected.map { entry.indices.contains($0) } ?? false)
+            }
             homeChip.setSelected(selected == nil)
             if renderedSelection != selected, let selected, chips.indices.contains(selected) {
                 chips[selected].scrollToVisible(chips[selected].bounds)
@@ -789,30 +821,28 @@ final class SessionTabBarView: NSView {
         renderedTabs = tabs
         renderedSelection = selected
         tabIDs = tabs.map(\.id)
-        for chip in chips {
-            stack.removeArrangedSubview(chip)
-            chip.removeFromSuperview()
+        for arranged in stack.arrangedSubviews {
+            stack.removeArrangedSubview(arranged)
+            arranged.removeFromSuperview()
         }
+        groupViews.removeAll()
         chips = tabs.enumerated().map { index, tab in
-            let chip = SessionTabChip(
-                title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
-                closable: true, fixedWidth: nil
-            )
-            chip.toolTip = L10n.tr(.tabChipTooltip, tab.tooltip)
-            chip.dragOwner = dragOwner
-            chip.onDrag = { [weak self, weak chip] event in
-                guard let self, let chip else { return }
-                self.beginDrag(id: tab.id, chip: chip, event: event)
+            makeChip(for: tab, at: index, selected: index == selected)
+        }
+        var index = 0
+        while index < tabs.count {
+            if let groupID = tabs[index].splitGroupID,
+               index + 1 < tabs.count,
+               tabs[index + 1].splitGroupID == groupID {
+                let group = SessionTabGroupView(left: chips[index], right: chips[index + 1])
+                group.setActive(selected == index || selected == index + 1)
+                groupViews.append((group, index...(index + 1)))
+                stack.addArrangedSubview(group)
+                index += 2
+            } else {
+                stack.addArrangedSubview(chips[index])
+                index += 1
             }
-            chip.onSelect = { [weak self] in self?.onSelect?(index) }
-            chip.onClose = { [weak self] in self?.onClose?(index) }
-            chip.onContextMenu = { [weak self, weak chip] event in
-                guard let chip else { return }
-                self?.onTabContextMenu?(index, event, chip)
-            }
-            chip.setSelected(index == selected)
-            stack.addArrangedSubview(chip)
-            return chip
         }
         homeChip.setSelected(selected == nil)
 
@@ -824,6 +854,27 @@ final class SessionTabBarView: NSView {
             }
             self.updateScrollButtons()
         }
+    }
+
+    private func makeChip(for tab: Tab, at index: Int, selected: Bool) -> SessionTabChip {
+        let chip = SessionTabChip(
+            title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
+            closable: true, fixedWidth: nil
+        )
+        chip.toolTip = L10n.tr(.tabChipTooltip, tab.tooltip)
+        chip.dragOwner = dragOwner
+        chip.onDrag = { [weak self, weak chip] event in
+            guard let self, let chip else { return }
+            self.beginDrag(id: tab.id, chip: chip, event: event)
+        }
+        chip.onSelect = { [weak self] in self?.onSelect?(index) }
+        chip.onClose = { [weak self] in self?.onClose?(index) }
+        chip.onContextMenu = { [weak self, weak chip] event in
+            guard let chip else { return }
+            self?.onTabContextMenu?(index, event, chip)
+        }
+        chip.setSelected(selected)
+        return chip
     }
 
     private func beginDrag(id: UUID, chip: SessionTabChip, event: NSEvent) {
@@ -844,7 +895,7 @@ final class SessionTabBarView: NSView {
               let raw = sender.draggingPasteboard.string(forType: Self.dragType), let id = UUID(uuidString: raw),
               let sourceIndex = tabIDs.firstIndex(of: id) else { return nil }
         let point = stack.convert(sender.draggingLocation, from: nil)
-        let boundary = chips.firstIndex(where: { point.x < $0.frame.midX }) ?? chips.count
+        let boundary = chips.firstIndex(where: { point.x < stack.convert($0.bounds, from: $0).midX }) ?? chips.count
         return (id, boundary, boundary > sourceIndex ? boundary - 1 : boundary)
     }
 
@@ -856,7 +907,14 @@ final class SessionTabBarView: NSView {
             return []
         }
         if let event = NSApp.currentEvent { documentView.autoscroll(with: event) }
-        let x = placement.boundary < chips.count ? chips[placement.boundary].frame.minX - 2 : chips[chips.count - 1].frame.maxX + 2
+        let x: CGFloat
+        if placement.boundary < chips.count {
+            let chip = chips[placement.boundary]
+            x = stack.convert(chip.bounds, from: chip).minX - 2
+        } else {
+            let chip = chips[chips.count - 1]
+            x = stack.convert(chip.bounds, from: chip).maxX + 2
+        }
         let point = documentView.convert(NSPoint(x: x, y: 0), from: stack)
         dropIndicator.layer?.backgroundColor = Theme.layerColor(Theme.accent, for: self)
         dropIndicator.frame = NSRect(x: point.x, y: 8, width: 2, height: max(0, documentView.bounds.height - 16))
@@ -912,9 +970,70 @@ final class SessionTabBarView: NSView {
         leftScrollButton.contentTintColor = Theme.textSecondary
         rightScrollButton.contentTintColor = Theme.textSecondary
         homeChip.refreshAppearance()
+        for entry in groupViews {
+            entry.view.refreshAppearance()
+        }
         for chip in chips {
             chip.refreshAppearance()
         }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+}
+
+/// 分屏后的两个标签在顶部标签栏归为一组胶囊，组内两个标签均可独立点击切换焦点或关闭。
+@MainActor
+private final class SessionTabGroupView: NSView {
+    private let divider = NSView()
+    private var active = false
+
+    init(left: SessionTabChip, right: SessionTabChip) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 1
+
+        divider.wantsLayer = true
+        divider.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = NSStackView(views: [left, divider, right])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 2
+        row.edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+
+        NSLayoutConstraint.activate([
+            divider.widthAnchor.constraint(equalToConstant: 1),
+            divider.heightAnchor.constraint(equalToConstant: 16),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        refreshAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    func setActive(_ active: Bool) {
+        self.active = active
+        refreshAppearance()
+    }
+
+    func refreshAppearance() {
+        layer?.backgroundColor = active
+            ? Theme.layerColor(Theme.accent.withAlphaComponent(0.10), for: self)
+            : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.55), for: self)
+        layer?.borderColor = active
+            ? Theme.layerColor(Theme.accent.withAlphaComponent(0.45), for: self)
+            : Theme.layerColor(Theme.borderStrong, for: self)
+        divider.layer?.backgroundColor = Theme.layerColor(Theme.borderStrong, for: self)
     }
 
     override func viewDidChangeEffectiveAppearance() {

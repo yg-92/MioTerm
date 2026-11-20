@@ -287,27 +287,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     }
 
     func show(relativeTo anchorWindow: NSWindow?) {
-        position(relativeTo: anchorWindow)
+        window?.positionCentered(relativeTo: anchorWindow)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-    }
-
-    private func position(relativeTo anchorWindow: NSWindow?) {
-        guard let window else { return }
-        guard let anchor = anchorWindow else {
-            window.center()
-            return
-        }
-        let anchorFrame = anchor.frame
-        let prefSize = window.frame.size
-        let visible = (anchor.screen ?? NSScreen.main)?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        // 水平居中于主窗口，顶部比主窗口顶部低 56pt（避开主窗口工具栏），并限制在屏幕可视区域内。
-        let rawX = anchorFrame.midX - prefSize.width / 2
-        let rawY = anchorFrame.maxY - 56 - prefSize.height
-        let x = min(max(rawX, visible.minX), max(visible.minX, visible.maxX - prefSize.width))
-        let y = min(max(rawY, visible.minY), max(visible.minY, visible.maxY - prefSize.height))
-        window.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     @objc private func controlChanged(_ sender: Any?) {
@@ -413,5 +395,24 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         opacitySaveWorkItem = nil
         window?.makeFirstResponder(nil)
         persistSettings()
+    }
+}
+
+extension NSWindow {
+    /// 水平居中于锚点窗口，顶部比锚点窗口顶部低 `topOffset`（避开工具栏），并限制在屏幕可视区域内。
+    func positionCentered(relativeTo anchorWindow: NSWindow?, topOffset: CGFloat = 56) {
+        guard let anchor = anchorWindow else {
+            center()
+            return
+        }
+        let anchorFrame = anchor.frame
+        let size = frame.size
+        let visible = (anchor.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let rawX = anchorFrame.midX - size.width / 2
+        let rawY = anchorFrame.maxY - topOffset - size.height
+        let x = min(max(rawX, visible.minX), max(visible.minX, visible.maxX - size.width))
+        let y = min(max(rawY, visible.minY), max(visible.minY, visible.maxY - size.height))
+        setFrameOrigin(NSPoint(x: x, y: y))
     }
 }
