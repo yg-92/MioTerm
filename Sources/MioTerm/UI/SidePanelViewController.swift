@@ -157,7 +157,7 @@ final class SidePanelViewController: NSViewController {
 
     func applyBackgroundOpacity(_ opacity: CGFloat) {
         backgroundView?.backgroundOpacity = opacity
-        modeSwitcher.pillOpacity = opacity < 0.999 ? max(0.35, opacity * 0.55) : 1.0
+        modeSwitcher.pillOpacity = opacity < 0.999 ? max(0.68, opacity * 0.78) : 1.0
     }
 
     private func refreshAppearance() {

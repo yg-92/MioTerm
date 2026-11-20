@@ -1165,7 +1165,7 @@ final class SessionTabBarView: NSView {
 
     private func refreshBackgroundColor() {
         let color = backgroundOpacity < 0.999
-            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.45)
+            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.78)
             : Theme.tabBar
         layer?.backgroundColor = Theme.layerColor(color, for: self)
         let translucent = backgroundOpacity < 0.999
@@ -1243,8 +1243,8 @@ private final class SessionTabGroupView: NSView {
 
     func refreshAppearance() {
         leadingMarker.layer?.backgroundColor = Theme.layerColor(.systemGreen, for: self)
-        let activeColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(0.45) : Theme.selectedTab
-        let idleAlpha: CGFloat = translucentBackdrop ? 0.20 : 0.24
+        let activeColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(0.72) : Theme.selectedTab
+        let idleAlpha: CGFloat = translucentBackdrop ? 0.28 : 0.24
         layer?.backgroundColor = active
             ? Theme.layerColor(activeColor, for: self)
             : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(idleAlpha), for: self)
@@ -1479,8 +1479,8 @@ final class SessionTabChip: NSView, NSDraggingSource {
             closeButton.isHidden = true
             return
         }
-        let idleBackground = Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.24), for: self)
-        let selectedColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(0.45) : Theme.selectedTab
+        let idleBackground = Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.28), for: self)
+        let selectedColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(0.72) : Theme.selectedTab
         layer?.backgroundColor = selected
             ? Theme.layerColor(selectedColor, for: self)
             : (hovering ? Theme.layerColor(Theme.hoverFill, for: self) : idleBackground)
@@ -2276,7 +2276,7 @@ final class TerminalStatusBarView: NSView {
 
     private func refreshBackgroundColor() {
         let color = backgroundOpacity < 0.999
-            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.45)
+            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.78)
             : Theme.tabBar
         layer?.backgroundColor = Theme.layerColor(color, for: self)
         modeBadge.translucentBackdrop = backgroundOpacity < 0.999
