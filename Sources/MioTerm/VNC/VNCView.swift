@@ -15,6 +15,16 @@ final class VNCView: NSView {
     var onFocus: (() -> Void)?
     var onSendCtrlAltDel: (() -> Void)?
     var onSyncClipboard: (() -> Void)?
+    var onSendFiles: (([URL]) -> Void)? {
+        didSet {
+            menu = buildContextMenu()
+            if onSendFiles != nil {
+                registerForDraggedTypes([.fileURL])
+            } else {
+                unregisterDraggedTypes()
+            }
+        }
+    }
 
     private var fbWidth = 0
     private var fbHeight = 0
@@ -352,11 +362,51 @@ final class VNCView: NSView {
 
     private func buildContextMenu() -> NSMenu {
         let menu = NSMenu()
+        if onSendFiles != nil {
+            menu.addItem(withTitle: L10n.tr(.rdpSendFiles), action: #selector(sendFilesMenu), keyEquivalent: "")
+                .target = self
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: L10n.tr(.vncSendCtrlAltDel), action: #selector(sendCtrlAltDelMenu), keyEquivalent: "")
             .target = self
         menu.addItem(withTitle: L10n.tr(.vncSendClipboard), action: #selector(syncClipboardMenu), keyEquivalent: "")
             .target = self
         return menu
+    }
+
+    @objc private func sendFilesMenu() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        let handleSelection: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, !panel.urls.isEmpty else { return }
+            self?.onSendFiles?(panel.urls)
+        }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: handleSelection)
+        } else {
+            handleSelection(panel.runModal())
+        }
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard onSendFiles != nil,
+              sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else {
+            return []
+        }
+        return .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let onSendFiles,
+              let urls = sender.draggingPasteboard.readObjects(
+                  forClasses: [NSURL.self],
+                  options: [.urlReadingFileURLsOnly: true]
+              ) as? [URL],
+              !urls.isEmpty else { return false }
+        onSendFiles(urls)
+        return true
     }
 
     @objc private func sendCtrlAltDelMenu() {

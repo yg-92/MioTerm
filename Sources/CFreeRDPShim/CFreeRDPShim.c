@@ -10,6 +10,7 @@
 #define RDP_CONTEXT_SIZE 1024
 #define RDP_CONTEXT_LAST_ERROR_OFFSET 24
 #define RDP_CONTEXT_GDI_OFFSET 264
+#define RDP_CONTEXT_CHANNELS_OFFSET 288
 #define RDP_CONTEXT_INPUT_OFFSET 304
 #define RDP_CONTEXT_UPDATE_OFFSET 312
 #define RDP_CONTEXT_SETTINGS_OFFSET 320
@@ -43,6 +44,7 @@ typedef struct {
     char library_path[512];
     void* winpr_handle;
     void* freerdp_handle;
+    void* client_handle;
 
     void* (*freerdp_new)(void);
     void (*freerdp_free)(void* instance);
@@ -69,6 +71,9 @@ typedef struct {
     RdpBool (*input_send_unicode_keyboard_event)(void* input, uint16_t flags, uint16_t code);
 
     RdpUInt32 (*wait_for_multiple_objects)(RdpUInt32 count, const void** handles, RdpBool wait_all, RdpUInt32 ms);
+
+    int (*client_parse_args)(void* settings, int argc, char** argv, RdpBool allow_unknown);
+    RdpBool (*client_load_addins)(void* channels, void* settings);
 } FreeRDPFunctions;
 
 static pthread_mutex_t g_loader_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -97,8 +102,10 @@ static inline uint32_t u32_at(void* base, size_t offset) {
 static bool try_load_from_dir(const char* dir) {
     char winpr_path[512];
     char freerdp_path[512];
+    char client_path[512];
     snprintf(winpr_path, sizeof(winpr_path), "%s/libwinpr3.dylib", dir);
     snprintf(freerdp_path, sizeof(freerdp_path), "%s/libfreerdp3.dylib", dir);
+    snprintf(client_path, sizeof(client_path), "%s/libfreerdp-client3.dylib", dir);
 
     void* winpr = dlopen(winpr_path, RTLD_LAZY | RTLD_LOCAL);
     if (!winpr) return false;
@@ -108,6 +115,8 @@ static bool try_load_from_dir(const char* dir) {
         dlclose(winpr);
         return false;
     }
+
+    void* client = dlopen(client_path, RTLD_LAZY | RTLD_LOCAL);
 
     #define LOAD_SYM(handle, field, name) \
         g_fn.field = dlsym(handle, name); \
@@ -140,8 +149,14 @@ static bool try_load_from_dir(const char* dir) {
     LOAD_SYM(winpr, wait_for_multiple_objects, "WaitForMultipleObjects");
     #undef LOAD_SYM
 
+    if (client) {
+        g_fn.client_parse_args = dlsym(client, "freerdp_client_settings_parse_command_line_arguments");
+        g_fn.client_load_addins = dlsym(client, "freerdp_client_load_addins");
+    }
+
     g_fn.winpr_handle = winpr;
     g_fn.freerdp_handle = freerdp;
+    g_fn.client_handle = client;
     snprintf(g_fn.library_path, sizeof(g_fn.library_path), "%s", freerdp_path);
     return true;
 }
@@ -193,7 +208,15 @@ static MioRdpSession* session_from_context(void* context) {
 }
 
 static RdpBool cb_pre_connect(void* instance) {
-    (void)instance;
+    if (!instance) return 0;
+    void* context = ptr_at(instance, RDP_INST_CONTEXT_OFFSET);
+    if (context && g_fn.client_load_addins) {
+        void* channels = ptr_at(context, RDP_CONTEXT_CHANNELS_OFFSET);
+        void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
+        if (channels && settings) {
+            g_fn.client_load_addins(channels, settings);
+        }
+    }
     return 1;
 }
 
@@ -359,6 +382,17 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_NlaSecurity", true);
         set_bool_setting(settings, "FreeRDP_TlsSecurity", true);
         set_bool_setting(settings, "FreeRDP_RdpSecurity", true);
+        set_bool_setting(settings, "FreeRDP_DeviceRedirection", true);
+        set_bool_setting(settings, "FreeRDP_RedirectDrives", true);
+        set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", true);
+        set_bool_setting(settings, "FreeRDP_RedirectClipboard", true);
+
+        if (config->shared_dir && config->shared_dir[0] && g_fn.client_parse_args) {
+            char drive_arg[1024];
+            snprintf(drive_arg, sizeof(drive_arg), "/drive:MioTerm,%s", config->shared_dir);
+            char* argv[] = {"mioterm-rdp", drive_arg};
+            g_fn.client_parse_args(settings, 2, argv, 1);
+        }
     }
 
     return session;

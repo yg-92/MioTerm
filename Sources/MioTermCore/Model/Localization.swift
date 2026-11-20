@@ -301,6 +301,10 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case rdpConnectFailed
     case rdpDesktopTitle
     case rdpMissingDependencyHint
+    case rdpSendFiles
+    case rdpFileCopiedTitle
+    case rdpFileCopiedMsg
+    case rdpFileCopyFailedTitle
     case authAutomatic
     case authPassword
     case authPrivateKey

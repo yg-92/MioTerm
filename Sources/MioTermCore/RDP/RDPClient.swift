@@ -11,6 +11,7 @@ public final class RDPClient: @unchecked Sendable {
     private let username: String
     private let password: String
     private let domain: String
+    public let sharedDirectory: String
     private let initialWidth: Int
     private let initialHeight: Int
 
@@ -25,6 +26,7 @@ public final class RDPClient: @unchecked Sendable {
         username: String = "",
         password: String = "",
         domain: String = "",
+        sharedDirectory: String? = nil,
         width: Int = 1280,
         height: Int = 800
     ) {
@@ -33,6 +35,9 @@ public final class RDPClient: @unchecked Sendable {
         self.username = username
         self.password = password
         self.domain = domain
+        let defaultDownloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path
+            ?? NSHomeDirectory()
+        self.sharedDirectory = sharedDirectory ?? defaultDownloads
         self.initialWidth = width
         self.initialHeight = height
 
@@ -150,16 +155,19 @@ public final class RDPClient: @unchecked Sendable {
             username.withCString { userC in
                 password.withCString { passC in
                     domain.withCString { domainC in
-                        var config = MioRdpConfig(
-                            host: hostC,
-                            port: UInt16(clamping: port),
-                            username: userC,
-                            password: passC,
-                            domain: domainC,
-                            width: UInt32(max(640, initialWidth)),
-                            height: UInt32(max(480, initialHeight))
-                        )
-                        return mio_rdp_create(&config, callbacks, box.toOpaque())
+                        sharedDirectory.withCString { sharedC in
+                            var config = MioRdpConfig(
+                                host: hostC,
+                                port: UInt16(clamping: port),
+                                username: userC,
+                                password: passC,
+                                domain: domainC,
+                                shared_dir: sharedC,
+                                width: UInt32(max(640, initialWidth)),
+                                height: UInt32(max(480, initialHeight))
+                            )
+                            return mio_rdp_create(&config, callbacks, box.toOpaque())
+                        }
                     }
                 }
             }

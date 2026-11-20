@@ -67,6 +67,41 @@ final class RDPController: SessionControlling {
         desktopView.onSendCtrlAltDel = { [weak self] in
             self?.sendCtrlAltDel()
         }
+        desktopView.onSendFiles = { [weak self] urls in
+            self?.sendFiles(urls)
+        }
+    }
+
+    private func sendFiles(_ urls: [URL]) {
+        guard let sharedDir = client?.sharedDirectory else { return }
+        let targetDir = URL(fileURLWithPath: sharedDir, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
+            var copiedCount = 0
+            for url in urls {
+                let destination = targetDir.appendingPathComponent(url.lastPathComponent)
+                if url.standardizedFileURL == destination.standardizedFileURL {
+                    copiedCount += 1
+                    continue
+                }
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.copyItem(at: url, to: destination)
+                copiedCount += 1
+            }
+            AlertPresenter.notify(
+                title: L10n.tr(.rdpFileCopiedTitle),
+                message: L10n.tr(.rdpFileCopiedMsg, copiedCount, sharedDir),
+                in: desktopView.window
+            )
+        } catch {
+            AlertPresenter.fail(
+                title: L10n.tr(.rdpFileCopyFailedTitle),
+                message: error.localizedDescription,
+                in: desktopView.window
+            )
+        }
     }
 
     func start(password: String?) {

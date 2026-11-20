@@ -16,6 +16,7 @@ typedef struct {
     const char* username;
     const char* password;
     const char* domain;
+    const char* shared_dir;
     uint32_t width;
     uint32_t height;
 } MioRdpConfig;
