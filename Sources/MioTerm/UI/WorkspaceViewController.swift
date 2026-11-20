@@ -179,7 +179,7 @@ final class WorkspaceViewController: NSSplitViewController {
             top,
             sidebarExpandButton.leadingAnchor.constraint(equalTo: mainArea.view.leadingAnchor),
             sidebarExpandButton.widthAnchor.constraint(equalToConstant: 20),
-            sidebarExpandButton.heightAnchor.constraint(equalToConstant: 40),
+            sidebarExpandButton.heightAnchor.constraint(equalToConstant: 34),
         ])
     }
 
@@ -622,11 +622,13 @@ extension WorkspaceViewController: NSMenuItemValidation {
     }
 }
 
-/// 贴在主区域左上方边框的半圆形展开按钮（左侧平齐贴边、右侧半圆弧，内含 `>` 图标）。
+/// 贴在主区域左上方边框的半圆形展开按钮（液态玻璃半圆翼 + `>` 图标）。
 @MainActor
 private final class SidebarEdgeExpandButton: NSView {
     var onTap: (() -> Void)?
     private let iconView = NSImageView()
+    private var glassView: NSView?
+    private var blurView: NSVisualEffectView?
     private var trackingAreaRef: NSTrackingArea?
     private var hovered = false {
         didSet { refreshColors() }
@@ -635,23 +637,69 @@ private final class SidebarEdgeExpandButton: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 20
-        layer?.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
-        layer?.borderWidth = 1
+        layer?.masksToBounds = false
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.16
+        layer?.shadowRadius = 6
+        layer?.shadowOffset = NSSize(width: 2, height: 0)
 
-        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .bold)
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
         iconView.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
             .withSymbolConfiguration(symbolConfig)
-        iconView.contentTintColor = Theme.accent
         iconView.imageScaling = .scaleProportionallyDown
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(iconView)
-        NSLayoutConstraint.activate([
-            iconView.centerXAnchor.constraint(equalTo: centerXAnchor, constant: -1),
-            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 12),
-            iconView.heightAnchor.constraint(equalToConstant: 14),
-        ])
+
+        if #available(macOS 26.0, *) {
+            let host = NSView()
+            host.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(iconView)
+
+            let glass = NSGlassEffectView()
+            glass.style = .regular
+            glass.cornerRadius = 17
+            glass.contentView = host
+            glass.wantsLayer = true
+            glass.layer?.cornerRadius = 17
+            glass.layer?.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+            glass.layer?.masksToBounds = true
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(glass)
+            glassView = glass
+            NSLayoutConstraint.activate([
+                glass.topAnchor.constraint(equalTo: topAnchor),
+                glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+                glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+                iconView.centerXAnchor.constraint(equalTo: host.centerXAnchor, constant: -1),
+                iconView.centerYAnchor.constraint(equalTo: host.centerYAnchor),
+                iconView.widthAnchor.constraint(equalToConstant: 11),
+                iconView.heightAnchor.constraint(equalToConstant: 13),
+            ])
+        } else {
+            let blur = NSVisualEffectView()
+            blur.material = .popover
+            blur.blendingMode = .withinWindow
+            blur.state = .active
+            blur.wantsLayer = true
+            blur.layer?.cornerRadius = 17
+            blur.layer?.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+            blur.layer?.masksToBounds = true
+            blur.layer?.borderWidth = 0.5
+            blur.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(blur)
+            blurView = blur
+            addSubview(iconView)
+            NSLayoutConstraint.activate([
+                blur.topAnchor.constraint(equalTo: topAnchor),
+                blur.bottomAnchor.constraint(equalTo: bottomAnchor),
+                blur.leadingAnchor.constraint(equalTo: leadingAnchor),
+                blur.trailingAnchor.constraint(equalTo: trailingAnchor),
+                iconView.centerXAnchor.constraint(equalTo: centerXAnchor, constant: -1),
+                iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+                iconView.widthAnchor.constraint(equalToConstant: 11),
+                iconView.heightAnchor.constraint(equalToConstant: 13),
+            ])
+        }
         refreshColors()
     }
 
@@ -685,9 +733,10 @@ private final class SidebarEdgeExpandButton: NSView {
     }
 
     func refreshColors() {
-        let bg = hovered ? Theme.accentSoft : Theme.surfaceRaised
-        layer?.backgroundColor = Theme.layerColor(bg, for: self)
-        layer?.borderColor = Theme.layerColor(hovered ? Theme.accent : Theme.border, for: self)
-        iconView.contentTintColor = Theme.accent
+        if #available(macOS 26.0, *), let glass = glassView as? NSGlassEffectView {
+            glass.tintColor = hovered ? Theme.accent.withAlphaComponent(0.24) : Theme.accentSoft
+        }
+        blurView?.layer?.borderColor = Theme.layerColor(hovered ? Theme.accent : Theme.border, for: self)
+        iconView.contentTintColor = hovered ? Theme.accent : Theme.textSecondary
     }
 }

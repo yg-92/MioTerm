@@ -43,6 +43,10 @@ final class HostSidebarViewController: NSViewController {
 
     private let searchField = NSSearchField()
     private let newHostButton = NSButton()
+    private lazy var newHostGlassBar = GlassBarView(
+        content: newHostButton,
+        padding: NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
+    )
     private let scrollView = NSScrollView()
     private let outlineView = HostOutlineView()
     private let bottomBar = NSStackView()
@@ -129,20 +133,20 @@ final class HostSidebarViewController: NSViewController {
         emptyLabel.lineBreakMode = .byWordWrapping
         emptyLabel.isHidden = true
 
-        for subview in [searchField, newHostButton, scrollView, emptyLabel, footerDivider, bottomBar] {
+        for subview in [searchField, newHostGlassBar, scrollView, emptyLabel, footerDivider, bottomBar] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(subview)
         }
 
         NSLayoutConstraint.activate([
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: newHostButton.leadingAnchor, constant: -6),
+            searchField.trailingAnchor.constraint(equalTo: newHostGlassBar.leadingAnchor, constant: -6),
             searchField.topAnchor.constraint(equalTo: root.topAnchor, constant: 11),
 
-            newHostButton.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
-            newHostButton.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
-            newHostButton.widthAnchor.constraint(equalToConstant: 26),
-            newHostButton.heightAnchor.constraint(equalToConstant: 26),
+            newHostGlassBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
+            newHostGlassBar.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
+            newHostGlassBar.widthAnchor.constraint(equalToConstant: 28),
+            newHostGlassBar.heightAnchor.constraint(equalToConstant: 28),
 
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
