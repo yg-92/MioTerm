@@ -629,7 +629,13 @@ final class SessionTabViewController: NSViewController {
         welcome.view.alphaValue = opacity
         for tab in tabControllers.values {
             let isDesktop = tab.controller is VNCController || tab.controller is RDPController
-            tab.view.alphaValue = isDesktop ? 1.0 : opacity
+            if isDesktop {
+                tab.view.alphaValue = 1.0
+                tab.setBackgroundTranslucent(false)
+            } else {
+                tab.view.alphaValue = 1.0
+                tab.setBackgroundTranslucent(opacity < 0.999)
+            }
         }
     }
 
@@ -1581,6 +1587,7 @@ final class TerminalTabViewController: NSViewController {
     private var paneSplit = false
     private var headerHeight: NSLayoutConstraint!
     private var terminalInsets: [NSLayoutConstraint] = []
+    private var isBackgroundTranslucent = false
 
     init(controller: any SessionControlling) {
         self.controller = controller
@@ -1592,7 +1599,9 @@ final class TerminalTabViewController: NSViewController {
     override func loadView() {
         let container = AppearanceAwareView(frame: NSRect(x: 0, y: 0, width: 900, height: 560))
         container.wantsLayer = true
-        container.layer?.backgroundColor = Theme.layerColor(Theme.terminalBackground, for: container)
+        container.layer?.backgroundColor = isBackgroundTranslucent
+            ? NSColor.clear.cgColor
+            : Theme.layerColor(Theme.terminalBackground, for: container)
         container.onAppearanceChange = { [weak self] in self?.refreshAppearance() }
         controller.sessionView.translatesAutoresizingMaskIntoConstraints = false
         paneHeader.translatesAutoresizingMaskIntoConstraints = false
@@ -1692,8 +1701,18 @@ final class TerminalTabViewController: NSViewController {
         banner.isHidden = false
     }
 
+    func setBackgroundTranslucent(_ translucent: Bool) {
+        isBackgroundTranslucent = translucent
+        guard isViewLoaded else { return }
+        view.layer?.backgroundColor = translucent
+            ? NSColor.clear.cgColor
+            : Theme.layerColor(Theme.terminalBackground, for: view)
+    }
+
     private func refreshAppearance() {
-        view.layer?.backgroundColor = Theme.layerColor(Theme.terminalBackground, for: view)
+        view.layer?.backgroundColor = isBackgroundTranslucent
+            ? NSColor.clear.cgColor
+            : Theme.layerColor(Theme.terminalBackground, for: view)
         banner.refreshAppearance()
         paneHeader.refreshAppearance()
         controller.applyTheme()

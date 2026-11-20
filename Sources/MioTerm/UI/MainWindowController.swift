@@ -123,13 +123,14 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         }
 
         if blur > 0.001 {
+            let effectiveAlpha = Theme.effectiveBackgroundAlpha(opacity: opacity, blur: blur)
             backdropBlurView.isHidden = false
             // 用平滑曲线渐进叠加虚化强度，避免刚离开 0% 就突然变厚重。
             backdropBlurView.alphaValue = CGFloat(pow(blur, 1.8))
             window.isOpaque = false
-            window.backgroundColor = Theme.background.withAlphaComponent(CGFloat(opacity))
+            window.backgroundColor = .clear
             window.alphaValue = 1.0
-            workspace.applyFrameOpacity(CGFloat(opacity))
+            workspace.applyFrameOpacity(effectiveAlpha)
         } else {
             backdropBlurView.isHidden = true
             window.isOpaque = true

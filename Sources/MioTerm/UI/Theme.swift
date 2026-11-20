@@ -139,6 +139,14 @@ enum Theme {
         }
     }
 
+    static func effectiveBackgroundAlpha(opacity: Double, blur: Double) -> CGFloat {
+        let clampedOpacity = min(1.0, max(0.4, opacity))
+        guard blur > 0.001 else { return CGFloat(clampedOpacity) }
+        // 即使窗口透明度保持 100%，提高虚化也会渐进降低背景底色不透明度，让毛玻璃透出来。
+        let blurTransparency = 1.0 - min(1.0, max(0.0, blur)) * 0.45
+        return CGFloat(min(clampedOpacity, blurTransparency))
+    }
+
     // MARK: - 终端
 
     /// SwiftTerm 只接受具体色值，没法跟着动态颜色走，所以按深浅各取一份，
