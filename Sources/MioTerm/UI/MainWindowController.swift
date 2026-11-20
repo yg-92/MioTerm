@@ -131,7 +131,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             window.isOpaque = false
             window.backgroundColor = Theme.background.withAlphaComponent(0.001)
             window.alphaValue = 1.0
-            workspace.applyFrameOpacity(effectiveAlpha, blurActive: true)
+            workspace.applyFrameOpacity(effectiveAlpha, blur: CGFloat(blur))
             setWindowBlurRadius(radius)
             window.invalidateShadow()
             return
@@ -146,12 +146,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
                 window.alphaValue = 1.0
                 window.isOpaque = false
                 window.backgroundColor = Theme.background.withAlphaComponent(CGFloat(opacity))
-                workspace.applyFrameOpacity(CGFloat(opacity), blurActive: false)
+                workspace.applyFrameOpacity(CGFloat(opacity), blur: 0)
             } else {
                 window.isOpaque = true
                 window.backgroundColor = Theme.background
                 window.alphaValue = 1.0
-                workspace.applyFrameOpacity(1.0, blurActive: false)
+                workspace.applyFrameOpacity(1.0, blur: 0)
             }
             window.invalidateShadow()
             return
@@ -162,7 +162,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         window.isOpaque = true
         window.backgroundColor = Theme.background
         window.alphaValue = CGFloat(opacity)
-        workspace.applyFrameOpacity(1.0, blurActive: false)
+        workspace.applyFrameOpacity(1.0, blur: 0)
         window.invalidateShadow()
     }
 

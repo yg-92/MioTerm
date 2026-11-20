@@ -30,10 +30,10 @@ final class WorkspaceViewController: NSSplitViewController {
     var onPresentationChange: (((any SessionControlling)?) -> Void)?
     var isShowingDesktopSession: Bool { sessions.hasVisibleDesktopSession }
 
-    func applyFrameOpacity(_ opacity: CGFloat, blurActive: Bool = false) {
+    func applyFrameOpacity(_ opacity: CGFloat, blur: CGFloat = 0) {
         sidePanel.view.alphaValue = 1.0
-        sidePanel.applyBackgroundOpacity(blurActive ? 0 : opacity)
-        sessions.applyFrameOpacity(opacity)
+        sidePanel.applyBackgroundOpacity(opacity, blur: blur)
+        sessions.applyFrameOpacity(opacity, blur: blur)
     }
 
     /// 侧栏折叠态与分栏宽度都要跨启动保留，对齐 webterm 记住面板布局的行为。

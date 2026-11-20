@@ -623,14 +623,17 @@ final class SessionTabViewController: NSViewController {
         append(controller)
     }
 
-    func applyFrameOpacity(_ opacity: CGFloat) {
+    func applyFrameOpacity(_ opacity: CGFloat, blur: CGFloat = 0) {
         frameOpacity = opacity
+        let blurFactor = blur > 0.001 ? min(1.0, blur / 0.35) : (opacity < 0.999 ? 1.0 : 0.0)
         view.layer?.backgroundColor = opacity < 0.999
             ? NSColor.clear.cgColor
             : Theme.layerColor(Theme.background, for: view)
         tabBar.alphaValue = 1.0
+        tabBar.blurFactor = blurFactor
         tabBar.backgroundOpacity = opacity
         statusBar.alphaValue = 1.0
+        statusBar.blurFactor = blurFactor
         statusBar.backgroundOpacity = opacity
         terminalSplit.splitView.translucentBackdrop = opacity < 0.999
         welcome.view.alphaValue = 1.0
@@ -780,6 +783,12 @@ final class SessionTabBarView: NSView {
     var backgroundOpacity: CGFloat = 1.0 {
         didSet {
             guard abs(backgroundOpacity - oldValue) > 0.001 else { return }
+            refreshBackgroundColor()
+        }
+    }
+    var blurFactor: CGFloat = 0.0 {
+        didSet {
+            guard abs(blurFactor - oldValue) > 0.001 else { return }
             refreshBackgroundColor()
         }
     }
@@ -1007,6 +1016,7 @@ final class SessionTabBarView: NSView {
                tabs[index + 1].splitGroupID == groupID {
                 let group = SessionTabGroupView(left: chips[index], right: chips[index + 1])
                 group.translucentBackdrop = backgroundOpacity < 0.999
+                group.selectedBackdropAlpha = selectedTabBackdropAlpha
                 group.setActive(selected == index || selected == index + 1)
                 groupViews.append((group, index...(index + 1)))
                 stack.addArrangedSubview(group)
@@ -1058,6 +1068,7 @@ final class SessionTabBarView: NSView {
             self?.onTabContextMenu?(index, event, chip)
         }
         chip.translucentBackdrop = backgroundOpacity < 0.999
+        chip.selectedBackdropAlpha = selectedTabBackdropAlpha
         chip.setSelected(selected)
         return chip
     }
@@ -1163,18 +1174,27 @@ final class SessionTabBarView: NSView {
         }
     }
 
+    private var selectedTabBackdropAlpha: CGFloat {
+        guard backgroundOpacity < 0.999 else { return 1.0 }
+        return min(0.85, max(0.14, backgroundOpacity * (0.20 + 0.45 * blurFactor)))
+    }
+
     private func refreshBackgroundColor() {
         let color = backgroundOpacity < 0.999
-            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.78)
+            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * (0.08 + 0.42 * blurFactor))
             : Theme.tabBar
         layer?.backgroundColor = Theme.layerColor(color, for: self)
         let translucent = backgroundOpacity < 0.999
+        let selectedAlpha = selectedTabBackdropAlpha
         homeChip.translucentBackdrop = translucent
+        homeChip.selectedBackdropAlpha = selectedAlpha
         for entry in groupViews {
             entry.view.translucentBackdrop = translucent
+            entry.view.selectedBackdropAlpha = selectedAlpha
         }
         for chip in chips {
             chip.translucentBackdrop = translucent
+            chip.selectedBackdropAlpha = selectedAlpha
         }
     }
 
@@ -1194,6 +1214,12 @@ private final class SessionTabGroupView: NSView {
     var translucentBackdrop = false {
         didSet {
             guard translucentBackdrop != oldValue else { return }
+            refreshAppearance()
+        }
+    }
+    var selectedBackdropAlpha: CGFloat = 0.72 {
+        didSet {
+            guard abs(selectedBackdropAlpha - oldValue) > 0.001 else { return }
             refreshAppearance()
         }
     }
@@ -1243,8 +1269,8 @@ private final class SessionTabGroupView: NSView {
 
     func refreshAppearance() {
         leadingMarker.layer?.backgroundColor = Theme.layerColor(.systemGreen, for: self)
-        let activeColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(0.72) : Theme.selectedTab
-        let idleAlpha: CGFloat = translucentBackdrop ? 0.28 : 0.24
+        let activeColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(selectedBackdropAlpha) : Theme.selectedTab
+        let idleAlpha: CGFloat = translucentBackdrop ? min(0.24, selectedBackdropAlpha * 0.55) : 0.24
         layer?.backgroundColor = active
             ? Theme.layerColor(activeColor, for: self)
             : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(idleAlpha), for: self)
@@ -1313,6 +1339,12 @@ final class SessionTabChip: NSView, NSDraggingSource {
     var translucentBackdrop = false {
         didSet {
             guard translucentBackdrop != oldValue else { return }
+            updateAppearance()
+        }
+    }
+    var selectedBackdropAlpha: CGFloat = 0.72 {
+        didSet {
+            guard abs(selectedBackdropAlpha - oldValue) > 0.001 else { return }
             updateAppearance()
         }
     }
@@ -1479,8 +1511,9 @@ final class SessionTabChip: NSView, NSDraggingSource {
             closeButton.isHidden = true
             return
         }
-        let idleBackground = Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.28), for: self)
-        let selectedColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(0.72) : Theme.selectedTab
+        let idleAlpha: CGFloat = translucentBackdrop ? min(0.24, selectedBackdropAlpha * 0.55) : 0.24
+        let idleBackground = Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(idleAlpha), for: self)
+        let selectedColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(selectedBackdropAlpha) : Theme.selectedTab
         layer?.backgroundColor = selected
             ? Theme.layerColor(selectedColor, for: self)
             : (hovering ? Theme.layerColor(Theme.hoverFill, for: self) : idleBackground)
@@ -1784,6 +1817,12 @@ private final class ReconnectBannerView: NSView {
             refreshAppearance()
         }
     }
+    var selectedBackdropAlpha: CGFloat = 0.72 {
+        didSet {
+            guard abs(selectedBackdropAlpha - oldValue) > 0.001 else { return }
+            refreshAppearance()
+        }
+    }
 
     private let icon = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
@@ -2016,6 +2055,12 @@ final class TerminalModeBadge: NSView {
     var translucentBackdrop = false {
         didSet {
             guard translucentBackdrop != oldValue else { return }
+            refreshAppearance()
+        }
+    }
+    var selectedBackdropAlpha: CGFloat = 0.72 {
+        didSet {
+            guard abs(selectedBackdropAlpha - oldValue) > 0.001 else { return }
             refreshAppearance()
         }
     }
@@ -2267,6 +2312,12 @@ final class TerminalStatusBarView: NSView {
             refreshBackgroundColor()
         }
     }
+    var blurFactor: CGFloat = 0.0 {
+        didSet {
+            guard abs(blurFactor - oldValue) > 0.001 else { return }
+            refreshBackgroundColor()
+        }
+    }
 
     func refreshAppearance() {
         refreshBackgroundColor()
@@ -2276,7 +2327,7 @@ final class TerminalStatusBarView: NSView {
 
     private func refreshBackgroundColor() {
         let color = backgroundOpacity < 0.999
-            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.78)
+            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * (0.08 + 0.42 * blurFactor))
             : Theme.tabBar
         layer?.backgroundColor = Theme.layerColor(color, for: self)
         modeBadge.translucentBackdrop = backgroundOpacity < 0.999
