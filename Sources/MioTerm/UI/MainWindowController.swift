@@ -200,7 +200,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     /// 右侧：命令库、新建标签、设置和品牌图标放进同一块玻璃，避免一半有玻璃一半没有。
     private func windowActionsItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let newTab = glassButton(
-            symbol: "plus",
+            symbol: "terminal",
             label: L10n.tr(.toolbarLocalTerminal),
             action: #selector(WorkspaceViewController.newLocalTerminal(_:)),
             target: workspace
