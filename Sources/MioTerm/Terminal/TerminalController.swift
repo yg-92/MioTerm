@@ -493,14 +493,21 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
     }
 
     /// 断线时远端来不及收尾：屏幕可能还停在 vim 之类的备用缓冲，鼠标上报等模式
-    /// 也还开着。重连前退回主缓冲并软复位，否则新提示符会画在上一轮的残留上。
-    /// 主缓冲里的历史滚屏保持不动。
+    /// 也还开着。重连前退回主缓冲并软复位，同时把光标移到当前主屏最后一行有效内容之后，
+    /// 避免 DECSTR 或切回主缓冲时把光标放回左上角导致重连输出覆写旧日志。
     private func prepareForReconnectIfNeeded() {
         guard state != .idle, !state.isAlive else { return }
         remoteTitle = nil
         workingDirectory = nil
-        terminalView.feed(text: "\u{1B}[?1049l\u{1B}[!p")
-        terminalView.feed(text: "\r\n\u{1B}[2m[\(title)] \(L10n.tr(.terminalReconnectingLine))\u{1B}[0m\r\n")
+        terminalView.feed(text: "\u{1B}[?1049l\u{1B}[?1047l\u{1B}[?47l\u{1B}[!p")
+        if let snapshot = terminalView.terminalContentSnapshot(region: .history(maximumScrollbackRows: -1)),
+           let lastNonEmpty = snapshot.rows.lastIndex(where: { !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            let targetRow = lastNonEmpty + 1
+            terminalView.feed(text: "\u{1B}[\(targetRow);1H\r\n")
+            terminalView.feed(text: "\r\n\u{1B}[2m[\(title)] \(L10n.tr(.terminalReconnectingLine))\u{1B}[0m\r\n")
+        } else {
+            terminalView.feed(text: "\u{1B}[1;1H\u{1B}[2m[\(title)] \(L10n.tr(.terminalReconnectingLine))\u{1B}[0m\r\n")
+        }
     }
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
