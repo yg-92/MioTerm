@@ -1051,6 +1051,7 @@ final class SessionTabBarView: NSView {
             guard let chip else { return }
             self?.onTabContextMenu?(index, event, chip)
         }
+        chip.translucentBackdrop = backgroundOpacity < 0.999
         chip.setSelected(selected)
         return chip
     }
@@ -1161,6 +1162,11 @@ final class SessionTabBarView: NSView {
             ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.45)
             : Theme.tabBar
         layer?.backgroundColor = Theme.layerColor(color, for: self)
+        let translucent = backgroundOpacity < 0.999
+        homeChip.translucentBackdrop = translucent
+        for chip in chips {
+            chip.translucentBackdrop = translucent
+        }
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -1287,6 +1293,12 @@ final class SessionTabChip: NSView, NSDraggingSource {
     private var selected = false
     private var hovering = false
     private var trackingArea: NSTrackingArea?
+    var translucentBackdrop = false {
+        didSet {
+            guard translucentBackdrop != oldValue else { return }
+            updateAppearance()
+        }
+    }
 
     init(
         title: String,
@@ -1451,8 +1463,9 @@ final class SessionTabChip: NSView, NSDraggingSource {
             return
         }
         let idleBackground = Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.24), for: self)
+        let selectedColor = translucentBackdrop ? Theme.selectedTab.withAlphaComponent(0.45) : Theme.selectedTab
         layer?.backgroundColor = selected
-            ? Theme.layerColor(Theme.selectedTab, for: self)
+            ? Theme.layerColor(selectedColor, for: self)
             : (hovering ? Theme.layerColor(Theme.hoverFill, for: self) : idleBackground)
         if !selected {
             layer?.borderWidth = 0

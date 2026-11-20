@@ -157,6 +157,7 @@ final class SidePanelViewController: NSViewController {
 
     func applyBackgroundOpacity(_ opacity: CGFloat) {
         backgroundView?.backgroundOpacity = opacity
+        modeSwitcher.pillOpacity = opacity < 0.999 ? max(0.35, opacity * 0.55) : 1.0
     }
 
     private func refreshAppearance() {
@@ -204,6 +205,12 @@ final class CapsuleSegmentedView: NSView {
     /// 外层轨道交给玻璃时不再自绘底色和描边，只保留选中块、悬停与文字。
     var drawsTrack = true {
         didSet { needsDisplay = true }
+    }
+    var pillOpacity: CGFloat = 1.0 {
+        didSet {
+            guard abs(pillOpacity - oldValue) > 0.001 else { return }
+            needsDisplay = true
+        }
     }
 
     private var titles: [String]
@@ -360,7 +367,8 @@ final class CapsuleSegmentedView: NSView {
             shadow.shadowBlurRadius = 3
             shadow.shadowOffset = NSSize(width: 0, height: -1)
             shadow.set()
-            (dark ? Theme.surfaceRaised : Theme.surface).setFill()
+            let pillColor = (dark ? Theme.surfaceRaised : Theme.surface).withAlphaComponent(pillOpacity)
+            pillColor.setFill()
             pill.fill()
             NSGraphicsContext.restoreGraphicsState()
             Theme.border.setStroke()
