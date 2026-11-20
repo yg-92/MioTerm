@@ -1632,6 +1632,8 @@ final class TerminalStatusBarView: NSView {
     private let versionLabel = NSTextField(labelWithString: "")
     private var modeTrailingToVersion: NSLayoutConstraint!
     private var modeTrailingToEdge: NSLayoutConstraint!
+    private var identityLeadingToState: NSLayoutConstraint!
+    private var identityLeadingToDot: NSLayoutConstraint!
     private var stateColor: NSColor = Theme.textTertiary
     private var hasDirectory = false
 
@@ -1686,6 +1688,9 @@ final class TerminalStatusBarView: NSView {
             equalTo: versionLabel.leadingAnchor, constant: -10
         )
         modeTrailingToEdge = modeBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
+        identityLeadingToState = identityLabel.leadingAnchor.constraint(equalTo: stateLabel.trailingAnchor, constant: 10)
+        identityLeadingToDot = identityLabel.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6)
+        identityLeadingToState.isActive = true
 
         NSLayoutConstraint.activate([
             topBorder.topAnchor.constraint(equalTo: topAnchor),
@@ -1701,7 +1706,6 @@ final class TerminalStatusBarView: NSView {
             stateLabel.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6),
             stateLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            identityLabel.leadingAnchor.constraint(equalTo: stateLabel.trailingAnchor, constant: 10),
             identityLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             pathIcon.trailingAnchor.constraint(equalTo: pathLabel.leadingAnchor, constant: -5),
@@ -1752,7 +1756,11 @@ final class TerminalStatusBarView: NSView {
             return
         }
         stateColor = Theme.color(for: controller.state)
-        stateLabel.stringValue = controller.state.label
+        let hideLocalConnectedState = controller.host == nil && controller.state == .running
+        stateLabel.isHidden = hideLocalConnectedState
+        stateLabel.stringValue = hideLocalConnectedState ? "" : controller.state.label
+        identityLeadingToState.isActive = !hideLocalConnectedState
+        identityLeadingToDot.isActive = hideLocalConnectedState
 
         if let host = controller.host {
             identityLabel.stringValue = "\(host.displayName) · \(host.protocolKind.displayName) · \(host.subtitle)"
