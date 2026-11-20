@@ -20,8 +20,14 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "CFreeRDPShim",
+            path: "Sources/CFreeRDPShim",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "MioTermCore",
             dependencies: [
+                "CFreeRDPShim",
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             path: "Sources/MioTermCore"

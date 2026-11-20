@@ -16,8 +16,8 @@ final class SessionTabViewController: NSViewController {
     var onReconnect: ((any SessionControlling) -> Void)?
     /// 新建远端连接仍由工作区处理认证；保留用户发起分屏时的基准会话。
     var onSplitHost: ((HostProfile, UUID) -> Void)?
-    /// 将 VNC 会话从标签栏拖出或移出到独立窗口。
-    var onDetachVNC: ((VNCController, NSPoint?) -> Void)?
+    /// 将 VNC / RDP 图形桌面会话从标签栏拖出或移出到独立窗口。
+    var onDetachDesktop: ((any SessionControlling, NSPoint?) -> Void)?
     private let tabBar = SessionTabBarView()
     private let content = ContainerViewController()
     private let statusBar = TerminalStatusBarView()
@@ -84,7 +84,7 @@ final class SessionTabViewController: NSViewController {
         tabBar.onSelect = { [weak self] index in self?.select(index) }
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
         tabBar.onMove = { [weak self] id, destination in self?.moveSession(id: id, to: destination) }
-        tabBar.onDetach = { [weak self] id, point in self?.detachVNC(id: id, at: point) }
+        tabBar.onDetach = { [weak self] id, point in self?.detachDesktop(id: id, at: point) }
         tabBar.onNew = { [weak self] in self?.newLocalTerminal() }
         tabBar.onSplit = { [weak self] in self?.showSplitChooser() }
         tabBar.onTabContextMenu = { [weak self] index, event, anchor in
@@ -226,11 +226,11 @@ final class SessionTabViewController: NSViewController {
         removeSession(at: index, stopAndUnregister: true) != nil
     }
 
-    func detachVNC(id: UUID, at screenPoint: NSPoint?) {
+    func detachDesktop(id: UUID, at screenPoint: NSPoint?) {
         guard let index = order.firstIndex(where: { $0.sessionID == id }),
-              order[index] is VNCController,
-              let detached = removeSession(at: index, stopAndUnregister: false) as? VNCController else { return }
-        onDetachVNC?(detached, screenPoint)
+              order[index] is VNCController || order[index] is RDPController,
+              let detached = removeSession(at: index, stopAndUnregister: false) else { return }
+        onDetachDesktop?(detached, screenPoint)
     }
 
     @discardableResult
@@ -478,7 +478,7 @@ final class SessionTabViewController: NSViewController {
         } else {
             addSplitItem(to: menu, title: L10n.tr(.tabSplitChooseTerminal), action: .choose(controller.sessionID))
         }
-        if controller is VNCController {
+        if controller is VNCController || controller is RDPController {
             addSplitItem(to: menu, title: L10n.tr(.tabDetachToWindow), action: .detachWindow(controller.sessionID))
             menu.addItem(.separator())
         }
@@ -521,7 +521,7 @@ final class SessionTabViewController: NSViewController {
         case .closeGroup(let id):
             closeSplitGroup(containing: id)
         case .detachWindow(let id):
-            detachVNC(id: id, at: nil)
+            detachDesktop(id: id, at: nil)
         case .close(let id):
             guard let index = order.firstIndex(where: { $0.sessionID == id }) else { return }
             _ = closeTab(at: index)
@@ -554,6 +554,7 @@ final class SessionTabViewController: NSViewController {
         case .telnet: return .telnet
         case .serial: return .serial
         case .vnc: return .vnc
+        case .rdp: return .rdp
         }
     }
 
@@ -636,6 +637,7 @@ final class SessionTabBarView: NSView {
         case telnet
         case serial
         case vnc
+        case rdp
 
         var symbol: String {
             switch self {
@@ -644,6 +646,7 @@ final class SessionTabBarView: NSView {
             case .telnet: return Theme.symbol(for: .telnet)
             case .serial: return Theme.symbol(for: .serial)
             case .vnc: return Theme.symbol(for: .vnc)
+            case .rdp: return Theme.symbol(for: .rdp)
             }
         }
 
@@ -654,6 +657,7 @@ final class SessionTabBarView: NSView {
             case .telnet: return Theme.tint(for: .telnet)
             case .serial: return Theme.tint(for: .serial)
             case .vnc: return Theme.tint(for: .vnc)
+            case .rdp: return Theme.tint(for: .rdp)
             }
         }
 
@@ -664,10 +668,11 @@ final class SessionTabBarView: NSView {
             case .telnet: return "Telnet"
             case .serial: return L10n.tr(.sessionKindSerial)
             case .vnc: return "VNC"
+            case .rdp: return "RDP"
             }
         }
 
-        var canDetachToWindow: Bool { self == .vnc }
+        var canDetachToWindow: Bool { self == .vnc || self == .rdp }
     }
 
     struct Tab: Equatable {

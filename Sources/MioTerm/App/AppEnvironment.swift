@@ -108,7 +108,7 @@ final class AppEnvironment {
     func secrets(for host: HostProfile) -> TerminalSecrets? {
         var secrets = TerminalSecrets()
         do {
-            if host.protocolKind == .vnc {
+            if host.protocolKind == .vnc || host.protocolKind == .rdp {
                 secrets.password = try vault.secret(hostID: host.id, kind: .password)
                 return secrets.hasContent ? secrets : nil
             }

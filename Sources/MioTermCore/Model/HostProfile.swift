@@ -5,6 +5,7 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Sendable {
     case telnet
     case serial
     case vnc
+    case rdp
 
     public var displayName: String {
         switch self {
@@ -12,6 +13,7 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Sendable {
         case .telnet: return L10n.tr(.protocolTelnet)
         case .serial: return L10n.tr(.protocolSerial)
         case .vnc: return L10n.tr(.protocolVNC)
+        case .rdp: return L10n.tr(.protocolRDP)
         }
     }
 
@@ -26,6 +28,7 @@ public enum ConnectionProtocol: String, Codable, CaseIterable, Sendable {
         case .telnet: return 23
         case .serial: return nil
         case .vnc: return 5900
+        case .rdp: return 3389
         }
     }
 }
@@ -288,7 +291,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     /// 侧栏展示用的 “地址:端口”、串口设备与速率。
     public var subtitle: String {
         switch protocolKind {
-        case .ssh, .telnet, .vnc: return "\(address):\(port)"
+        case .ssh, .telnet, .vnc, .rdp: return "\(address):\(port)"
         case .serial: return serial.device.isEmpty ? L10n.tr(.hostSerialNotSelected) : "\(serial.device) · \(serial.baudRate) baud"
         }
     }
@@ -316,6 +319,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         if copy.protocolKind != .ssh { copy.x11Forwarding = .off }
         if copy.port == 22, copy.protocolKind == .telnet { copy.port = 23 }
         if copy.port == 22, copy.protocolKind == .vnc { copy.port = 5900 }
+        if copy.port == 22, copy.protocolKind == .rdp { copy.port = 3389 }
         if copy.port <= 0 || copy.port > 65535 { copy.port = copy.protocolKind.defaultPort ?? 22 }
         copy.connectTimeout = max(1, min(300, copy.connectTimeout))
         copy.keepaliveInterval = max(0, min(600, copy.keepaliveInterval))
@@ -326,6 +330,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     public enum ValidationError: LocalizedError, Equatable {
         case nameRequired
         case addressRequired
+        case rdpDependencyMissing
         case serialDeviceRequired
         case serialDevicePathInvalid
         case serialBaudOutOfRange
@@ -336,6 +341,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
             switch self {
             case .nameRequired: return L10n.tr(.hostValNameRequired)
             case .addressRequired: return L10n.tr(.hostValAddressRequired)
+            case .rdpDependencyMissing: return L10n.tr(.rdpDependencyMissing, FreeRDPAvailability.installCommand)
             case .serialDeviceRequired: return L10n.tr(.hostValSerialDeviceRequired)
             case .serialDevicePathInvalid: return L10n.tr(.hostValSerialDevicePathInvalid)
             case .serialBaudOutOfRange: return L10n.tr(.hostValSerialBaudOutOfRange, SerialConfig.minimumBaudRate, SerialConfig.maximumBaudRate)
@@ -349,6 +355,9 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.nameRequired }
         switch protocolKind {
         case .ssh, .telnet, .vnc:
+            if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.addressRequired }
+        case .rdp:
+            if !FreeRDPAvailability.isInstalled { throw ValidationError.rdpDependencyMissing }
             if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.addressRequired }
         case .serial:
             if serial.device.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ValidationError.serialDeviceRequired }

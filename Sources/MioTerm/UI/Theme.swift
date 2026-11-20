@@ -125,6 +125,7 @@ enum Theme {
         case .telnet: return "network"
         case .serial: return "cable.connector"
         case .vnc: return "display"
+        case .rdp: return "desktopcomputer"
         }
     }
 
@@ -134,6 +135,7 @@ enum Theme {
         case .telnet: return teal
         case .serial: return orange
         case .vnc: return .systemIndigo
+        case .rdp: return .systemCyan
         }
     }
 

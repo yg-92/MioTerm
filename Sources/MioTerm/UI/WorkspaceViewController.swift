@@ -68,8 +68,8 @@ final class WorkspaceViewController: NSSplitViewController {
         sessions.onSplitHost = { [weak self] host, baseID in
             self?.connect(host: host, beside: baseID)
         }
-        sessions.onDetachVNC = { [weak self] controller, screenPoint in
-            self?.presentDetachedVNC(controller, at: screenPoint)
+        sessions.onDetachDesktop = { [weak self] controller, screenPoint in
+            self?.presentDetachedDesktop(controller, at: screenPoint)
         }
         // 标签栏与主页都归会话控制器管：没有选中会话时它自己显示欢迎页。
         mainArea.show(sessions)
@@ -417,7 +417,7 @@ final class WorkspaceViewController: NSSplitViewController {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func presentDetachedVNC(_ controller: VNCController, at screenPoint: NSPoint?) {
+    private func presentDetachedDesktop(_ controller: any SessionControlling, at screenPoint: NSPoint?) {
         let winController = VNCWindowController(
             controller: controller,
             screenPoint: screenPoint,

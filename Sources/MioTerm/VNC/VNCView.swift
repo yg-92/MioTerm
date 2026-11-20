@@ -9,6 +9,8 @@ import MioTermCore
 final class VNCView: NSView {
     var onPointerEvent: ((Int, Int, UInt8) -> Void)?
     var onKeyEvent: ((UInt32, Bool) -> Void)?
+    var onRawKeyDown: ((NSEvent) -> Bool)?
+    var onRawKeyUp: ((NSEvent) -> Bool)?
     var onFocus: (() -> Void)?
     var onSendCtrlAltDel: (() -> Void)?
     var onSyncClipboard: (() -> Void)?
@@ -200,12 +202,14 @@ final class VNCView: NSView {
     // MARK: - 键盘输入
 
     override func keyDown(with event: NSEvent) {
+        if onRawKeyDown?(event) == true { return }
         for keysym in keysyms(for: event) {
             onKeyEvent?(keysym, true)
         }
     }
 
     override func keyUp(with event: NSEvent) {
+        if onRawKeyUp?(event) == true { return }
         for keysym in keysyms(for: event) {
             onKeyEvent?(keysym, false)
         }

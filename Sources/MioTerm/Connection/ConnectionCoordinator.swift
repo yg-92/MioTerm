@@ -17,9 +17,15 @@ final class ConnectionCoordinator {
     /// 先同步建立控制器与会话视图，调用方可立即切到新页面，再异步完成密钥探测与建连。
     func prepareController(for rawHost: HostProfile) -> any SessionControlling {
         let host = resolved(environment.hosts.host(id: rawHost.id) ?? rawHost)
-        let controller: any SessionControlling = host.protocolKind == .vnc
-            ? VNCController(host: host)
-            : TerminalController(host: host, settings: environment.settings.settings)
+        let controller: any SessionControlling
+        switch host.protocolKind {
+        case .vnc:
+            controller = VNCController(host: host)
+        case .rdp:
+            controller = RDPController(host: host)
+        case .ssh, .telnet, .serial:
+            controller = TerminalController(host: host, settings: environment.settings.settings)
+        }
         observe(controller, host: host)
         environment.register(controller)
         return controller
@@ -32,6 +38,11 @@ final class ConnectionCoordinator {
         if let vnc = controller as? VNCController {
             let password = environment.secrets(for: host)?.password
             vnc.start(password: password)
+            return
+        }
+        if let rdp = controller as? RDPController {
+            let password = environment.secrets(for: host)?.password
+            rdp.start(password: password)
             return
         }
         guard let terminal = controller as? TerminalController else { return }
@@ -119,14 +130,14 @@ final class ConnectionCoordinator {
 
     private func makeStream(for host: HostProfile) -> (any TerminalStream)? {
         switch host.protocolKind {
-        case .telnet, .vnc:
+        case .telnet:
             return TelnetStream(host: host.address,
                                 port: host.port,
                                 terminalType: host.terminalType,
                                 connectTimeout: TimeInterval(max(1, host.connectTimeout)))
         case .serial:
             return SerialStream(configuration: host.serial)
-        case .ssh, .vnc:
+        case .ssh, .vnc, .rdp:
             return nil
         }
     }
@@ -138,6 +149,10 @@ final class ConnectionCoordinator {
         let host = resolved(environment.hosts.host(id: stored.id) ?? stored)
         if let vnc = controller as? VNCController {
             vnc.start(password: environment.secrets(for: host)?.password)
+            return
+        }
+        if let rdp = controller as? RDPController {
+            rdp.start(password: environment.secrets(for: host)?.password)
             return
         }
         guard let terminal = controller as? TerminalController else { return }
@@ -225,7 +240,7 @@ final class ConnectionCoordinator {
                                         in: window)
                 }
             }
-        case .telnet, .vnc:
+        case .telnet, .vnc, .rdp:
             let address = host.address
             let port = host.port
             let timeout = TimeInterval(max(1, host.connectTimeout))

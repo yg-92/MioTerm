@@ -43,6 +43,8 @@ final class HostFormWindowController: NSWindowController {
     private let dtrCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormRaiseDTR), target: nil, action: nil)
     private let rtsCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormRaiseRTS), target: nil, action: nil)
     private let serialHintLabel = NSTextField(wrappingLabelWithString: "")
+    private let rdpDependencyLabel = NSTextField(wrappingLabelWithString: L10n.tr(.rdpMissingDependencyHint))
+    private var saveButton = NSButton()
     private var serialPanel = NSGridView()
     private let identityStack = NSStackView()
 
@@ -151,9 +153,12 @@ final class HostFormWindowController: NSWindowController {
         notesScroll.borderType = .bezelBorder
         notesScroll.heightAnchor.constraint(equalToConstant: 76).isActive = true
 
-        let saveButton = NSButton(title: L10n.tr(.commonSave), target: self, action: #selector(save(_:)))
+        saveButton = NSButton(title: L10n.tr(.commonSave), target: self, action: #selector(save(_:)))
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
+        rdpDependencyLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        rdpDependencyLabel.textColor = .systemRed
+        rdpDependencyLabel.widthAnchor.constraint(equalToConstant: 330).isActive = true
         let cancelButton = NSButton(title: L10n.tr(.commonCancel), target: self, action: #selector(cancel(_:)))
         cancelButton.bezelStyle = .rounded
         cancelButton.keyEquivalent = "\u{1b}"
@@ -168,6 +173,7 @@ final class HostFormWindowController: NSWindowController {
             [label(L10n.tr(.hostFormGroup)), groupField],
             [label(L10n.tr(.hostFormTags)), tagsField],
             [label(L10n.tr(.hostFormProtocol)), protocolPopup],
+            [NSView(), rdpDependencyLabel],
             [NSView(), serialPanel],
             [label(L10n.tr(.hostFormAddress)), addressField],
             [label(L10n.tr(.hostFormPort)), portField],
@@ -328,7 +334,7 @@ final class HostFormWindowController: NSWindowController {
 
     /// 自动模式交给 ssh 自己处理，没有需要托管的口令字段。
     private func credentialKind(for host: HostProfile) -> KeychainVault.CredentialKind? {
-        if host.protocolKind == .vnc { return .password }
+        if host.protocolKind == .vnc || host.protocolKind == .rdp { return .password }
         guard host.protocolKind == .ssh else { return nil }
         switch host.authMethod {
         case .automatic: return nil
@@ -340,9 +346,9 @@ final class HostFormWindowController: NSWindowController {
     @objc private func authChanged(_ sender: NSPopUpButton) { updateRowVisibility() }
 
     @objc private func protocolChanged(_ sender: NSPopUpButton) {
-        // 端口默认值跟着协议走：留着 22 去连 Telnet/VNC 一定失败，用户不必自己想到。
+        // 端口默认值跟着协议走：留着默认端口去连其他协议一定失败，用户不必自己想到。
         let entered = Int(portField.stringValue) ?? 0
-        if entered == 0 || entered == 22 || entered == 23 || entered == 5900 {
+        if entered == 0 || entered == 22 || entered == 23 || entered == 5900 || entered == 3389 {
             portField.stringValue = selectedProtocol.defaultPort.map(String.init) ?? ""
         }
         updateRowVisibility()
@@ -358,13 +364,18 @@ final class HostFormWindowController: NSWindowController {
         let isSerial = selectedProtocol == .serial
         let isSSH = selectedProtocol == .ssh
         let isVNC = selectedProtocol == .vnc
+        let isRDP = selectedProtocol == .rdp
+        let rdpReady = FreeRDPAvailability.isInstalled
+
+        setRowHidden(rdpDependencyLabel, hidden: !isRDP || rdpReady)
+        saveButton.isEnabled = !(isRDP && !rdpReady)
 
         setRowHidden(serialPanel, hidden: !isSerial)
         setRowHidden(addressField, hidden: isSerial)
         setRowHidden(portField, hidden: isSerial)
         setRowHidden(timeoutField, hidden: isSerial)
-        setRowHidden(terminalTypeField, hidden: isSerial || isVNC)
-        setRowHidden(usernameField, hidden: !isSSH)
+        setRowHidden(terminalTypeField, hidden: isSerial || isVNC || isRDP)
+        setRowHidden(usernameField, hidden: !isSSH && !isRDP)
         setRowHidden(authPopup, hidden: !isSSH)
         setRowHidden(keepaliveField, hidden: !isSSH)
         setRowHidden(startupDirectoryField, hidden: !isSSH)
@@ -374,7 +385,7 @@ final class HostFormWindowController: NSWindowController {
 
         let method = selectedMethod
         setRowHidden(identityStack, hidden: !isSSH || method == .password)
-        let showsSecret = (isSSH && method != .automatic) || isVNC
+        let showsSecret = (isSSH && method != .automatic) || isVNC || isRDP
         setRowHidden(secretField, hidden: !showsSecret)
         setRowHidden(clearSecretCheckbox, hidden: !showsSecret)
         clearSecretCheckbox.isEnabled = showsSecret

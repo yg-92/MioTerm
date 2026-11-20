@@ -287,6 +287,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case protocolTelnet
     case protocolSerial
     case protocolVNC
+    case protocolRDP
     case vncHandshakeFailed
     case vncUnsupportedAuth
     case vncPasswordRequired
@@ -296,6 +297,10 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case vncDesktopTitle
     case vncSendCtrlAltDel
     case vncSendClipboard
+    case rdpDependencyMissing
+    case rdpConnectFailed
+    case rdpDesktopTitle
+    case rdpMissingDependencyHint
     case authAutomatic
     case authPassword
     case authPrivateKey

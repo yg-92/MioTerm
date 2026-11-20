@@ -1,16 +1,16 @@
 import AppKit
 import MioTermCore
 
-/// 从标签栏拖出或右键移出的独立 VNC 远程桌面窗口。
+/// 从标签栏拖出或右键移出的独立图形桌面窗口（支持 VNC 与 RDP）。
 @MainActor
 final class VNCWindowController: NSWindowController, NSWindowDelegate {
-    let sessionController: VNCController
+    let sessionController: any SessionControlling
     private let tabController: TerminalTabViewController
     var onReconnect: ((any SessionControlling) -> Void)?
     var onDidClose: ((UUID) -> Void)?
     private var stateToken: UUID?
 
-    init(controller: VNCController, screenPoint: NSPoint?, anchorWindow: NSWindow?) {
+    init(controller: any SessionControlling, screenPoint: NSPoint?, anchorWindow: NSWindow?) {
         self.sessionController = controller
         self.tabController = TerminalTabViewController(controller: controller)
 
