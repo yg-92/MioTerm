@@ -32,6 +32,8 @@ final class VNCView: NSView {
     private var buttonMask: UInt8 = 0
     private var trackingArea: NSTrackingArea?
     private var activeModifierFlags: NSEvent.ModifierFlags = []
+    private var pointerInside = false
+    private var lastRemotePoint: (Int, Int)?
 
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
 
@@ -97,12 +99,20 @@ final class VNCView: NSView {
         }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(area)
         trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        pointerInside = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        pointerInside = false
     }
 
     // MARK: - 鼠标输入
@@ -116,7 +126,7 @@ final class VNCView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         buttonMask &= ~(1 << 0)
-        emitPointer(from: event)
+        emitPointerRelease(from: event)
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -132,7 +142,7 @@ final class VNCView: NSView {
 
     override func rightMouseUp(with event: NSEvent) {
         buttonMask &= ~(1 << 2)
-        emitPointer(from: event)
+        emitPointerRelease(from: event)
     }
 
     override func otherMouseDown(with event: NSEvent) {
@@ -144,10 +154,11 @@ final class VNCView: NSView {
 
     override func otherMouseUp(with event: NSEvent) {
         buttonMask &= ~(1 << 1)
-        emitPointer(from: event)
+        emitPointerRelease(from: event)
     }
 
     override func mouseMoved(with event: NSEvent) {
+        guard pointerInside else { return }
         emitPointer(from: event)
     }
 
@@ -184,15 +195,24 @@ final class VNCView: NSView {
     }
 
     private func emitPointer(from event: NSEvent) {
-        guard let (x, y) = remotePoint(from: event) else { return }
+        guard let (x, y) = remotePoint(from: event, allowOutside: false) else { return }
+        lastRemotePoint = (x, y)
         onPointerEvent?(x, y, buttonMask)
     }
 
-    private func remotePoint(from event: NSEvent) -> (Int, Int)? {
+    private func emitPointerRelease(from event: NSEvent) {
+        guard let (x, y) = remotePoint(from: event, allowOutside: true) ?? lastRemotePoint else { return }
+        onPointerEvent?(x, y, buttonMask)
+    }
+
+    private func remotePoint(from event: NSEvent, allowOutside: Bool = false) -> (Int, Int)? {
         guard fbWidth > 0, fbHeight > 0 else { return nil }
         let local = convert(event.locationInWindow, from: nil)
         let rect = contentRect()
         guard rect.width > 0, rect.height > 0 else { return nil }
+        if !allowOutside {
+            guard bounds.contains(local), rect.contains(local) else { return nil }
+        }
         let rx = Int(((local.x - rect.minX) / rect.width) * CGFloat(fbWidth))
         let ry = Int(((local.y - rect.minY) / rect.height) * CGFloat(fbHeight))
         return (min(max(rx, 0), fbWidth - 1), min(max(ry, 0), fbHeight - 1))
