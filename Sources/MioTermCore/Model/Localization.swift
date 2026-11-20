@@ -391,6 +391,9 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case tabSplitExitKeepSession
     case tabSplitUngroup
     case tabSplitCloseGroup
+    case tabDetachToWindow
+    case sessionKindLocal
+    case sessionKindSerial
     case tabSplitWithSelected
     case tabSplitChooseTerminal
     case tabScrollLeftTip

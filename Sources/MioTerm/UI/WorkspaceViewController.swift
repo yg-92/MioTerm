@@ -21,6 +21,7 @@ final class WorkspaceViewController: NSSplitViewController {
 
     private var hostForm: HostFormWindowController?
     private var preferences: PreferencesWindowController?
+    private var detachedVNCWindows: [UUID: VNCWindowController] = [:]
     /// 连接是异步的，同一主机连点两次会开出两个会话，用这个集合去重。
     private var pendingConnects: Set<String> = []
     /// 重连也要去重：指纹确认期间连点会同时拉起两条 ssh。
@@ -66,6 +67,9 @@ final class WorkspaceViewController: NSSplitViewController {
         }
         sessions.onSplitHost = { [weak self] host, baseID in
             self?.connect(host: host, beside: baseID)
+        }
+        sessions.onDetachVNC = { [weak self] controller, screenPoint in
+            self?.presentDetachedVNC(controller, at: screenPoint)
         }
         // 标签栏与主页都归会话控制器管：没有选中会话时它自己显示欢迎页。
         mainArea.show(sessions)
@@ -342,12 +346,14 @@ final class WorkspaceViewController: NSSplitViewController {
         }
         reconnectingSessions.insert(controller.sessionID)
         sessions.setReconnecting(controller, busy: true)
+        detachedVNCWindows[controller.sessionID]?.setReconnecting(true)
         environment.logger.info("重连 \(controller.title)：开始")
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
                 self.reconnectingSessions.remove(controller.sessionID)
                 self.sessions.setReconnecting(controller, busy: false)
+                self.detachedVNCWindows[controller.sessionID]?.setReconnecting(false)
             }
             await self.coordinator.reconnect(controller, in: self.view.window)
             guard controller.state.isAlive else {
@@ -409,6 +415,22 @@ final class WorkspaceViewController: NSSplitViewController {
         }
         preferences?.show(relativeTo: view.window)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func presentDetachedVNC(_ controller: VNCController, at screenPoint: NSPoint?) {
+        let winController = VNCWindowController(
+            controller: controller,
+            screenPoint: screenPoint,
+            anchorWindow: view.window
+        )
+        winController.onReconnect = { [weak self] session in
+            self?.reconnect(session)
+        }
+        winController.onDidClose = { [weak self] id in
+            self?.detachedVNCWindows.removeValue(forKey: id)
+        }
+        detachedVNCWindows[controller.sessionID] = winController
+        winController.present()
     }
 
     private func presentHostForm(_ host: HostProfile) {

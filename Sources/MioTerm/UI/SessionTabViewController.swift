@@ -16,6 +16,8 @@ final class SessionTabViewController: NSViewController {
     var onReconnect: ((any SessionControlling) -> Void)?
     /// 新建远端连接仍由工作区处理认证；保留用户发起分屏时的基准会话。
     var onSplitHost: ((HostProfile, UUID) -> Void)?
+    /// 将 VNC 会话从标签栏拖出或移出到独立窗口。
+    var onDetachVNC: ((VNCController, NSPoint?) -> Void)?
     private let tabBar = SessionTabBarView()
     private let content = ContainerViewController()
     private let statusBar = TerminalStatusBarView()
@@ -82,6 +84,7 @@ final class SessionTabViewController: NSViewController {
         tabBar.onSelect = { [weak self] index in self?.select(index) }
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
         tabBar.onMove = { [weak self] id, destination in self?.moveSession(id: id, to: destination) }
+        tabBar.onDetach = { [weak self] id, point in self?.detachVNC(id: id, at: point) }
         tabBar.onNew = { [weak self] in self?.newLocalTerminal() }
         tabBar.onSplit = { [weak self] in self?.showSplitChooser() }
         tabBar.onTabContextMenu = { [weak self] index, event, anchor in
@@ -220,17 +223,32 @@ final class SessionTabViewController: NSViewController {
     }
 
     func closeTab(at index: Int) -> Bool {
-        guard order.indices.contains(index) else { return false }
+        removeSession(at: index, stopAndUnregister: true) != nil
+    }
+
+    func detachVNC(id: UUID, at screenPoint: NSPoint?) {
+        guard let index = order.firstIndex(where: { $0.sessionID == id }),
+              order[index] is VNCController,
+              let detached = removeSession(at: index, stopAndUnregister: false) as? VNCController else { return }
+        onDetachVNC?(detached, screenPoint)
+    }
+
+    @discardableResult
+    private func removeSession(at index: Int, stopAndUnregister: Bool) -> (any SessionControlling)? {
+        guard order.indices.contains(index) else { return nil }
         let wasShowingHome = isShowingHome
         let controller = order[index]
         if view.window?.firstResponder === controller.sessionView {
             view.window?.makeFirstResponder(nil)
         }
-        controller.stop()
+        if stopAndUnregister {
+            controller.stop()
+            environment.unregister(controller)
+        }
         controller.removeContextObserver(modeTokens.removeValue(forKey: controller.sessionID))
         controller.removeStateObserver(stateTokens.removeValue(forKey: controller.sessionID))
-        environment.unregister(controller)
         controller.onFocus = nil
+        controller.onTitleChange = nil
         paneLayout.remove(controller.sessionID)
         order.remove(at: index)
         // 从父容器摘下之后才释放标签。
@@ -243,7 +261,7 @@ final class SessionTabViewController: NSViewController {
         if wasShowingHome { paneLayout.showHome() }
         presentSelection()
         tabControllers[controller.sessionID] = nil
-        return true
+        return controller
     }
 
     func closeAll() {
@@ -377,6 +395,7 @@ final class SessionTabViewController: NSViewController {
         case choose(UUID)
         case ungroup(UUID)
         case closeGroup(UUID)
+        case detachWindow(UUID)
         case close(UUID)
         case exit
     }
@@ -459,6 +478,10 @@ final class SessionTabViewController: NSViewController {
         } else {
             addSplitItem(to: menu, title: L10n.tr(.tabSplitChooseTerminal), action: .choose(controller.sessionID))
         }
+        if controller is VNCController {
+            addSplitItem(to: menu, title: L10n.tr(.tabDetachToWindow), action: .detachWindow(controller.sessionID))
+            menu.addItem(.separator())
+        }
         menu.addItem(.separator())
         addSplitItem(to: menu, title: L10n.tr(.menuCloseTab), action: .close(controller.sessionID))
         return menu
@@ -497,6 +520,8 @@ final class SessionTabViewController: NSViewController {
             presentSelection()
         case .closeGroup(let id):
             closeSplitGroup(containing: id)
+        case .detachWindow(let id):
+            detachVNC(id: id, at: nil)
         case .close(let id):
             guard let index = order.firstIndex(where: { $0.sessionID == id }) else { return }
             _ = closeTab(at: index)
@@ -522,6 +547,16 @@ final class SessionTabViewController: NSViewController {
         view.window?.makeFirstResponder(nil)
     }
 
+    private func sessionKind(for controller: any SessionControlling) -> SessionTabBarView.SessionKind {
+        guard let host = controller.host else { return .local }
+        switch host.protocolKind {
+        case .ssh: return .ssh
+        case .telnet: return .telnet
+        case .serial: return .serial
+        case .vnc: return .vnc
+        }
+    }
+
     private func refreshTabs() {
         updateChrome()
     }
@@ -532,6 +567,7 @@ final class SessionTabViewController: NSViewController {
                 id: controller.sessionID,
                 title: controller.state.isAlive ? controller.title : "\(controller.title) — \(controller.state.label)",
                 state: controller.state,
+                kind: sessionKind(for: controller),
                 tooltip: controller.tooltip,
                 splitGroupID: paneLayout.groupID(for: controller.sessionID)
             )
@@ -594,10 +630,51 @@ private final class TabBarScrollView: NSScrollView {
 /// 顶部标签栏：主页 + 会话标签 + 新建按钮。标签多时可以横向滚动。
 @MainActor
 final class SessionTabBarView: NSView {
+    enum SessionKind: Equatable {
+        case local
+        case ssh
+        case telnet
+        case serial
+        case vnc
+
+        var symbol: String {
+            switch self {
+            case .local: return "apple.terminal"
+            case .ssh: return Theme.symbol(for: .ssh)
+            case .telnet: return Theme.symbol(for: .telnet)
+            case .serial: return Theme.symbol(for: .serial)
+            case .vnc: return Theme.symbol(for: .vnc)
+            }
+        }
+
+        var tint: NSColor {
+            switch self {
+            case .local: return Theme.textSecondary
+            case .ssh: return Theme.tint(for: .ssh)
+            case .telnet: return Theme.tint(for: .telnet)
+            case .serial: return Theme.tint(for: .serial)
+            case .vnc: return Theme.tint(for: .vnc)
+            }
+        }
+
+        var badge: String {
+            switch self {
+            case .local: return L10n.tr(.sessionKindLocal)
+            case .ssh: return "SSH"
+            case .telnet: return "Telnet"
+            case .serial: return L10n.tr(.sessionKindSerial)
+            case .vnc: return "VNC"
+            }
+        }
+
+        var canDetachToWindow: Bool { self == .vnc }
+    }
+
     struct Tab: Equatable {
         let id: UUID
         let title: String
         let state: TerminalController.State
+        let kind: SessionKind
         let tooltip: String
         let splitGroupID: UUID?
     }
@@ -607,6 +684,7 @@ final class SessionTabBarView: NSView {
     var onSelect: ((Int?) -> Void)?
     var onClose: ((Int) -> Void)?
     var onMove: ((UUID, Int) -> Void)?
+    var onDetach: ((UUID, NSPoint) -> Void)?
     var onNew: (() -> Void)?
     var onSplit: (() -> Void)?
     var onTabContextMenu: ((Int, NSEvent, NSView) -> Void)?
@@ -880,15 +958,26 @@ final class SessionTabBarView: NSView {
     }
 
     private func makeChip(for tab: Tab, at index: Int, selected: Bool) -> SessionTabChip {
+        let isCompact = tab.splitGroupID != nil
         let chip = SessionTabChip(
-            title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
-            closable: true, fixedWidth: nil, compact: tab.splitGroupID != nil
+            title: tab.title,
+            symbol: tab.kind.symbol,
+            symbolColor: tab.kind.tint,
+            statusColor: Theme.color(for: tab.state),
+            kindBadge: isCompact ? nil : tab.kind.badge,
+            closable: true,
+            fixedWidth: nil,
+            compact: isCompact
         )
         chip.toolTip = L10n.tr(.tabChipTooltip, tab.tooltip)
         chip.dragOwner = dragOwner
+        chip.allowOutsideDrag = tab.kind.canDetachToWindow
         chip.onDrag = { [weak self, weak chip] event in
             guard let self, let chip else { return }
             self.beginDrag(id: tab.id, chip: chip, event: event)
+        }
+        chip.onDetachDrag = { [weak self] screenPoint in
+            self?.onDetach?(tab.id, screenPoint)
         }
         chip.onSelect = { [weak self] in self?.onSelect?(index) }
         chip.onClose = { [weak self] in self?.onClose?(index) }
@@ -1100,7 +1189,9 @@ final class StatusDotView: NSView {
 @MainActor
 final class SessionTabChip: NSView, NSDraggingSource {
     var dragOwner: UUID?
+    var allowOutsideDrag = false
     var onDrag: ((NSEvent) -> Void)?
+    var onDetachDrag: ((NSPoint) -> Void)?
     private var mouseDownLocation: NSPoint?
     private var didBeginDrag = false
     var onContextMenu: ((NSEvent) -> Void)?
@@ -1110,20 +1201,34 @@ final class SessionTabChip: NSView, NSDraggingSource {
     private let icon = NSImageView()
     private let statusDot = StatusDotView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let kindBadgeLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let closable: Bool
     private let compact: Bool
+    private let hasKindBadge: Bool
     private let symbol: String?
     private let symbolColor: NSColor
+    private let statusColor: NSColor?
     private var selected = false
     private var hovering = false
     private var trackingArea: NSTrackingArea?
 
-    init(title: String, symbol: String?, symbolColor: NSColor, closable: Bool, fixedWidth: CGFloat?, compact: Bool = false) {
+    init(
+        title: String,
+        symbol: String?,
+        symbolColor: NSColor,
+        statusColor: NSColor? = nil,
+        kindBadge: String? = nil,
+        closable: Bool,
+        fixedWidth: CGFloat?,
+        compact: Bool = false
+    ) {
         self.closable = closable
         self.compact = compact
+        self.hasKindBadge = !(kindBadge ?? "").isEmpty
         self.symbol = symbol
         self.symbolColor = symbolColor
+        self.statusColor = statusColor
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 7
@@ -1144,9 +1249,21 @@ final class SessionTabChip: NSView, NSDraggingSource {
         icon.translatesAutoresizingMaskIntoConstraints = false
         addSubview(icon)
 
-        statusDot.isHidden = symbol != nil
+        statusDot.isHidden = statusColor == nil && symbol != nil
         statusDot.translatesAutoresizingMaskIntoConstraints = false
         addSubview(statusDot)
+
+        kindBadgeLabel.stringValue = kindBadge ?? ""
+        kindBadgeLabel.font = NSFont.systemFont(ofSize: 9.5, weight: .semibold)
+        kindBadgeLabel.alignment = .center
+        kindBadgeLabel.wantsLayer = true
+        kindBadgeLabel.layer?.cornerRadius = 4
+        kindBadgeLabel.layer?.cornerCurve = .continuous
+        kindBadgeLabel.isHidden = !hasKindBadge
+        kindBadgeLabel.setContentHuggingPriority(.required, for: .horizontal)
+        kindBadgeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        kindBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(kindBadgeLabel)
 
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: L10n.tr(.menuCloseTab))
         closeButton.isBordered = false
@@ -1165,26 +1282,47 @@ final class SessionTabChip: NSView, NSDraggingSource {
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 13),
             icon.heightAnchor.constraint(equalToConstant: 13),
-            // 圆点占住图标原本的视觉中心，标题的起点不用跟着变。
-            statusDot.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
-            statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
-            statusDot.widthAnchor.constraint(equalToConstant: 7),
-            statusDot.heightAnchor.constraint(equalToConstant: 7),
             titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: titleSpacing),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            kindBadgeLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            kindBadgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 26),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 16),
             closeButton.heightAnchor.constraint(equalToConstant: 16),
         ])
+        if symbol != nil && statusColor != nil {
+            NSLayoutConstraint.activate([
+                statusDot.trailingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 2),
+                statusDot.bottomAnchor.constraint(equalTo: icon.bottomAnchor, constant: 1),
+                statusDot.widthAnchor.constraint(equalToConstant: 5),
+                statusDot.heightAnchor.constraint(equalToConstant: 5),
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                statusDot.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
+                statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
+                statusDot.widthAnchor.constraint(equalToConstant: 7),
+                statusDot.heightAnchor.constraint(equalToConstant: 7),
+            ])
+        }
 
         if closable {
-            let minWidth: CGFloat = compact ? 66 : 112
-            let maxWidth: CGFloat = compact ? 112 : 230
+            let minWidth: CGFloat = compact ? 66 : 124
+            let maxWidth: CGFloat = compact ? 112 : 250
             let trailingInset: CGFloat = compact ? -4 : -6
+            if hasKindBadge {
+                NSLayoutConstraint.activate([
+                    kindBadgeLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 5),
+                    kindBadgeLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
+                ])
+            } else {
+                NSLayoutConstraint.activate([
+                    titleLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
+                ])
+            }
             NSLayoutConstraint.activate([
                 widthAnchor.constraint(greaterThanOrEqualToConstant: minWidth),
                 widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
-                titleLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
                 closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: trailingInset),
             ])
         } else {
@@ -1212,7 +1350,9 @@ final class SessionTabChip: NSView, NSDraggingSource {
     func refreshAppearance() {
         icon.image = symbol.flatMap { Self.iconImage(symbol: $0, color: symbolColor) }
         icon.contentTintColor = symbolColor
-        statusDot.layer?.backgroundColor = Theme.layerColor(symbolColor, for: self)
+        statusDot.layer?.backgroundColor = Theme.layerColor(statusColor ?? symbolColor, for: self)
+        kindBadgeLabel.textColor = symbolColor
+        kindBadgeLabel.layer?.backgroundColor = Theme.layerColor(symbolColor.withAlphaComponent(0.14), for: self)
         updateAppearance()
     }
 
@@ -1287,7 +1427,10 @@ final class SessionTabChip: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        context == .withinApplication ? .move : []
+        if context == .withinApplication || allowOutsideDrag {
+            return .move
+        }
+        return []
     }
 
     func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
@@ -1295,6 +1438,9 @@ final class SessionTabChip: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         mouseDownLocation = nil
         didBeginDrag = false
+        if operation == [], allowOutsideDrag, let win = window, !win.frame.contains(screenPoint) {
+            onDetachDrag?(screenPoint)
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
