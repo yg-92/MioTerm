@@ -1,13 +1,14 @@
 import AppKit
 import MioTermCore
 
-/// 设置面板。改动点“保存”后一次性写盘，避免输入一半就触发全局刷新。
-/// 视觉上跟主机表单一致：标签左对齐、控件左端对齐，窗口按内容自适应高度，
-/// 免得底部按钮被挤到窗口外，点了像没反应。
+/// 设置面板。所有改动即时生效并落盘，无需点击保存按钮。
+/// 视觉上跟主机表单一致：标签左对齐、控件左端对齐，窗口按内容自适应高度。
 @MainActor
-final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
+final class PreferencesWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate, NSComboBoxDelegate {
     private let store: SettingsStore
     private var styleWindow: StylePreferencesWindowController?
+    private var isLoading = false
+    private var opacitySaveWorkItem: DispatchWorkItem?
 
     private let languagePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
     private let appearancePopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
@@ -41,8 +42,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private let keepaliveField = NSTextField()
 
     private let styleButton = NSButton(title: L10n.tr(.prefStyleButton), target: nil, action: nil)
-    private let saveButton = NSButton(title: L10n.tr(.commonSave), target: nil, action: nil)
-    private let cancelButton = NSButton(title: L10n.tr(.commonCancel), target: nil, action: nil)
     private var localizedLabels: [(NSTextField, L10nKey)] = []
 
     private static let labelWidth: CGFloat = 128
@@ -115,23 +114,24 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         treeIconSizePopup.addItems(withTitles: Self.treeIconSizes.map { "\($0)" })
         terminalTypeCombo.addItems(withObjectValues: TerminalTypes.options)
         terminalTypeCombo.numberOfVisibleItems = 8
+        terminalTypeCombo.delegate = self
         terminalTypeHint.stringValue = L10n.tr(.prefTerminalTypeHint)
 
-        saveButton.target = self
-        saveButton.action = #selector(save(_:))
-        saveButton.bezelStyle = .rounded
-        saveButton.keyEquivalent = "\r"
-        cancelButton.target = self
-        cancelButton.action = #selector(cancel(_:))
-        cancelButton.bezelStyle = .rounded
-        cancelButton.keyEquivalent = "\u{1b}"
-        let buttons = NSStackView(views: [NSView(), saveButton, cancelButton])
-        buttons.orientation = .horizontal
-        buttons.spacing = 10
+        for control: NSControl in [
+            languagePopup, appearancePopup, contrastPopup, accentPopup,
+            fontPopup, fontSizePopup, treeFontSizePopup, treeIconSizePopup,
+            bellCheckbox, followCheckbox,
+        ] {
+            control.target = self
+            control.action = #selector(controlChanged(_:))
+        }
 
         for field in [scrollbackField, chunkField, concurrencyField, timeoutField, keepaliveField] {
             field.alignment = .left
             field.widthAnchor.constraint(equalToConstant: 140).isActive = true
+            field.delegate = self
+            field.target = self
+            field.action = #selector(controlChanged(_:))
         }
         // 下拉框统一宽度，点开菜单时标题不会被挤成省略号。
         languagePopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
@@ -179,7 +179,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             [label(.prefMaxConcurrent), concurrencyField],
             [label(.prefConnectTimeout), timeoutField],
             [label(.prefKeepalive), keepaliveField],
-            [NSView(), buttons],
         ])
         grid.rowSpacing = 10
         grid.columnSpacing = 12
@@ -246,11 +245,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         bellCheckbox.title = L10n.tr(.prefBellTitle)
         followCheckbox.title = L10n.tr(.prefFollowDirectoryTitle)
         scrollbackField.toolTip = L10n.tr(.prefScrollbackTooltip)
-        saveButton.title = L10n.tr(.commonSave)
-        cancelButton.title = L10n.tr(.commonCancel)
     }
 
     private func load(_ settings: AppSettings) {
+        isLoading = true
+        defer { isLoading = false }
         languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: settings.language) ?? 0)
         appearancePopup.selectItem(at: AppearanceMode.allCases.firstIndex(of: settings.appearance) ?? 0)
         contrastPopup.selectItem(at: UIContrast.allCases.firstIndex(of: settings.contrast) ?? 0)
@@ -287,7 +286,23 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         values[min(max(popup.indexOfSelectedItem, 0), values.count - 1)]
     }
 
-    @objc private func save(_ sender: NSButton) {
+    @objc private func controlChanged(_ sender: Any?) {
+        persistSettings()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        persistSettings()
+    }
+
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        // 下拉选择变更时 stringValue 尚未同步为选中项，延后一个主循环周期读取。
+        DispatchQueue.main.async { [weak self] in
+            self?.persistSettings()
+        }
+    }
+
+    private func persistSettings() {
+        guard !isLoading else { return }
         let fontName = fontPopup.titleOfSelectedItem ?? "Menlo Regular"
         do {
             try store.update { settings in
@@ -311,7 +326,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
                 settings.defaultConnectTimeout = Int(timeoutField.stringValue) ?? settings.defaultConnectTimeout
                 settings.defaultKeepaliveInterval = Int(keepaliveField.stringValue) ?? settings.defaultKeepaliveInterval
             }
-            close()
         } catch {
             AlertPresenter.fail(title: L10n.tr(.prefSaveFailedTitle), message: error.localizedDescription, in: window)
         }
@@ -344,6 +358,12 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             object: nil,
             userInfo: ["opacity": value]
         )
+        opacitySaveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.persistSettings()
+        }
+        opacitySaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
     private func updateOpacityLabel(_ value: Double) {
@@ -352,22 +372,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func openStyles(_ sender: Any?) { showStyles() }
 
-    @objc private func cancel(_ sender: NSButton) {
-        restoreSavedOpacityAndReload()
-        close()
-    }
-
     func windowWillClose(_ notification: Notification) {
-        restoreSavedOpacityAndReload()
-    }
-
-    private func restoreSavedOpacityAndReload() {
-        let saved = store.settings.windowOpacity
-        load(store.settings)
-        NotificationCenter.default.post(
-            name: .mioTermWindowOpacityPreview,
-            object: nil,
-            userInfo: ["opacity": saved]
-        )
+        opacitySaveWorkItem?.cancel()
+        opacitySaveWorkItem = nil
+        window?.makeFirstResponder(nil)
+        persistSettings()
     }
 }

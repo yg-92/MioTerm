@@ -62,9 +62,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            let opacity = (notification.userInfo?["opacity"] as? Double)
-                ?? AppEnvironment.shared.settings.settings.windowOpacity
+            let previewOpacity = notification.userInfo?["opacity"] as? Double
             MainActor.assumeIsolated {
+                let opacity = previewOpacity ?? AppEnvironment.shared.settings.settings.windowOpacity
                 self?.window?.alphaValue = CGFloat(opacity)
             }
         }
