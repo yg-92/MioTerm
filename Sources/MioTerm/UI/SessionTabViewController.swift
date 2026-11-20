@@ -635,7 +635,7 @@ final class SessionTabViewController: NSViewController {
             let isDesktop = tab.controller is VNCController || tab.controller is RDPController
             if isDesktop {
                 tab.view.alphaValue = 1.0
-                tab.setBackgroundTranslucent(false)
+                tab.setBackgroundTranslucent(false, chromeTranslucent: opacity < 0.999)
             } else {
                 tab.view.alphaValue = 1.0
                 tab.setBackgroundTranslucent(opacity < 0.999)
@@ -1743,10 +1743,11 @@ final class TerminalTabViewController: NSViewController {
         banner.isHidden = false
     }
 
-    func setBackgroundTranslucent(_ translucent: Bool) {
+    func setBackgroundTranslucent(_ translucent: Bool, chromeTranslucent: Bool? = nil) {
+        let chrome = chromeTranslucent ?? translucent
         isBackgroundTranslucent = translucent
-        paneHeader.translucentBackdrop = translucent
-        banner.translucentBackdrop = translucent
+        paneHeader.translucentBackdrop = chrome
+        banner.translucentBackdrop = chrome
         guard isViewLoaded else { return }
         view.layer?.backgroundColor = translucent
             ? NSColor.clear.cgColor

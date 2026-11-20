@@ -120,8 +120,24 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     private func applyWindowOpacity(_ opacity: Double, blur: Double) {
         guard let window else { return }
+        if opacity < 0.999 && blur > 0.001 {
+            let effectiveAlpha = CGFloat(opacity)
+            let radius = Int32(round(min(1.0, max(0.0, blur)) * 48.0))
+            tintOverlayView.isHidden = false
+            tintOverlayView.layer?.backgroundColor = Theme.layerColor(
+                Theme.background.withAlphaComponent(effectiveAlpha),
+                for: tintOverlayView
+            )
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.alphaValue = 1.0
+            workspace.applyFrameOpacity(effectiveAlpha, blurActive: true)
+            setWindowBlurRadius(radius)
+            return
+        }
+
         if workspace.isShowingDesktopSession {
-            // 处于 VNC/RDP 桌面会话时，禁用背景虚化且保持远程桌面内部视图 100% 不透明，
+            // 仅透明（无虚化）且处于 VNC/RDP 桌面会话时，保持远程桌面内部视图 100% 不透明，
             // 仅让外围框架继承透明度。
             setWindowBlurRadius(0)
             tintOverlayView.isHidden = true
@@ -139,27 +155,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             return
         }
 
-        if opacity < 0.999 && blur > 0.001 {
-            let effectiveAlpha = CGFloat(opacity)
-            let radius = Int32(round(min(1.0, max(0.0, blur)) * 48.0))
-            tintOverlayView.isHidden = false
-            tintOverlayView.layer?.backgroundColor = Theme.layerColor(
-                Theme.background.withAlphaComponent(effectiveAlpha),
-                for: tintOverlayView
-            )
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.alphaValue = 1.0
-            workspace.applyFrameOpacity(effectiveAlpha, blurActive: true)
-            setWindowBlurRadius(radius)
-        } else {
-            setWindowBlurRadius(0)
-            tintOverlayView.isHidden = true
-            window.isOpaque = true
-            window.backgroundColor = Theme.background
-            window.alphaValue = CGFloat(opacity)
-            workspace.applyFrameOpacity(1.0, blurActive: false)
-        }
+        setWindowBlurRadius(0)
+        tintOverlayView.isHidden = true
+        window.isOpaque = true
+        window.backgroundColor = Theme.background
+        window.alphaValue = CGFloat(opacity)
+        workspace.applyFrameOpacity(1.0, blurActive: false)
     }
 
     private func setWindowBlurRadius(_ radius: Int32) {
