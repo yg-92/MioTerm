@@ -41,6 +41,8 @@ final class WorkspaceViewController: NSSplitViewController {
     private var panelItem: NSSplitViewItem?
     private let sidebarExpandButton = SidebarEdgeExpandButton()
     private var sidebarExpandTopConstraint: NSLayoutConstraint?
+    private var sidebarExpandLeadingConstraint: NSLayoutConstraint?
+    private var isSidebarExpandVisible = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -53,7 +55,7 @@ final class WorkspaceViewController: NSSplitViewController {
 
         let panelItem = NSSplitViewItem(sidebarWithViewController: sidePanel)
         panelItem.canCollapse = true
-        panelItem.minimumThickness = 220
+        panelItem.minimumThickness = 180
         panelItem.maximumThickness = 420
         panelItem.preferredThicknessFraction = 0.24
         panelItem.holdingPriority = .init(260)
@@ -152,19 +154,23 @@ final class WorkspaceViewController: NSSplitViewController {
             canBrowseFiles: SidePanelViewController.supportsFiles(controller),
             isCollapsed: panelItem.isCollapsed
         ) else { return }
-        panelItem.isCollapsed = collapsed
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panelItem.animator().isCollapsed = collapsed
+        }
     }
 
     /// 手动开合就是新的意图，自动收起记下的还原值作废。
     override func toggleSidebar(_ sender: Any?) {
         sidebarCollapse.userToggled()
         super.toggleSidebar(sender)
-        updateSidebarExpandButton()
+        updateSidebarExpandButton(animated: true)
     }
 
     override func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)
-        updateSidebarExpandButton()
+        updateSidebarExpandButton(animated: true)
     }
 
     private func installSidebarExpandButton() {
@@ -172,12 +178,16 @@ final class WorkspaceViewController: NSSplitViewController {
             self?.expandSidebarTapped(nil)
         }
         sidebarExpandButton.translatesAutoresizingMaskIntoConstraints = false
+        sidebarExpandButton.alphaValue = 0
+        sidebarExpandButton.isHidden = true
         mainArea.view.addSubview(sidebarExpandButton)
         let top = sidebarExpandButton.topAnchor.constraint(equalTo: mainArea.view.topAnchor, constant: 14)
+        let leading = sidebarExpandButton.leadingAnchor.constraint(equalTo: mainArea.view.leadingAnchor, constant: -16)
         sidebarExpandTopConstraint = top
+        sidebarExpandLeadingConstraint = leading
         NSLayoutConstraint.activate([
             top,
-            sidebarExpandButton.leadingAnchor.constraint(equalTo: mainArea.view.leadingAnchor),
+            leading,
             sidebarExpandButton.widthAnchor.constraint(equalToConstant: 16),
             sidebarExpandButton.heightAnchor.constraint(equalToConstant: 32),
         ])
@@ -188,13 +198,48 @@ final class WorkspaceViewController: NSSplitViewController {
         toggleSidebar(sender)
     }
 
-    private func updateSidebarExpandButton() {
+    private func updateSidebarExpandButton(animated: Bool = false) {
         let collapsed = panelItem?.isCollapsed == true
         let applicable = contextController == nil || SidePanelViewController.supportsFiles(contextController)
-        sidebarExpandButton.isHidden = !(collapsed && applicable)
+        let shouldShow = collapsed && applicable
+
         sidebarExpandButton.toolTip = L10n.tr(contextController == nil ? .sidebarExpandHosts : .sidebarExpandFiles)
         sidebarExpandTopConstraint?.constant = contextController == nil ? 14 : 46
         sidebarExpandButton.refreshColors()
+
+        guard shouldShow != isSidebarExpandVisible else { return }
+        isSidebarExpandVisible = shouldShow
+
+        if shouldShow {
+            sidebarExpandButton.isHidden = false
+            if animated {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.2
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    sidebarExpandButton.animator().alphaValue = 1
+                    sidebarExpandLeadingConstraint?.animator().constant = 0
+                }
+            } else {
+                sidebarExpandButton.alphaValue = 1
+                sidebarExpandLeadingConstraint?.constant = 0
+            }
+        } else if animated {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.15
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                sidebarExpandButton.animator().alphaValue = 0
+                sidebarExpandLeadingConstraint?.animator().constant = -16
+            }, completionHandler: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.isSidebarExpandVisible else { return }
+                    self.sidebarExpandButton.isHidden = true
+                }
+            })
+        } else {
+            sidebarExpandButton.alphaValue = 0
+            sidebarExpandLeadingConstraint?.constant = -16
+            sidebarExpandButton.isHidden = true
+        }
     }
 
     // MARK: - 标题栏
