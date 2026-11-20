@@ -1748,6 +1748,7 @@ final class TerminalTabViewController: NSViewController {
         isBackgroundTranslucent = translucent
         paneHeader.translucentBackdrop = chrome
         banner.translucentBackdrop = chrome
+        (controller as? TerminalController)?.setBackdropTranslucent(translucent)
         guard isViewLoaded else { return }
         view.layer?.backgroundColor = translucent
             ? NSColor.clear.cgColor

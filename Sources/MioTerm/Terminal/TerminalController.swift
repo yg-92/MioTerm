@@ -49,6 +49,7 @@ final class TerminalController: NSObject, SessionControlling, LocalProcessTermin
     private(set) var workingDirectory: String?
     private var askpassFile: URL?
     private var appliedScrollbackLines: Int
+    private var isBackdropTranslucent = false
     private var remoteTitle: String?
 
     /// 状态变更是多播的：标签容器要据此收放断线提示条，连接编排要写日志。
@@ -230,11 +231,19 @@ final class TerminalController: NSObject, SessionControlling, LocalProcessTermin
         terminalView.needsDisplay = true
     }
 
+    func setBackdropTranslucent(_ translucent: Bool) {
+        guard isBackdropTranslucent != translucent else { return }
+        isBackdropTranslucent = translucent
+        let s = AppEnvironment.shared.settings.settings
+        applyTerminalBackdrop(opacity: s.windowOpacity, blur: s.windowBackgroundBlur)
+        terminalView.needsDisplay = true
+    }
+
     private func applyTerminalBackdrop(opacity: Double, blur: Double, dark: Bool? = nil) {
         let resolvedDark = dark ?? Theme.isDark(terminalView.window?.effectiveAppearance)
         let base = Theme.terminalBackground(dark: resolvedDark)
-        if opacity < 0.999 && blur > 0.001 {
-            // 主窗口已有统一的 tintOverlayView 负责底色不透明度，终端背景设为全透明避免双重叠加。
+        if isBackdropTranslucent || (opacity < 0.999 && blur > 0.001) {
+            // 主窗口已有统一的 tintOverlayView 或半透明底色负责不透明度，终端背景设为全透明避免双重叠加。
             terminalView.nativeBackgroundColor = base.withAlphaComponent(0)
             terminalView.backgroundOpacity = 0
             terminalView.layer?.isOpaque = false
