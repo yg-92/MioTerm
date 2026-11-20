@@ -134,7 +134,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             return
         }
 
-        if opacity < 0.999 {
+        if opacity < 0.999 && blur > 0.001 {
             let effectiveAlpha = CGFloat(opacity)
             let radius = Int32(round(min(1.0, max(0.0, blur)) * 48.0))
             tintOverlayView.isHidden = false
@@ -152,7 +152,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             tintOverlayView.isHidden = true
             window.isOpaque = true
             window.backgroundColor = Theme.background
-            window.alphaValue = 1.0
+            window.alphaValue = CGFloat(opacity)
             workspace.applyFrameOpacity(1.0, blurActive: false)
         }
     }

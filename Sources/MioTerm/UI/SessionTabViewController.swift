@@ -627,6 +627,7 @@ final class SessionTabViewController: NSViewController {
         tabBar.alphaValue = 1.0
         statusBar.alphaValue = 1.0
         welcome.view.alphaValue = 1.0
+        welcome.applyBackgroundOpacity(opacity)
         for tab in tabControllers.values {
             let isDesktop = tab.controller is VNCController || tab.controller is RDPController
             if isDesktop {

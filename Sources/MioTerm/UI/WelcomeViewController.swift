@@ -36,6 +36,7 @@ final class WelcomeViewController: NSViewController {
         shortcut: "⌘,",
         action: #selector(WorkspaceViewController.showPreferences(_:))
     )
+    private var backgroundView: WelcomeBackgroundView?
     private var settingsObserver: NSObjectProtocol?
 
     deinit {
@@ -44,8 +45,13 @@ final class WelcomeViewController: NSViewController {
         }
     }
 
+    func applyBackgroundOpacity(_ opacity: CGFloat) {
+        backgroundView?.backgroundOpacity = opacity
+    }
+
     override func loadView() {
         let root = WelcomeBackgroundView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
+        backgroundView = root
         view = root
 
         let mark = NSImageView()
@@ -145,7 +151,20 @@ final class WelcomeViewController: NSViewController {
 
 @MainActor
 private final class WelcomeBackgroundView: NSView {
+    var backgroundOpacity: CGFloat = 1.0 {
+        didSet {
+            guard abs(backgroundOpacity - oldValue) > 0.001 else { return }
+            needsDisplay = true
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        guard backgroundOpacity >= 0.999 else {
+            if let gradient = NSGradient(colors: [Theme.glow.withAlphaComponent(0.35), .clear]) {
+                gradient.draw(in: bounds, angle: -90)
+            }
+            return
+        }
         Theme.background.setFill()
         bounds.fill()
 
