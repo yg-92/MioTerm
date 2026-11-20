@@ -51,6 +51,18 @@ struct TerminalPaneLayoutTests {
         #expect(layout.secondary == fourth)
     }
 
+    @Test func dissolvingBackgroundGroupKeepsCurrentSelection() {
+        var layout = TerminalPaneLayout()
+        layout.pair(left, with: right)
+        layout.select(third)
+        layout.dissolveGroup(containing: left)
+        #expect(layout.groupID(for: left) == nil)
+        #expect(layout.groupID(for: right) == nil)
+        #expect(layout.primary == third)
+        #expect(layout.secondary == nil)
+        #expect(layout.selected == third)
+    }
+
     @Test func selectingTheOtherVisiblePaneDoesNotSwapThem() {
         var layout = TerminalPaneLayout()
         layout.select(left)

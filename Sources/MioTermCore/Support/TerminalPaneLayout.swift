@@ -87,6 +87,15 @@ public struct TerminalPaneLayout {
         secondary = nil
     }
 
+    /// 解散指定会话所在分屏组；若该组当前正在显示，则保留其中一个会话单屏展示，否则不影响当前焦点。
+    public mutating func dissolveGroup(containing id: UUID) {
+        if primary == id || secondary == id {
+            unsplit()
+        } else {
+            groups.removeAll { $0.contains(id) }
+        }
+    }
+
     public mutating func remove(_ id: UUID) {
         if let index = groups.firstIndex(where: { $0.contains(id) }) {
             let group = groups.remove(at: index)

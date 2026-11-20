@@ -375,6 +375,8 @@ final class SessionTabViewController: NSViewController {
         case host(HostProfile, beside: UUID)
         case local(beside: UUID)
         case choose(UUID)
+        case ungroup(UUID)
+        case closeGroup(UUID)
         case close(UUID)
         case exit
     }
@@ -444,7 +446,14 @@ final class SessionTabViewController: NSViewController {
         let controller = order[index]
         let menu = NSMenu()
         menu.autoenablesItems = false
-        if let selected = selectedController, selected !== controller {
+        let group = paneLayout.group(containing: controller.sessionID)
+        if let group {
+            addSplitItem(to: menu, title: L10n.tr(.tabSplitUngroup), action: .ungroup(controller.sessionID))
+            addSplitItem(to: menu, title: L10n.tr(.tabSplitCloseGroup), action: .closeGroup(controller.sessionID))
+            menu.addItem(.separator())
+        }
+        if let selected = selectedController, selected !== controller,
+           !(group?.contains(selected.sessionID) ?? false) {
             addSplitItem(to: menu, title: L10n.tr(.tabSplitWithSelected, selected.title),
                          action: .existing(controller.sessionID, beside: selected.sessionID))
         } else {
@@ -483,11 +492,25 @@ final class SessionTabViewController: NSViewController {
             guard let controller = order.first(where: { $0.sessionID == id }) else { return }
             select(controller: controller)
             showSplitChooser()
+        case .ungroup(let id):
+            paneLayout.dissolveGroup(containing: id)
+            presentSelection()
+        case .closeGroup(let id):
+            closeSplitGroup(containing: id)
         case .close(let id):
             guard let index = order.firstIndex(where: { $0.sessionID == id }) else { return }
             _ = closeTab(at: index)
         case .exit:
             exitSplit()
+        }
+    }
+
+    private func closeSplitGroup(containing id: UUID) {
+        guard let group = paneLayout.group(containing: id) else { return }
+        for sessionID in [group.primary, group.secondary] {
+            if let index = order.firstIndex(where: { $0.sessionID == sessionID }) {
+                _ = closeTab(at: index)
+            }
         }
     }
 
@@ -859,7 +882,7 @@ final class SessionTabBarView: NSView {
     private func makeChip(for tab: Tab, at index: Int, selected: Bool) -> SessionTabChip {
         let chip = SessionTabChip(
             title: tab.title, symbol: nil, symbolColor: Theme.color(for: tab.state),
-            closable: true, fixedWidth: nil
+            closable: true, fixedWidth: nil, compact: tab.splitGroupID != nil
         )
         chip.toolTip = L10n.tr(.tabChipTooltip, tab.tooltip)
         chip.dragOwner = dragOwner
@@ -989,9 +1012,11 @@ final class SessionTabBarView: NSView {
 private final class SessionTabGroupView: NSView {
     private let leadingMarker = NSView()
     private let divider = NSView()
+    private weak var leftChip: SessionTabChip?
     private var active = false
 
     init(left: SessionTabChip, right: SessionTabChip) {
+        self.leftChip = left
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 9
@@ -1048,6 +1073,10 @@ private final class SessionTabGroupView: NSView {
         super.viewDidChangeEffectiveAppearance()
         refreshAppearance()
     }
+
+    override func rightMouseDown(with event: NSEvent) {
+        leftChip?.onContextMenu?(event)
+    }
 }
 
 /// 正圆状态点。`circle.fill` 这类符号的对齐矩形不是正方形，小尺寸下会被画扁；
@@ -1089,7 +1118,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
     private var hovering = false
     private var trackingArea: NSTrackingArea?
 
-    init(title: String, symbol: String?, symbolColor: NSColor, closable: Bool, fixedWidth: CGFloat?) {
+    init(title: String, symbol: String?, symbolColor: NSColor, closable: Bool, fixedWidth: CGFloat?, compact: Bool = false) {
         self.closable = closable
         self.symbol = symbol
         self.symbolColor = symbolColor
@@ -1099,7 +1128,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
         layer?.cornerCurve = .continuous
 
         titleLabel.stringValue = title
-        titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        titleLabel.font = NSFont.systemFont(ofSize: compact ? 11.5 : 12, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1126,9 +1155,11 @@ final class SessionTabChip: NSView, NSDraggingSource {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(closeButton)
 
+        let leadingInset: CGFloat = compact ? 7 : 10
+        let titleSpacing: CGFloat = compact ? 5 : 7
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 30),
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 13),
             icon.heightAnchor.constraint(equalToConstant: 13),
@@ -1137,7 +1168,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
             statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
             statusDot.widthAnchor.constraint(equalToConstant: 7),
             statusDot.heightAnchor.constraint(equalToConstant: 7),
-            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
+            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: titleSpacing),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 16),
@@ -1145,11 +1176,14 @@ final class SessionTabChip: NSView, NSDraggingSource {
         ])
 
         if closable {
+            let minWidth: CGFloat = compact ? 66 : 112
+            let maxWidth: CGFloat = compact ? 112 : 230
+            let trailingInset: CGFloat = compact ? -4 : -6
             NSLayoutConstraint.activate([
-                widthAnchor.constraint(greaterThanOrEqualToConstant: 112),
-                widthAnchor.constraint(lessThanOrEqualToConstant: 230),
+                widthAnchor.constraint(greaterThanOrEqualToConstant: minWidth),
+                widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
                 titleLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
-                closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+                closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: trailingInset),
             ])
         } else {
             NSLayoutConstraint.activate([

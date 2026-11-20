@@ -389,6 +389,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case tabSplitNewHostInOtherPane
     case tabSplitNewLocalInOtherPane
     case tabSplitExitKeepSession
+    case tabSplitUngroup
+    case tabSplitCloseGroup
     case tabSplitWithSelected
     case tabSplitChooseTerminal
     case tabScrollLeftTip
