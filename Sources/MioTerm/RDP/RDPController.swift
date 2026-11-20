@@ -214,6 +214,7 @@ final class RDPController: SessionControlling {
         eventTask = nil
         client?.stop()
         client = nil
+        desktopView.clearFramebuffer()
     }
 
     private func startClipboardPolling() {

@@ -63,6 +63,14 @@ final class VNCView: NSView {
         needsDisplay = true
     }
 
+    func clearFramebuffer() {
+        guard fbWidth != 0 || fbHeight != 0 || !framebuffer.isEmpty else { return }
+        fbWidth = 0
+        fbHeight = 0
+        framebuffer = Data()
+        needsDisplay = true
+    }
+
     func apply(_ updates: [VNCFrameUpdate]) {
         for update in updates {
             switch update {

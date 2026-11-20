@@ -506,16 +506,24 @@ final class WorkspaceViewController: NSSplitViewController {
     }
 
     @objc func showStylePreferences(_ sender: Any?) {
-        if preferences == nil { preferences = PreferencesWindowController(store: environment.settings) }
-        preferences?.showStyles(relativeTo: view.window)
+        let controller = ensurePreferencesController()
+        controller.showStyles(relativeTo: view.window)
     }
 
     @objc func showPreferences(_ sender: Any?) {
-        if preferences == nil {
-            preferences = PreferencesWindowController(store: environment.settings)
-        }
-        preferences?.show(relativeTo: view.window)
+        let controller = ensurePreferencesController()
+        controller.show(relativeTo: view.window)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func ensurePreferencesController() -> PreferencesWindowController {
+        if let preferences { return preferences }
+        let controller = PreferencesWindowController(store: environment.settings)
+        controller.onDidClose = { [weak self] in
+            self?.preferences = nil
+        }
+        preferences = controller
+        return controller
     }
 
     private func presentDetachedDesktop(_ controller: any SessionControlling, at screenPoint: NSPoint?) {
@@ -536,6 +544,9 @@ final class WorkspaceViewController: NSSplitViewController {
 
     private func presentHostForm(_ host: HostProfile) {
         let controller = HostFormWindowController(host: host, environment: environment)
+        controller.onDidClose = { [weak self] in
+            self?.hostForm = nil
+        }
         hostForm = controller
         controller.show(relativeTo: view.window)
         NSApp.activate(ignoringOtherApps: true)

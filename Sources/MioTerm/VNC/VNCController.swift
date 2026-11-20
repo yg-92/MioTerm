@@ -79,6 +79,7 @@ final class VNCController: SessionControlling {
 
     func stop() {
         stopClientOnly()
+        vncView.clearFramebuffer()
         if state.isAlive {
             state = .exited(nil)
         }

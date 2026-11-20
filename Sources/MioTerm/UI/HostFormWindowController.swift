@@ -4,7 +4,8 @@ import MioTermCore
 /// 主机配置表单。口令字段留空表示“不修改已保存的值”，避免每次编辑都要重打密码；
 /// 机密只进 Keychain，JSON 配置里不落任何口令。
 @MainActor
-final class HostFormWindowController: NSWindowController {
+final class HostFormWindowController: NSWindowController, NSWindowDelegate {
+    var onDidClose: (() -> Void)?
     private let original: HostProfile
     private let environment: AppEnvironment
 
@@ -90,6 +91,7 @@ final class HostFormWindowController: NSWindowController {
         )
         window.title = host.name.isEmpty ? L10n.tr(.hostFormNewTitle) : L10n.tr(.hostFormEditHostTitle, host.name)
         super.init(window: window)
+        window.delegate = self
         buildContents()
         load(from: host)
         window.center()
@@ -498,4 +500,8 @@ final class HostFormWindowController: NSWindowController {
     }
 
     @objc private func cancel(_ sender: NSButton) { close() }
+
+    func windowWillClose(_ notification: Notification) {
+        onDidClose?()
+    }
 }

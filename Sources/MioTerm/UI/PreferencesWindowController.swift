@@ -5,6 +5,7 @@ import MioTermCore
 /// 视觉上跟主机表单一致：标签左对齐、控件左端对齐，窗口按内容自适应高度。
 @MainActor
 final class PreferencesWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate, NSComboBoxDelegate {
+    var onDidClose: (() -> Void)?
     private let store: SettingsStore
     private var styleWindow: StylePreferencesWindowController?
     private var isLoading = false
@@ -545,6 +546,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         opacitySaveWorkItem = nil
         window?.makeFirstResponder(nil)
         persistSettings()
+        if styleWindow?.window?.isVisible != true {
+            onDidClose?()
+        }
     }
 }
 
