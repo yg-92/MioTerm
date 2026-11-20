@@ -65,6 +65,7 @@ typedef struct {
 
     ssize_t (*freerdp_settings_get_key_for_name)(const char* value);
     RdpBool (*freerdp_settings_set_string)(void* settings, size_t id, const char* val);
+    RdpBool (*freerdp_settings_set_uint16)(void* settings, size_t id, uint16_t val);
     RdpBool (*freerdp_settings_set_uint32)(void* settings, size_t id, RdpUInt32 val);
     RdpBool (*freerdp_settings_set_bool)(void* settings, size_t id, RdpBool val);
 
@@ -142,6 +143,7 @@ static bool try_load_from_dir(const char* dir) {
 
     LOAD_SYM(freerdp, freerdp_settings_get_key_for_name, "freerdp_settings_get_key_for_name");
     LOAD_SYM(freerdp, freerdp_settings_set_string, "freerdp_settings_set_string");
+    LOAD_SYM(freerdp, freerdp_settings_set_uint16, "freerdp_settings_set_uint16");
     LOAD_SYM(freerdp, freerdp_settings_set_uint32, "freerdp_settings_set_uint32");
     LOAD_SYM(freerdp, freerdp_settings_set_bool, "freerdp_settings_set_bool");
 
@@ -382,6 +384,13 @@ static void set_str_setting(void* settings, const char* name, const char* value)
     }
 }
 
+static void set_u16_setting(void* settings, const char* name, uint16_t value) {
+    ssize_t key = g_fn.freerdp_settings_get_key_for_name(name);
+    if (key >= 0) {
+        g_fn.freerdp_settings_set_uint16(settings, (size_t)key, value);
+    }
+}
+
 static void set_u32_setting(void* settings, const char* name, uint32_t value) {
     ssize_t key = g_fn.freerdp_settings_get_key_for_name(name);
     if (key >= 0) {
@@ -440,6 +449,9 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_u32_setting(settings, "FreeRDP_ColorDepth", 32);
         set_bool_setting(settings, "FreeRDP_SoftwareGdi", true);
         set_bool_setting(settings, "FreeRDP_IgnoreCertificate", true);
+        set_u32_setting(settings, "FreeRDP_TlsSecLevel", 0);
+        set_u16_setting(settings, "FreeRDP_TLSMinVersion", 0x0301);
+        set_u16_setting(settings, "FreeRDP_TLSMaxVersion", 0x0303);
         set_bool_setting(settings, "FreeRDP_NlaSecurity", true);
         set_bool_setting(settings, "FreeRDP_TlsSecurity", true);
         set_bool_setting(settings, "FreeRDP_RdpSecurity", true);
