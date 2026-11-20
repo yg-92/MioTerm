@@ -8,19 +8,21 @@ import MioTermCore
 @MainActor
 final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let workspace = WorkspaceViewController()
-    private let backdropBlurView: NSVisualEffectView = {
-        let blur = NSVisualEffectView()
-        blur.blendingMode = .behindWindow
-        blur.material = .hudWindow
-        blur.state = .active
-        blur.isHidden = true
-        return blur
-    }()
     private let tintOverlayView: NSView = {
         let view = NSView()
         view.wantsLayer = true
         view.isHidden = true
         return view
+    }()
+    private static let cgsMainConnectionID: (@convention(c) () -> UInt32)? = {
+        guard let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY),
+              let sym = dlsym(handle, "CGSMainConnectionID") else { return nil }
+        return unsafeBitCast(sym, to: (@convention(c) () -> UInt32).self)
+    }()
+    private static let cgsSetWindowBackgroundBlurRadius: (@convention(c) (UInt32, Int32, Int32) -> Int32)? = {
+        guard let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY),
+              let sym = dlsym(handle, "CGSSetWindowBackgroundBlurRadius") else { return nil }
+        return unsafeBitCast(sym, to: (@convention(c) (UInt32, Int32, Int32) -> Int32).self)
     }()
     private static let pageActions = NSToolbarItem.Identifier("mio.pageActions")
     private static let actionsSpacer = NSToolbarItem.Identifier("mio.actionsSpacer")
@@ -53,7 +55,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         window.toolbarStyle = .unified
         self.init(window: window)
         let rootController = MainWindowBackdropController(
-            backdrop: backdropBlurView,
             tintOverlay: tintOverlayView,
             content: workspace
         )
@@ -117,27 +118,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         if workspace.isShowingDesktopSession {
             // 处于 VNC/RDP 桌面会话时，禁用背景虚化且保持远程桌面内部视图 100% 不透明，
             // 仅让外围框架继承透明度。
-            backdropBlurView.isHidden = true
+            setWindowBlurRadius(0)
             tintOverlayView.isHidden = true
             if opacity < 0.999 {
                 window.alphaValue = 1.0
                 window.isOpaque = false
                 window.backgroundColor = Theme.background.withAlphaComponent(CGFloat(opacity))
-                workspace.applyFrameOpacity(CGFloat(opacity))
+                workspace.applyFrameOpacity(CGFloat(opacity), blurActive: false)
             } else {
                 window.isOpaque = true
                 window.backgroundColor = Theme.background
                 window.alphaValue = 1.0
-                workspace.applyFrameOpacity(1.0)
+                workspace.applyFrameOpacity(1.0, blurActive: false)
             }
             return
         }
 
-        if opacity < 0.999 && blur > 0.001 {
+        if opacity < 0.999 {
             let effectiveAlpha = CGFloat(opacity)
-            backdropBlurView.material = Theme.isDark(window.effectiveAppearance) ? .hudWindow : .popover
-            backdropBlurView.isHidden = false
-            backdropBlurView.alphaValue = CGFloat(blur)
+            let radius = Int32(round(min(1.0, max(0.0, blur)) * 48.0))
             tintOverlayView.isHidden = false
             tintOverlayView.layer?.backgroundColor = Theme.layerColor(
                 Theme.background.withAlphaComponent(effectiveAlpha),
@@ -147,14 +146,22 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             window.backgroundColor = .clear
             window.alphaValue = 1.0
             workspace.applyFrameOpacity(effectiveAlpha, blurActive: true)
+            setWindowBlurRadius(radius)
         } else {
-            backdropBlurView.isHidden = true
+            setWindowBlurRadius(0)
             tintOverlayView.isHidden = true
             window.isOpaque = true
             window.backgroundColor = Theme.background
-            window.alphaValue = CGFloat(opacity)
+            window.alphaValue = 1.0
             workspace.applyFrameOpacity(1.0, blurActive: false)
         }
+    }
+
+    private func setWindowBlurRadius(_ radius: Int32) {
+        guard let window, window.windowNumber > 0,
+              let connFn = Self.cgsMainConnectionID,
+              let blurFn = Self.cgsSetWindowBackgroundBlurRadius else { return }
+        _ = blurFn(connFn(), Int32(window.windowNumber), radius)
     }
 
     /// 把窗口框限制在这块屏幕的可视区域内，尺寸不够时整体缩小而不是露到屏幕外。
@@ -367,12 +374,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 /// 将全窗背景虚化视图铺在工作区下方，不干扰 `WorkspaceViewController` 的分栏布局。
 @MainActor
 private final class MainWindowBackdropController: NSViewController {
-    private let backdrop: NSVisualEffectView
     private let tintOverlay: NSView
     private let content: NSViewController
 
-    init(backdrop: NSVisualEffectView, tintOverlay: NSView, content: NSViewController) {
-        self.backdrop = backdrop
+    init(tintOverlay: NSView, content: NSViewController) {
         self.tintOverlay = tintOverlay
         self.content = content
         super.init(nibName: nil, bundle: nil)
@@ -383,18 +388,11 @@ private final class MainWindowBackdropController: NSViewController {
     override func loadView() {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 1240, height: 780))
         addChild(content)
-        backdrop.translatesAutoresizingMaskIntoConstraints = false
         tintOverlay.translatesAutoresizingMaskIntoConstraints = false
         content.view.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(backdrop)
         root.addSubview(tintOverlay)
         root.addSubview(content.view)
         NSLayoutConstraint.activate([
-            backdrop.topAnchor.constraint(equalTo: root.topAnchor),
-            backdrop.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            backdrop.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            backdrop.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-
             tintOverlay.topAnchor.constraint(equalTo: root.topAnchor),
             tintOverlay.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             tintOverlay.leadingAnchor.constraint(equalTo: root.leadingAnchor),
