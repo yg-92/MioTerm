@@ -58,6 +58,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             tintOverlay: tintOverlayView,
             content: workspace
         )
+        rootController.onAppearanceChange = { [weak self] in
+            guard let self else { return }
+            let s = AppEnvironment.shared.settings.settings
+            self.applyWindowOpacity(s.windowOpacity, blur: s.windowBackgroundBlur)
+        }
         window.contentViewController = rootController
         // 赋 contentViewController 时窗口会缩到工作区的 fitting size，
         // 首次启动想要的是设计稿尺寸，已保存的窗口帧在后面恢复。
@@ -376,6 +381,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 private final class MainWindowBackdropController: NSViewController {
     private let tintOverlay: NSView
     private let content: NSViewController
+    var onAppearanceChange: (() -> Void)?
 
     init(tintOverlay: NSView, content: NSViewController) {
         self.tintOverlay = tintOverlay
@@ -386,7 +392,8 @@ private final class MainWindowBackdropController: NSViewController {
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1240, height: 780))
+        let root = AppearanceAwareView(frame: NSRect(x: 0, y: 0, width: 1240, height: 780))
+        root.onAppearanceChange = { [weak self] in self?.onAppearanceChange?() }
         addChild(content)
         tintOverlay.translatesAutoresizingMaskIntoConstraints = false
         content.view.translatesAutoresizingMaskIntoConstraints = false

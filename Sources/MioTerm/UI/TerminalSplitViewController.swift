@@ -83,10 +83,25 @@ final class TerminalPaneSplitView: NSSplitView {
     var onTabDropHide: (() -> Void)?
 
     override var dividerThickness: CGFloat { 9 }
+    var translucentBackdrop = false {
+        didSet {
+            guard translucentBackdrop != oldValue else { return }
+            needsDisplay = true
+        }
+    }
     private var dividerHovered = false
     private var hoverTracking: NSTrackingArea?
 
     override func drawDivider(in rect: NSRect) {
+        if translucentBackdrop {
+            if dividerHovered {
+                Theme.hoverFill.setFill()
+                rect.fill()
+            }
+            (dividerHovered ? Theme.accent.withAlphaComponent(0.65) : Theme.border).setFill()
+            NSRect(x: floor(rect.midX), y: rect.minY, width: 1, height: rect.height).fill()
+            return
+        }
         (dividerHovered ? Theme.surfaceRaised : Theme.background).setFill()
         rect.fill()
         (dividerHovered ? Theme.accent.withAlphaComponent(0.55) : Theme.borderStrong).setFill()

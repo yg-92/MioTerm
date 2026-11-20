@@ -10,6 +10,12 @@ final class TerminalPaneHeaderView: NSView {
     private let directoryLabel = NSTextField(labelWithString: "")
     private let separator = NSView()
     private var active = false
+    var translucentBackdrop = false {
+        didSet {
+            guard translucentBackdrop != oldValue else { return }
+            refreshAppearance()
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -60,12 +66,21 @@ final class TerminalPaneHeaderView: NSView {
     }
 
     func refreshAppearance() {
-        layer?.backgroundColor = Theme.layerColor(active ? Theme.surfaceRaised : Theme.surface, for: self)
+        let baseSurface = active ? Theme.surfaceRaised : Theme.surface
+        let background = translucentBackdrop
+            ? baseSurface.withAlphaComponent(active ? 0.36 : 0.18)
+            : baseSurface
+        layer?.backgroundColor = Theme.layerColor(background, for: self)
         indicator.layer?.backgroundColor = Theme.layerColor(active ? Theme.accent : Theme.textTertiary, for: self)
         separator.layer?.backgroundColor = Theme.layerColor(Theme.border, for: self)
         titleLabel.font = .systemFont(ofSize: 11, weight: active ? .semibold : .medium)
         titleLabel.textColor = active ? Theme.textPrimary : Theme.textSecondary
         directoryLabel.textColor = Theme.textTertiary
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
     }
 
     override func mouseDown(with event: NSEvent) { onActivate?() }
