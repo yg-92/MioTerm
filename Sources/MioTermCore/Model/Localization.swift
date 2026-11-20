@@ -445,6 +445,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case sftpStatusItemCount
     case sftpStatusPausedByTerminal
     case sftpStatusUnavailable
+    case sftpOverlayWaitExit
     case sftpErrorOpenDir
     case sftpErrorCreateDir
     case sftpErrorRename

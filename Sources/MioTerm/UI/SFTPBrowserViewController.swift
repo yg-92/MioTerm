@@ -56,6 +56,7 @@ final class SFTPBrowserViewController: NSViewController {
     private let noticeStack = NSStackView()
     private let noticeTitle = NSTextField(labelWithString: L10n.tr(.sftpNoticeTitle))
     private let noticeDetail = NSTextField(wrappingLabelWithString: "")
+    private let followDisabledOverlay = FollowDisabledOverlayView()
     private let transferTable = NSTableView()
     private let transferScroll = NSScrollView()
 
@@ -170,11 +171,19 @@ final class SFTPBrowserViewController: NSViewController {
         ])
         treeScroll.setContentHuggingPriority(.init(1), for: .vertical)
         root.addSubview(noticeStack)
+        followDisabledOverlay.translatesAutoresizingMaskIntoConstraints = false
+        followDisabledOverlay.isHidden = true
+        root.addSubview(followDisabledOverlay)
         NSLayoutConstraint.activate([
             noticeStack.centerXAnchor.constraint(equalTo: treeScroll.centerXAnchor),
             noticeStack.centerYAnchor.constraint(equalTo: treeScroll.centerYAnchor, constant: -6),
             noticeStack.leadingAnchor.constraint(greaterThanOrEqualTo: treeScroll.leadingAnchor, constant: 16),
             noticeStack.trailingAnchor.constraint(lessThanOrEqualTo: treeScroll.trailingAnchor, constant: -16),
+
+            followDisabledOverlay.leadingAnchor.constraint(equalTo: treeScroll.leadingAnchor),
+            followDisabledOverlay.trailingAnchor.constraint(equalTo: treeScroll.trailingAnchor),
+            followDisabledOverlay.topAnchor.constraint(equalTo: treeScroll.topAnchor),
+            followDisabledOverlay.bottomAnchor.constraint(equalTo: treeScroll.bottomAnchor),
         ])
         view = root
     }
@@ -251,6 +260,7 @@ final class SFTPBrowserViewController: NSViewController {
         } else {
             statusLabel.stringValue = Self.placeholder(for: boundController, host: boundController?.host)
         }
+        updateFollowModeOverlay(contextController?.context.mode)
         transferTable.reloadData()
     }
 
@@ -300,6 +310,15 @@ final class SFTPBrowserViewController: NSViewController {
             icon.heightAnchor.constraint(equalToConstant: 28),
             noticeDetail.widthAnchor.constraint(lessThanOrEqualToConstant: 250),
         ])
+    }
+
+    private func updateFollowModeOverlay(_ mode: TerminalMode?) {
+        guard let mode, !mode.isFollowingAllowed else {
+            followDisabledOverlay.isHidden = true
+            return
+        }
+        followDisabledOverlay.update(modeName: mode.shortName)
+        followDisabledOverlay.isHidden = false
     }
 
     private func setNoticeVisible(_ visible: Bool) {
@@ -558,6 +577,7 @@ final class SFTPBrowserViewController: NSViewController {
         lastFollowSetting = followsTerminalDirectory
         listingTarget = nil
         refreshFollowToggle()
+        updateFollowModeOverlay(controller?.context.mode)
         contextToken = controller?.addContextObserver { [weak self] context in
             // 切走标签后旧标签还在输出，靠身份比对挡掉。
             guard let self, self.contextController === controller else { return }
@@ -610,6 +630,7 @@ final class SFTPBrowserViewController: NSViewController {
     /// 电平触发会让用户手动浏览到的别处，被终端随后的一条 `ls` 抢回当前目录。
     /// 规则本身在 DirectoryFollowPlanner，这里只把动作做出来。
     private func applyTerminalContext(_ context: TerminalContext) {
+        updateFollowModeOverlay(context.mode)
         let follow = followsTerminalDirectory
         let action = DirectoryFollowPlanner.decide(
             PanelFollowFacts(
@@ -793,6 +814,7 @@ final class SFTPBrowserViewController: NSViewController {
         statusLabel.stringValue = status
         retryButton.isHidden = true
         setNoticeVisible(false)
+        updateFollowModeOverlay(contextController?.context.mode)
         updateControls()
     }
 
@@ -1724,4 +1746,76 @@ private final class PathBarScrollView: NSScrollView {
         clip.scroll(to: NSPoint(x: x, y: 0))
         reflectScrolledClipView(clip)
     }
+}
+
+/// 终端进入容器或远程嵌套 Shell 等不适用宿主机文件树跟随的模式时，遮盖文件树并拦截操作。
+@MainActor
+private final class FollowDisabledOverlayView: NSView {
+    private let iconView = NSImageView()
+    private let messageLabel = NSTextField(wrappingLabelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 30, weight: .regular)
+        iconView.image = NSImage(systemSymbolName: "nosign", accessibilityDescription: nil)?
+            .withSymbolConfiguration(symbolConfig)
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+
+        messageLabel.font = .systemFont(ofSize: 11.5)
+        messageLabel.alignment = .center
+        messageLabel.maximumNumberOfLines = 0
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [iconView, messageLabel])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 34),
+            iconView.heightAnchor.constraint(equalToConstant: 34),
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            messageLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
+        ])
+        refreshAppearance()
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    func update(modeName: String) {
+        messageLabel.stringValue = L10n.tr(.sftpOverlayWaitExit, modeName)
+        refreshAppearance()
+    }
+
+    func refreshAppearance() {
+        let dark = Theme.isDark(effectiveAppearance)
+        let scrim = dark
+            ? NSColor.black.withAlphaComponent(0.54)
+            : NSColor.white.withAlphaComponent(0.68)
+        layer?.backgroundColor = scrim.cgColor
+        iconView.contentTintColor = Theme.textSecondary.withAlphaComponent(0.88)
+        messageLabel.textColor = Theme.textSecondary
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, bounds.contains(convert(point, from: superview)) else { return nil }
+        return self
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+    override func rightMouseDown(with event: NSEvent) {}
+    override func scrollWheel(with event: NSEvent) {}
 }
