@@ -286,6 +286,30 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         values[min(max(popup.indexOfSelectedItem, 0), values.count - 1)]
     }
 
+    func show(relativeTo anchorWindow: NSWindow?) {
+        position(relativeTo: anchorWindow)
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func position(relativeTo anchorWindow: NSWindow?) {
+        guard let window else { return }
+        guard let anchor = anchorWindow else {
+            window.center()
+            return
+        }
+        let anchorFrame = anchor.frame
+        let prefSize = window.frame.size
+        let visible = (anchor.screen ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        // 水平居中于主窗口，顶部比主窗口顶部低 56pt（避开主窗口工具栏），并限制在屏幕可视区域内。
+        let rawX = anchorFrame.midX - prefSize.width / 2
+        let rawY = anchorFrame.maxY - 56 - prefSize.height
+        let x = min(max(rawX, visible.minX), max(visible.minX, visible.maxX - prefSize.width))
+        let y = min(max(rawY, visible.minY), max(visible.minY, visible.maxY - prefSize.height))
+        window.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
     @objc private func controlChanged(_ sender: Any?) {
         persistSettings()
     }

@@ -405,8 +405,7 @@ final class WorkspaceViewController: NSSplitViewController {
         if preferences == nil {
             preferences = PreferencesWindowController(store: environment.settings)
         }
-        preferences?.showWindow(nil)
-        preferences?.window?.makeKeyAndOrderFront(nil)
+        preferences?.show(relativeTo: view.window)
         NSApp.activate(ignoringOtherApps: true)
     }
 
