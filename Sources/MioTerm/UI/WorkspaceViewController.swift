@@ -39,19 +39,7 @@ final class WorkspaceViewController: NSSplitViewController {
     private static let splitAutosaveName = "MioTermWorkspaceSplit"
     private static let sidebarCollapsedDefault = "MioTerm.sidebarCollapsed"
     private var panelItem: NSSplitViewItem?
-    private let sidebarExpandButton: NSButton = {
-        let button = NSButton(title: L10n.tr(.sidebarExpandHosts), target: nil, action: nil)
-        button.isBordered = false
-        button.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: nil)
-        button.imagePosition = .imageLeading
-        button.font = .systemFont(ofSize: 12, weight: .semibold)
-        button.contentTintColor = Theme.accent
-        return button
-    }()
-    private lazy var sidebarExpandBar = GlassBarView(
-        content: sidebarExpandButton,
-        padding: NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 12)
-    )
+    private let sidebarExpandButton = SidebarEdgeExpandButton()
     private var sidebarExpandTopConstraint: NSLayoutConstraint?
 
     override func viewDidLoad() {
@@ -180,15 +168,18 @@ final class WorkspaceViewController: NSSplitViewController {
     }
 
     private func installSidebarExpandButton() {
-        sidebarExpandButton.target = self
-        sidebarExpandButton.action = #selector(expandSidebarTapped(_:))
-        sidebarExpandBar.translatesAutoresizingMaskIntoConstraints = false
-        mainArea.view.addSubview(sidebarExpandBar)
-        let top = sidebarExpandBar.topAnchor.constraint(equalTo: mainArea.view.topAnchor, constant: 12)
+        sidebarExpandButton.onTap = { [weak self] in
+            self?.expandSidebarTapped(nil)
+        }
+        sidebarExpandButton.translatesAutoresizingMaskIntoConstraints = false
+        mainArea.view.addSubview(sidebarExpandButton)
+        let top = sidebarExpandButton.topAnchor.constraint(equalTo: mainArea.view.topAnchor, constant: 14)
         sidebarExpandTopConstraint = top
         NSLayoutConstraint.activate([
             top,
-            sidebarExpandBar.leadingAnchor.constraint(equalTo: mainArea.view.leadingAnchor, constant: 12),
+            sidebarExpandButton.leadingAnchor.constraint(equalTo: mainArea.view.leadingAnchor),
+            sidebarExpandButton.widthAnchor.constraint(equalToConstant: 20),
+            sidebarExpandButton.heightAnchor.constraint(equalToConstant: 40),
         ])
     }
 
@@ -200,9 +191,10 @@ final class WorkspaceViewController: NSSplitViewController {
     private func updateSidebarExpandButton() {
         let collapsed = panelItem?.isCollapsed == true
         let applicable = contextController == nil || SidePanelViewController.supportsFiles(contextController)
-        sidebarExpandBar.isHidden = !(collapsed && applicable)
-        sidebarExpandButton.title = L10n.tr(contextController == nil ? .sidebarExpandHosts : .sidebarExpandFiles)
-        sidebarExpandTopConstraint?.constant = contextController == nil ? 12 : 46
+        sidebarExpandButton.isHidden = !(collapsed && applicable)
+        sidebarExpandButton.toolTip = L10n.tr(contextController == nil ? .sidebarExpandHosts : .sidebarExpandFiles)
+        sidebarExpandTopConstraint?.constant = contextController == nil ? 14 : 46
+        sidebarExpandButton.refreshColors()
     }
 
     // MARK: - 标题栏
@@ -627,5 +619,75 @@ extension WorkspaceViewController: NSMenuItemValidation {
         default:
             return true
         }
+    }
+}
+
+/// 贴在主区域左上方边框的半圆形展开按钮（左侧平齐贴边、右侧半圆弧，内含 `>` 图标）。
+@MainActor
+private final class SidebarEdgeExpandButton: NSView {
+    var onTap: (() -> Void)?
+    private let iconView = NSImageView()
+    private var trackingAreaRef: NSTrackingArea?
+    private var hovered = false {
+        didSet { refreshColors() }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 20
+        layer?.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        layer?.borderWidth = 1
+
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .bold)
+        iconView.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(symbolConfig)
+        iconView.contentTintColor = Theme.accent
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(iconView)
+        NSLayoutConstraint.activate([
+            iconView.centerXAnchor.constraint(equalTo: centerXAnchor, constant: -1),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 12),
+            iconView.heightAnchor.constraint(equalToConstant: 14),
+        ])
+        refreshColors()
+    }
+
+    required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef { removeTrackingArea(trackingAreaRef) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingAreaRef = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+
+    override func mouseDown(with event: NSEvent) {
+        onTap?()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshColors()
+    }
+
+    func refreshColors() {
+        let bg = hovered ? Theme.accentSoft : Theme.surfaceRaised
+        layer?.backgroundColor = Theme.layerColor(bg, for: self)
+        layer?.borderColor = Theme.layerColor(hovered ? Theme.accent : Theme.border, for: self)
+        iconView.contentTintColor = Theme.accent
     }
 }
