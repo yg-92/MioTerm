@@ -39,6 +39,20 @@ final class WorkspaceViewController: NSSplitViewController {
     private static let splitAutosaveName = "MioTermWorkspaceSplit"
     private static let sidebarCollapsedDefault = "MioTerm.sidebarCollapsed"
     private var panelItem: NSSplitViewItem?
+    private let sidebarExpandButton: NSButton = {
+        let button = NSButton(title: L10n.tr(.sidebarExpandHosts), target: nil, action: nil)
+        button.isBordered = false
+        button.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: nil)
+        button.imagePosition = .imageLeading
+        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.contentTintColor = Theme.accent
+        return button
+    }()
+    private lazy var sidebarExpandBar = GlassBarView(
+        content: sidebarExpandButton,
+        padding: NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 12)
+    )
+    private var sidebarExpandTopConstraint: NSLayoutConstraint?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -79,6 +93,8 @@ final class WorkspaceViewController: NSSplitViewController {
         }
         // 标签栏与主页都归会话控制器管：没有选中会话时它自己显示欢迎页。
         mainArea.show(sessions)
+        installSidebarExpandButton()
+        updateSidebarExpandButton()
         NotificationCenter.default.addObserver(
             forName: .mioTermSettingsDidChange,
             object: nil,
@@ -87,6 +103,7 @@ final class WorkspaceViewController: NSSplitViewController {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.updateTitlebar(for: self.contextController)
+                self.updateSidebarExpandButton()
             }
         }
     }
@@ -131,6 +148,7 @@ final class WorkspaceViewController: NSSplitViewController {
         }
         applySidebarCollapse(for: controller)
         observeContext(of: controller)
+        updateSidebarExpandButton()
         onPresentationChange?(controller)
     }
 
@@ -153,6 +171,38 @@ final class WorkspaceViewController: NSSplitViewController {
     override func toggleSidebar(_ sender: Any?) {
         sidebarCollapse.userToggled()
         super.toggleSidebar(sender)
+        updateSidebarExpandButton()
+    }
+
+    override func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        updateSidebarExpandButton()
+    }
+
+    private func installSidebarExpandButton() {
+        sidebarExpandButton.target = self
+        sidebarExpandButton.action = #selector(expandSidebarTapped(_:))
+        sidebarExpandBar.translatesAutoresizingMaskIntoConstraints = false
+        mainArea.view.addSubview(sidebarExpandBar)
+        let top = sidebarExpandBar.topAnchor.constraint(equalTo: mainArea.view.topAnchor, constant: 12)
+        sidebarExpandTopConstraint = top
+        NSLayoutConstraint.activate([
+            top,
+            sidebarExpandBar.leadingAnchor.constraint(equalTo: mainArea.view.leadingAnchor, constant: 12),
+        ])
+    }
+
+    @objc private func expandSidebarTapped(_ sender: Any?) {
+        guard panelItem?.isCollapsed == true else { return }
+        toggleSidebar(sender)
+    }
+
+    private func updateSidebarExpandButton() {
+        let collapsed = panelItem?.isCollapsed == true
+        let applicable = contextController == nil || SidePanelViewController.supportsFiles(contextController)
+        sidebarExpandBar.isHidden = !(collapsed && applicable)
+        sidebarExpandButton.title = L10n.tr(contextController == nil ? .sidebarExpandHosts : .sidebarExpandFiles)
+        sidebarExpandTopConstraint?.constant = contextController == nil ? 12 : 46
     }
 
     // MARK: - 标题栏

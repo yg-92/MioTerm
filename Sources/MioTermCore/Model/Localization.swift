@@ -318,6 +318,8 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case prefTabTerminal
     case prefTabConnection
     case prefTabRemoteDesktop
+    case sidebarExpandHosts
+    case sidebarExpandFiles
     case prefRemoteControlKey
     case prefRemoteOptionKey
     case authAutomatic
