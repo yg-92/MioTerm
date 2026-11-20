@@ -37,6 +37,8 @@ final class RDPController: SessionControlling {
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
+    private var resizeTask: Task<Void, Never>?
+    private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
     private var activeModifierFlags: NSEvent.ModifierFlags = []
     private var keyMapping = AppEnvironment.shared.settings.settings.remoteKeyMapping
 
@@ -67,6 +69,9 @@ final class RDPController: SessionControlling {
         }
         desktopView.onFocus = { [weak self] in
             self?.onFocus?()
+        }
+        desktopView.onResize = { [weak self] size in
+            self?.scheduleResize(for: size)
         }
         desktopView.onSendCtrlAltDel = { [weak self] in
             self?.sendCtrlAltDel()
@@ -145,12 +150,22 @@ final class RDPController: SessionControlling {
         switch event {
         case .connected(let desktopName, let width, let height):
             state = .running
+            currentRemoteSize = (width, height)
             desktopView.configureFramebuffer(width: width, height: height)
             if !desktopName.isEmpty && (host?.name.isEmpty ?? true) {
                 title = desktopName
                 onTitleChange?(desktopName)
             }
+            let viewSize = desktopView.bounds.size
+            if viewSize.width >= 200, viewSize.height >= 200 {
+                scheduleResize(for: viewSize)
+            }
         case .frameUpdates(let updates):
+            for update in updates {
+                if case .resize(let width, let height) = update {
+                    currentRemoteSize = (width, height)
+                }
+            }
             desktopView.apply(updates)
         case .clipboard, .bell:
             break
@@ -166,11 +181,27 @@ final class RDPController: SessionControlling {
     }
 
     func stop() {
+        resizeTask?.cancel()
+        resizeTask = nil
         syncModifiers([])
         eventTask?.cancel()
         eventTask = nil
         client?.stop()
         client = nil
+    }
+
+    private func scheduleResize(for size: CGSize) {
+        let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
+        let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
+        guard abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4 else {
+            return
+        }
+        resizeTask?.cancel()
+        resizeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard let self, !Task.isCancelled, self.state == .running else { return }
+            self.client?.requestResize(width: targetWidth, height: targetHeight)
+        }
     }
 
     func focus() {

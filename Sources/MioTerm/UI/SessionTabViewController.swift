@@ -1184,9 +1184,10 @@ private final class SessionTabGroupView: NSView {
         layer?.backgroundColor = active
             ? Theme.layerColor(Theme.selectedTab, for: self)
             : Theme.layerColor(Theme.surfaceRaised.withAlphaComponent(0.24), for: self)
+        layer?.borderWidth = active ? 1 : 0
         layer?.borderColor = active
             ? Theme.layerColor(Theme.accent.withAlphaComponent(0.55), for: self)
-            : Theme.layerColor(Theme.borderStrong.withAlphaComponent(0.5), for: self)
+            : nil
         divider.layer?.backgroundColor = Theme.layerColor(Theme.borderStrong, for: self)
     }
 

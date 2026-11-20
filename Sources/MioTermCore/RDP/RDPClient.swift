@@ -120,6 +120,14 @@ public final class RDPClient: @unchecked Sendable {
         mio_rdp_send_unicode(activeSession, down, code)
     }
 
+    public func requestResize(width: Int, height: Int) {
+        stateLock.lock()
+        let activeSession = session
+        stateLock.unlock()
+        guard let activeSession, width >= 200, height >= 200 else { return }
+        mio_rdp_resize(activeSession, UInt32(width), UInt32(height))
+    }
+
     // MARK: - 会话循环
 
     private func runSession() {

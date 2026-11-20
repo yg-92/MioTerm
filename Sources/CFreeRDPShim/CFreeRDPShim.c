@@ -9,6 +9,7 @@
 // FreeRDP 3.x ABI offsets (verified on arm64 macOS FreeRDP 3.33.1)
 #define RDP_CONTEXT_SIZE 1024
 #define RDP_CONTEXT_LAST_ERROR_OFFSET 24
+#define RDP_CONTEXT_PUBSUB_OFFSET 144
 #define RDP_CONTEXT_GDI_OFFSET 264
 #define RDP_CONTEXT_CHANNELS_OFFSET 288
 #define RDP_CONTEXT_INPUT_OFFSET 304
@@ -31,6 +32,10 @@
 #define RDP_GDI_HEIGHT_OFFSET 12
 #define RDP_GDI_STRIDE_OFFSET 16
 #define RDP_GDI_PRIMARY_BUFFER_OFFSET 64
+
+#define RDP_EVENT_CHANNEL_NAME_OFFSET 16
+#define RDP_EVENT_CHANNEL_INTERFACE_OFFSET 24
+#define RDP_DISP_SEND_LAYOUT_OFFSET 24
 
 #define MIO_PIXEL_FORMAT_BGRX32 0x20040888u
 
@@ -71,6 +76,7 @@ typedef struct {
     RdpBool (*input_send_unicode_keyboard_event)(void* input, uint16_t flags, uint16_t code);
 
     RdpUInt32 (*wait_for_multiple_objects)(RdpUInt32 count, const void** handles, RdpBool wait_all, RdpUInt32 ms);
+    int (*pubsub_subscribe)(void* pubSub, const char* eventName, void (*handler)(void* context, const void* e));
 
     int (*client_parse_args)(void* settings, int argc, char** argv, RdpBool allow_unknown);
     RdpBool (*client_load_addins)(void* channels, void* settings);
@@ -149,6 +155,8 @@ static bool try_load_from_dir(const char* dir) {
     LOAD_SYM(winpr, wait_for_multiple_objects, "WaitForMultipleObjects");
     #undef LOAD_SYM
 
+    g_fn.pubsub_subscribe = dlsym(winpr, "PubSub_Subscribe");
+
     if (client) {
         g_fn.client_parse_args = dlsym(client, "freerdp_client_settings_parse_command_line_arguments");
         g_fn.client_load_addins = dlsym(client, "freerdp_client_load_addins");
@@ -196,25 +204,77 @@ const char* mio_freerdp_library_path(void) {
 struct MioRdpSession {
     void* instance;
     void* context;
+    void* disp;
     MioRdpCallbacks callbacks;
     void* userdata;
+    pthread_mutex_t lock;
+    uint32_t pending_width;
+    uint32_t pending_height;
+    bool resize_pending;
     bool gdi_initialized;
     bool connected;
 };
+
+typedef struct {
+    uint32_t Flags;
+    int32_t Left;
+    int32_t Top;
+    uint32_t Width;
+    uint32_t Height;
+    uint32_t PhysicalWidth;
+    uint32_t PhysicalHeight;
+    uint32_t Orientation;
+    uint32_t DesktopScaleFactor;
+    uint32_t DeviceScaleFactor;
+} MioDisplayMonitorLayout;
+
+typedef RdpUInt32 (*MioDispSendLayoutFn)(void* disp, RdpUInt32 num_monitors, MioDisplayMonitorLayout* monitors);
 
 static MioRdpSession* session_from_context(void* context) {
     if (!context) return NULL;
     return (MioRdpSession*)ptr_at(context, RDP_CONTEXT_SIZE);
 }
 
+static void cb_channel_connected(void* context, const void* e) {
+    MioRdpSession* session = session_from_context(context);
+    if (!session || !e) return;
+    const char* name = *(const char**)((const char*)e + RDP_EVENT_CHANNEL_NAME_OFFSET);
+    void* iface = *(void**)((const char*)e + RDP_EVENT_CHANNEL_INTERFACE_OFFSET);
+    if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0) {
+        pthread_mutex_lock(&session->lock);
+        session->disp = iface;
+        pthread_mutex_unlock(&session->lock);
+    }
+}
+
+static void cb_channel_disconnected(void* context, const void* e) {
+    MioRdpSession* session = session_from_context(context);
+    if (!session || !e) return;
+    const char* name = *(const char**)((const char*)e + RDP_EVENT_CHANNEL_NAME_OFFSET);
+    if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0) {
+        pthread_mutex_lock(&session->lock);
+        session->disp = NULL;
+        pthread_mutex_unlock(&session->lock);
+    }
+}
+
 static RdpBool cb_pre_connect(void* instance) {
     if (!instance) return 0;
     void* context = ptr_at(instance, RDP_INST_CONTEXT_OFFSET);
-    if (context && g_fn.client_load_addins) {
-        void* channels = ptr_at(context, RDP_CONTEXT_CHANNELS_OFFSET);
-        void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
-        if (channels && settings) {
-            g_fn.client_load_addins(channels, settings);
+    if (context) {
+        if (g_fn.pubsub_subscribe) {
+            void* pubsub = ptr_at(context, RDP_CONTEXT_PUBSUB_OFFSET);
+            if (pubsub) {
+                g_fn.pubsub_subscribe(pubsub, "ChannelConnected", cb_channel_connected);
+                g_fn.pubsub_subscribe(pubsub, "ChannelDisconnected", cb_channel_disconnected);
+            }
+        }
+        if (g_fn.client_load_addins) {
+            void* channels = ptr_at(context, RDP_CONTEXT_CHANNELS_OFFSET);
+            void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
+            if (channels && settings) {
+                g_fn.client_load_addins(channels, settings);
+            }
         }
     }
     return 1;
@@ -365,6 +425,7 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
     session->context = context;
     session->callbacks = callbacks;
     session->userdata = userdata;
+    pthread_mutex_init(&session->lock, NULL);
     set_ptr_at(context, RDP_CONTEXT_SIZE, session);
 
     void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
@@ -386,6 +447,9 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_RedirectDrives", true);
         set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", true);
         set_bool_setting(settings, "FreeRDP_RedirectClipboard", true);
+        set_bool_setting(settings, "FreeRDP_SupportDynamicChannels", true);
+        set_bool_setting(settings, "FreeRDP_SupportDisplayControl", true);
+        set_bool_setting(settings, "FreeRDP_DynamicResolutionUpdate", true);
 
         if (config->shared_dir && config->shared_dir[0] && g_fn.client_parse_args) {
             char drive_arg[1024];
@@ -438,6 +502,34 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
         }
         return -1;
     }
+
+    void* disp = NULL;
+    uint32_t req_w = 0;
+    uint32_t req_h = 0;
+    bool should_resize = false;
+    pthread_mutex_lock(&session->lock);
+    if (session->resize_pending && session->disp) {
+        disp = session->disp;
+        req_w = session->pending_width;
+        req_h = session->pending_height;
+        session->resize_pending = false;
+        should_resize = true;
+    }
+    pthread_mutex_unlock(&session->lock);
+
+    if (should_resize && disp) {
+        MioDispSendLayoutFn send_layout = (MioDispSendLayoutFn)ptr_at(disp, RDP_DISP_SEND_LAYOUT_OFFSET);
+        if (send_layout) {
+            MioDisplayMonitorLayout layout;
+            memset(&layout, 0, sizeof(layout));
+            layout.Flags = 0x00000001; // DISPLAY_CONTROL_MONITOR_PRIMARY
+            layout.Width = req_w;
+            layout.Height = req_h;
+            layout.DesktopScaleFactor = 100;
+            layout.DeviceScaleFactor = 100;
+            send_layout(disp, 1, &layout);
+        }
+    }
     return 1;
 }
 
@@ -458,7 +550,21 @@ void mio_rdp_destroy(MioRdpSession* session) {
         session->instance = NULL;
         session->context = NULL;
     }
+    pthread_mutex_destroy(&session->lock);
     free(session);
+}
+
+void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height) {
+    if (!session || !session->connected) return;
+    uint32_t w = width < 200 ? 200 : (width > 8192 ? 8192 : width);
+    uint32_t h = height < 200 ? 200 : (height > 8192 ? 8192 : height);
+    w = (w + 1u) & ~1u;
+    h = (h + 1u) & ~1u;
+    pthread_mutex_lock(&session->lock);
+    session->pending_width = w;
+    session->pending_height = h;
+    session->resize_pending = true;
+    pthread_mutex_unlock(&session->lock);
 }
 
 void mio_rdp_send_mouse(MioRdpSession* session, uint16_t flags, uint16_t x, uint16_t y) {

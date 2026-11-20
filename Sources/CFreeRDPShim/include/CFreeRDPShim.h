@@ -41,6 +41,7 @@ void mio_rdp_destroy(MioRdpSession* session);
 void mio_rdp_send_mouse(MioRdpSession* session, uint16_t flags, uint16_t x, uint16_t y);
 void mio_rdp_send_key(MioRdpSession* session, bool down, uint32_t rdp_scancode);
 void mio_rdp_send_unicode(MioRdpSession* session, bool down, uint16_t code);
+void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height);
 
 #ifdef __cplusplus
 }

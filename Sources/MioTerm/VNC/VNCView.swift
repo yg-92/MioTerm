@@ -14,6 +14,7 @@ final class VNCView: NSView {
     var onRawFlagsChanged: ((NSEvent) -> Bool)?
     var shouldInterceptCommandEquivalent: ((NSEvent) -> Bool)?
     var onFocus: (() -> Void)?
+    var onResize: ((CGSize) -> Void)?
     var onSendCtrlAltDel: (() -> Void)?
     var onSyncClipboard: (() -> Void)?
     var onSendFiles: (([URL]) -> Void)? {
@@ -35,6 +36,7 @@ final class VNCView: NSView {
     private var activeModifierFlags: NSEvent.ModifierFlags = []
     private var pointerInside = false
     private var lastRemotePoint: (Int, Int)?
+    private var lastReportedSize: CGSize = .zero
 
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
 
@@ -92,6 +94,16 @@ final class VNCView: NSView {
         cgContext.interpolationQuality = .high
         cgContext.draw(image, in: targetRect)
         cgContext.restoreGState()
+    }
+
+    override func layout() {
+        super.layout()
+        let size = bounds.size
+        guard size.width >= 200, size.height >= 200 else { return }
+        if abs(size.width - lastReportedSize.width) >= 4 || abs(size.height - lastReportedSize.height) >= 4 {
+            lastReportedSize = size
+            onResize?(size)
+        }
     }
 
     override func updateTrackingAreas() {
