@@ -302,6 +302,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     @objc private func settingsDidChange() {
         applyLocalization()
         refreshTheme()
+        applyWindowOpacity(store.settings.windowOpacity)
     }
 
     private func applyLocalization() {
@@ -348,6 +349,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         accentPopup.selectItem(at: AccentColor.allCases.firstIndex(of: settings.accent) ?? 0)
         opacitySlider.doubleValue = settings.windowOpacity
         updateOpacityLabel(settings.windowOpacity)
+        applyWindowOpacity(settings.windowOpacity)
         if let index = availableFonts.firstIndex(of: settings.terminalFontName) {
             fontPopup.selectItem(at: index)
         } else {
@@ -471,6 +473,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     @objc private func opacityChanged(_ sender: NSSlider) {
         let value = sender.doubleValue
         updateOpacityLabel(value)
+        applyWindowOpacity(value)
         NotificationCenter.default.post(
             name: .mioTermWindowOpacityPreview,
             object: nil,
@@ -482,6 +485,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         }
         opacitySaveWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    private func applyWindowOpacity(_ opacity: Double) {
+        window?.alphaValue = CGFloat(opacity)
     }
 
     private func updateOpacityLabel(_ value: Double) {

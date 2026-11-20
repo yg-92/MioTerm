@@ -33,6 +33,9 @@ final class SidePanelViewController: NSViewController {
     private let content = ContainerViewController()
     private let divider = NSView()
     private var filesAvailable = false
+    private var hasActiveSession = false
+    private var contentTopWithSwitcher: NSLayoutConstraint?
+    private var contentTopWithoutSwitcher: NSLayoutConstraint?
     private var autoSwitchedFor: UUID?
     private(set) var mode: Mode = .hosts
 
@@ -67,6 +70,11 @@ final class SidePanelViewController: NSViewController {
         root.addSubview(switcher)
         root.addSubview(contentRoot)
         root.addSubview(divider)
+        switcher.isHidden = !hasActiveSession
+        let withSwitcher = contentRoot.topAnchor.constraint(equalTo: switcher.bottomAnchor, constant: 8)
+        let withoutSwitcher = contentRoot.topAnchor.constraint(equalTo: root.topAnchor, constant: 8)
+        contentTopWithSwitcher = withSwitcher
+        contentTopWithoutSwitcher = withoutSwitcher
         NSLayoutConstraint.activate([
             switcher.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
             switcher.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
@@ -75,7 +83,7 @@ final class SidePanelViewController: NSViewController {
             switcher.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
             switcher.heightAnchor.constraint(equalToConstant: 26),
 
-            contentRoot.topAnchor.constraint(equalTo: switcher.bottomAnchor, constant: 8),
+            hasActiveSession ? withSwitcher : withoutSwitcher,
             contentRoot.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             contentRoot.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             contentRoot.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -103,6 +111,12 @@ final class SidePanelViewController: NSViewController {
     }
 
     func bind(to controller: (any SessionControlling)?) {
+        let active = controller != nil
+        hasActiveSession = active
+        switcher.isHidden = !active
+        contentTopWithSwitcher?.isActive = active
+        contentTopWithoutSwitcher?.isActive = !active
+
         let canBrowse = Self.supportsFiles(controller)
         filesAvailable = canBrowse
         modeSwitcher.setEnabled(canBrowse, at: Mode.files.rawValue)
