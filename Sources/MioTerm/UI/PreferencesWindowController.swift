@@ -45,6 +45,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
     private let optionKeyPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
 
     private let styleButton = NSButton(title: L10n.tr(.prefStyleButton), target: nil, action: nil)
+    private let tabView = NSTabView()
+    private var tabItems: [(NSTabViewItem, L10nKey)] = []
     private var localizedLabels: [(NSTextField, L10nKey)] = []
 
     private static let labelWidth: CGFloat = 128
@@ -167,48 +169,79 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         opacityRow.orientation = .horizontal
         opacityRow.spacing = 8
 
-        let grid = NSGridView(views: [
-            [label(.prefLanguage), languagePopup],
-            [label(.prefAppearance), appearancePopup],
-            [label(.prefContrast), contrastPopup],
-            [label(.prefAccent), accentPopup],
-            [label(.prefCustomTheme), styleButton],
-            [label(.prefWindowOpacity), opacityRow],
-            [label(.prefTerminalFont), fontPopup],
-            [label(.prefTerminalFontSize), fontSizePopup],
-            [label(.prefTerminalType), terminalTypeCombo],
-            [NSView(), terminalTypeHint],
-            [label(.prefTreeFontSize), treeFontSizePopup],
-            [label(.prefTreeIconSize), treeIconSizePopup],
-            [label(.prefScrollback), scrollbackField],
-            [label(.prefBell), bellCheckbox],
-            [label(.prefFollowDirectory), followCheckbox],
-            [label(.prefUploadChunk), chunkField],
-            [label(.prefMaxConcurrent), concurrencyField],
-            [label(.prefConnectTimeout), timeoutField],
-            [label(.prefKeepalive), keepaliveField],
-            [label(.prefRemoteCommandKey), commandKeyPopup],
-            [label(.prefRemoteControlKey), controlKeyPopup],
-            [label(.prefRemoteOptionKey), optionKeyPopup],
-        ])
-        grid.rowSpacing = 10
-        grid.columnSpacing = 12
-        grid.column(at: 0).xPlacement = .leading
-        grid.column(at: 1).xPlacement = .leading
+        tabView.tabViewType = .topTabsBezelBorder
+        tabItems = [
+            makeTab(key: .prefTabAppearance, rows: [
+                [label(.prefLanguage), languagePopup],
+                [label(.prefAppearance), appearancePopup],
+                [label(.prefContrast), contrastPopup],
+                [label(.prefAccent), accentPopup],
+                [label(.prefCustomTheme), styleButton],
+                [label(.prefWindowOpacity), opacityRow],
+                [label(.prefTreeFontSize), treeFontSizePopup],
+                [label(.prefTreeIconSize), treeIconSizePopup],
+            ]),
+            makeTab(key: .prefTabTerminal, rows: [
+                [label(.prefTerminalFont), fontPopup],
+                [label(.prefTerminalFontSize), fontSizePopup],
+                [label(.prefTerminalType), terminalTypeCombo],
+                [NSView(), terminalTypeHint],
+                [label(.prefScrollback), scrollbackField],
+                [label(.prefBell), bellCheckbox],
+                [label(.prefFollowDirectory), followCheckbox],
+            ]),
+            makeTab(key: .prefTabConnection, rows: [
+                [label(.prefConnectTimeout), timeoutField],
+                [label(.prefKeepalive), keepaliveField],
+                [label(.prefUploadChunk), chunkField],
+                [label(.prefMaxConcurrent), concurrencyField],
+            ]),
+            makeTab(key: .prefTabRemoteDesktop, rows: [
+                [label(.prefRemoteCommandKey), commandKeyPopup],
+                [label(.prefRemoteControlKey), controlKeyPopup],
+                [label(.prefRemoteOptionKey), optionKeyPopup],
+            ]),
+        ]
+        for (item, _) in tabItems {
+            tabView.addTabViewItem(item)
+        }
 
         let container = NSView()
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(grid)
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(tabView)
         NSLayoutConstraint.activate([
-            grid.topAnchor.constraint(equalTo: container.topAnchor, constant: 22),
-            grid.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
-            grid.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -24),
-            grid.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -22),
+            tabView.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+            tabView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            tabView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            tabView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
         ])
         window.contentView = container
         // 按内容定高宽：以前写死 420，行数一多底部按钮就被裁掉，点起来像没反应。
         window.setContentSize(container.fittingSize)
         window.minSize = window.frame.size
+    }
+
+    private func makeTab(key: L10nKey, rows: [[NSView]]) -> (NSTabViewItem, L10nKey) {
+        let grid = NSGridView(views: rows)
+        grid.rowSpacing = 10
+        grid.columnSpacing = 12
+        grid.column(at: 0).xPlacement = .leading
+        grid.column(at: 1).xPlacement = .leading
+
+        let page = NSView()
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        page.addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.topAnchor.constraint(equalTo: page.topAnchor, constant: 18),
+            grid.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 18),
+            grid.trailingAnchor.constraint(lessThanOrEqualTo: page.trailingAnchor, constant: -18),
+            grid.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor, constant: -18),
+        ])
+
+        let item = NSTabViewItem(identifier: key)
+        item.label = L10n.tr(key)
+        item.view = page
+        return (item, key)
     }
 
     /// 标签与内容都靠左；固定标签列宽，右侧控件才会在同一条竖线上。
@@ -226,6 +259,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
 
     private func applyLocalization() {
         window?.title = L10n.tr(.preferencesTitle)
+        for (item, key) in tabItems {
+            item.label = L10n.tr(key)
+        }
         for (field, key) in localizedLabels {
             field.stringValue = L10n.tr(key)
         }

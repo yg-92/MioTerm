@@ -314,6 +314,10 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case remoteModifierDisabled
     case prefRemoteKeySection
     case prefRemoteCommandKey
+    case prefTabAppearance
+    case prefTabTerminal
+    case prefTabConnection
+    case prefTabRemoteDesktop
     case prefRemoteControlKey
     case prefRemoteOptionKey
     case authAutomatic
