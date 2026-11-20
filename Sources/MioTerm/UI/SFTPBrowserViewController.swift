@@ -133,6 +133,7 @@ final class SFTPBrowserViewController: NSViewController {
         treeScroll.autohidesScrollers = true
         treeScroll.borderType = .noBorder
         treeScroll.drawsBackground = false
+        treeScroll.backgroundColor = .clear
         treeScroll.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
         transferScroll.documentView = transferTable
@@ -140,6 +141,7 @@ final class SFTPBrowserViewController: NSViewController {
         transferScroll.autohidesScrollers = true
         transferScroll.borderType = .noBorder
         transferScroll.drawsBackground = false
+        transferScroll.backgroundColor = .clear
         transferScroll.isHidden = true
         transferScroll.setContentCompressionResistancePriority(.init(1), for: .horizontal)
 
@@ -435,6 +437,7 @@ final class SFTPBrowserViewController: NSViewController {
     private func configureTables() {
         fileTable.headerView = nil
         fileTable.style = .sourceList
+        fileTable.backgroundColor = .clear
         fileTable.usesAlternatingRowBackgroundColors = false
         fileTable.allowsMultipleSelection = true
         // 行高由字号/图标尺寸算出来，必须用 custom，否则 small 会把内容压回系统行高。
@@ -458,6 +461,7 @@ final class SFTPBrowserViewController: NSViewController {
         fileTable.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
 
         transferTable.headerView = nil
+        transferTable.backgroundColor = .clear
         transferTable.usesAlternatingRowBackgroundColors = false
         transferTable.rowSizeStyle = .small
         transferTable.dataSource = self

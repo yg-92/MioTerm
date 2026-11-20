@@ -54,7 +54,7 @@ final class WorkspaceViewController: NSSplitViewController {
         mainArea.view.identifier = NSUserInterfaceItemIdentifier("mio.main")
         splitView.autosaveName = Self.splitAutosaveName
 
-        let panelItem = NSSplitViewItem(sidebarWithViewController: sidePanel)
+        let panelItem = NSSplitViewItem(viewController: sidePanel)
         panelItem.canCollapse = true
         panelItem.minimumThickness = 180
         panelItem.maximumThickness = 420
@@ -165,7 +165,14 @@ final class WorkspaceViewController: NSSplitViewController {
     /// 手动开合就是新的意图，自动收起记下的还原值作废。
     override func toggleSidebar(_ sender: Any?) {
         sidebarCollapse.userToggled()
-        super.toggleSidebar(sender)
+        if let panelItem {
+            let nextCollapsed = !panelItem.isCollapsed
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                panelItem.animator().isCollapsed = nextCollapsed
+            }
+        }
         updateSidebarExpandButton(animated: true)
     }
 
