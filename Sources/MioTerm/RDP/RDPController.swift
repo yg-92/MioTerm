@@ -37,6 +37,7 @@ final class RDPController: SessionControlling {
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
+    private var activeModifierFlags: NSEvent.ModifierFlags = []
 
     init(host: HostProfile) {
         self.host = host
@@ -54,6 +55,10 @@ final class RDPController: SessionControlling {
         }
         desktopView.onRawKeyUp = { [weak self] event in
             self?.handleKeyEvent(event, down: false)
+            return true
+        }
+        desktopView.onRawFlagsChanged = { [weak self] event in
+            self?.syncModifiers(event.modifierFlags)
             return true
         }
         desktopView.onFocus = { [weak self] in
@@ -122,6 +127,7 @@ final class RDPController: SessionControlling {
     }
 
     func stop() {
+        syncModifiers([])
         eventTask?.cancel()
         eventTask = nil
         client?.stop()
@@ -145,6 +151,9 @@ final class RDPController: SessionControlling {
 
     private func handleKeyEvent(_ event: NSEvent, down: Bool) {
         guard let client else { return }
+        if down {
+            syncModifiers(event.modifierFlags)
+        }
         if let scancode = Self.rdpScancode(for: Int(event.keyCode)) {
             client.sendScancode(scancode, down: down)
             return
@@ -155,6 +164,24 @@ final class RDPController: SessionControlling {
                 client.sendUnicode(UInt16(scalar.value), down: down)
             }
         }
+    }
+
+    private func syncModifiers(_ flags: NSEvent.ModifierFlags) {
+        guard let client else { return }
+        let mappings: [(NSEvent.ModifierFlags, UInt32)] = [
+            (.shift, 0x2A),    // Shift_L
+            (.control, 0x1D),  // Control_L
+            (.option, 0x38),   // Alt_L
+            (.command, 0x15B), // Win_L
+        ]
+        for (flag, scancode) in mappings {
+            let wasDown = activeModifierFlags.contains(flag)
+            let isDown = flags.contains(flag)
+            if wasDown != isDown {
+                client.sendScancode(scancode, down: isDown)
+            }
+        }
+        activeModifierFlags = flags
     }
 
     private static func rdpScancode(for macKeyCode: Int) -> UInt32? {

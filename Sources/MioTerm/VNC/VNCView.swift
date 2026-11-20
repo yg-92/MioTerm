@@ -11,6 +11,7 @@ final class VNCView: NSView {
     var onKeyEvent: ((UInt32, Bool) -> Void)?
     var onRawKeyDown: ((NSEvent) -> Bool)?
     var onRawKeyUp: ((NSEvent) -> Bool)?
+    var onRawFlagsChanged: ((NSEvent) -> Bool)?
     var onFocus: (() -> Void)?
     var onSendCtrlAltDel: (() -> Void)?
     var onSyncClipboard: (() -> Void)?
@@ -216,6 +217,10 @@ final class VNCView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
+        if onRawFlagsChanged?(event) == true {
+            activeModifierFlags = event.modifierFlags
+            return
+        }
         let next = event.modifierFlags
         let mappings: [(NSEvent.ModifierFlags, UInt32)] = [
             (.shift, 0xFFE1),   // Shift_L
