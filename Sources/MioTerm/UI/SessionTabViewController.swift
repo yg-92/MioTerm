@@ -625,7 +625,9 @@ final class SessionTabViewController: NSViewController {
             ? NSColor.clear.cgColor
             : Theme.layerColor(Theme.background, for: view)
         tabBar.alphaValue = 1.0
+        tabBar.backgroundOpacity = opacity
         statusBar.alphaValue = 1.0
+        statusBar.backgroundOpacity = opacity
         welcome.view.alphaValue = 1.0
         welcome.applyBackgroundOpacity(opacity)
         for tab in tabControllers.values {
@@ -770,11 +772,17 @@ final class SessionTabBarView: NSView {
     private let dragOwner = UUID()
     private let dropIndicator = NSView()
     static let dragType = NSPasteboard.PasteboardType("com.mio.term.session-tab")
+    var backgroundOpacity: CGFloat = 1.0 {
+        didSet {
+            guard abs(backgroundOpacity - oldValue) > 0.001 else { return }
+            refreshBackgroundColor()
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = Theme.layerColor(Theme.tabBar, for: self)
+        refreshBackgroundColor()
         build()
         registerForDraggedTypes([Self.dragType])
     }
@@ -1134,7 +1142,7 @@ final class SessionTabBarView: NSView {
     }
 
     func refreshAppearance() {
-        layer?.backgroundColor = Theme.layerColor(Theme.tabBar, for: self)
+        refreshBackgroundColor()
         separator.layer?.backgroundColor = Theme.layerColor(Theme.border, for: self)
         plusButton.contentTintColor = Theme.textSecondary
         leftScrollButton.contentTintColor = Theme.textSecondary
@@ -1146,6 +1154,13 @@ final class SessionTabBarView: NSView {
         for chip in chips {
             chip.refreshAppearance()
         }
+    }
+
+    private func refreshBackgroundColor() {
+        let color = backgroundOpacity < 0.999
+            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.45)
+            : Theme.tabBar
+        layer?.backgroundColor = Theme.layerColor(color, for: self)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -2194,10 +2209,24 @@ final class TerminalStatusBarView: NSView {
         versionLabel.textColor = Theme.textTertiary
     }
 
+    var backgroundOpacity: CGFloat = 1.0 {
+        didSet {
+            guard abs(backgroundOpacity - oldValue) > 0.001 else { return }
+            refreshBackgroundColor()
+        }
+    }
+
     func refreshAppearance() {
-        layer?.backgroundColor = Theme.layerColor(Theme.tabBar, for: self)
+        refreshBackgroundColor()
         topBorder.layer?.backgroundColor = Theme.layerColor(Theme.border, for: self)
         applyColors()
+    }
+
+    private func refreshBackgroundColor() {
+        let color = backgroundOpacity < 0.999
+            ? Theme.tabBar.withAlphaComponent(backgroundOpacity * 0.45)
+            : Theme.tabBar
+        layer?.backgroundColor = Theme.layerColor(color, for: self)
     }
 
     override func viewDidChangeEffectiveAppearance() {
