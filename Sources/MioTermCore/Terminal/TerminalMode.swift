@@ -213,4 +213,31 @@ public enum ContainerCommandDetector {
         }
         return false
     }
+
+    private static let entryFailureMarkers: [String] = [
+        "error response from daemon",
+        "no such container",
+        "is not running",
+        "oci runtime exec failed",
+        "oci runtime create failed",
+        "cannot connect to the docker daemon",
+        "executable file not found",
+        "command not found",
+        "container not found",
+        "error from server",
+        "unable to find",
+    ]
+
+    /// 判断命令输出是否表明进入容器失败（如容器不存在、未启动、daemon 未运行或命令不存在）。
+    public static func looksLikeEntryFailure(in lines: [String]) -> Bool {
+        for raw in lines {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, TerminalPrompt.parse(trimmed) == nil else { continue }
+            let lower = trimmed.lowercased()
+            if entryFailureMarkers.contains(where: { lower.contains($0) }) {
+                return true
+            }
+        }
+        return false
+    }
 }

@@ -126,10 +126,17 @@ public struct TerminalContextTracker {
 
     /// 命令跑完、屏幕安静下来之后读一次提示符；返回上下文有没有变化。
     @discardableResult
-    public mutating func settle(promptLine: String?, inAlternateScreen: Bool) -> Bool {
+    public mutating func settle(
+        promptLine: String?,
+        inAlternateScreen: Bool,
+        outputIndicatesContainerFailure: Bool = false
+    ) -> Bool {
         let before = context
         lostTrackAtLastSettle = false
         if reportedAt < submittedAt, !inAlternateScreen {
+            if containerMode != nil, !containerPromptSeen, outputIndicatesContainerFailure {
+                leaveContainer()
+            }
             // 只有提示符压根没提目录时才拿 cd 预测兜底。
             // 以前这里是「上下文没变就兜底」，于是提示符明明报了 `jenkins_home`、
             // 预测却算出 `/` 的时候，预测照样生效——后面的 `cd` 全从这个错路径往下算，

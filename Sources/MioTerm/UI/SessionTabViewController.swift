@@ -188,12 +188,11 @@ final class SessionTabViewController: NSViewController {
                 self.tabControllers[controller.sessionID]?.updateConnectionState()
             }
         }
-        // 顶部模式徽标跟着“当前选中标签”走：别的标签在后台进出容器不该改这里的显示。
-        modeTokens[controller.sessionID] = controller.addContextObserver { [weak self, weak controller] context in
+        // 底部状态栏的 shell 模式徽标跟着“当前选中标签”走：别的标签在后台进出容器不该改这里的显示。
+        modeTokens[controller.sessionID] = controller.addContextObserver { [weak self, weak controller] _ in
             guard let self, let controller else { return }
             self.tabControllers[controller.sessionID]?.updatePaneHeader()
             guard self.selectedController === controller else { return }
-            self.tabBar.update(mode: context.mode)
             self.updateStatusBar()
         }
         if let baseID, order.contains(where: { $0.sessionID == baseID && $0 !== controller }) {
@@ -492,8 +491,6 @@ final class SessionTabViewController: NSViewController {
         for (id, tab) in tabControllers {
             tab.setPanePresentation(split: paneLayout.isSplit, active: id == paneLayout.selected)
         }
-        // 主页没有“终端环境”，徽标收起来；选中会话时显示它此刻在哪种 shell 里。
-        tabBar.update(mode: selectedController?.context.mode)
         let hasTabs = !order.isEmpty
         tabBar.isHidden = !hasTabs
         contentTopToBar.isActive = hasTabs
@@ -569,7 +566,6 @@ final class SessionTabBarView: NSView {
     private let stack = NSStackView()
     private let plusButton = NSButton()
     private let splitButton = NSButton()
-    private let modeBadge = TerminalModeBadge()
     private let rightStack = NSStackView()
     private let leftStack = NSStackView()
     private let leftScrollButton = NSButton()
@@ -663,7 +659,6 @@ final class SessionTabBarView: NSView {
         rightStack.spacing = 6
         rightStack.translatesAutoresizingMaskIntoConstraints = false
         rightStack.addArrangedSubview(rightScrollButton)
-        rightStack.addArrangedSubview(modeBadge)
         splitButton.image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: L10n.tr(.tabSplitTip))
         splitButton.isBordered = false
         splitButton.contentTintColor = Theme.textSecondary
@@ -908,11 +903,6 @@ final class SessionTabBarView: NSView {
 
     @objc private func newTab(_ sender: Any?) {
         onNew?()
-    }
-
-    /// nil 表示主页：没有终端环境可显示，徽标收起。
-    func update(mode: TerminalMode?) {
-        modeBadge.update(mode)
     }
 
     func refreshAppearance() {
@@ -1638,9 +1628,10 @@ final class TerminalStatusBarView: NSView {
     private let identityLabel = NSTextField(labelWithString: "")
     private let pathIcon = NSImageView()
     private let pathLabel = NSTextField(labelWithString: "")
+    private let modeBadge = TerminalModeBadge()
     private let versionLabel = NSTextField(labelWithString: "")
-    private var pathTrailingToVersion: NSLayoutConstraint!
-    private var pathTrailingToEdge: NSLayoutConstraint!
+    private var modeTrailingToVersion: NSLayoutConstraint!
+    private var modeTrailingToEdge: NSLayoutConstraint!
     private var stateColor: NSColor = Theme.textTertiary
     private var hasDirectory = false
 
@@ -1680,16 +1671,21 @@ final class TerminalStatusBarView: NSView {
         pathLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(pathLabel)
 
+        modeBadge.setContentHuggingPriority(.required, for: .horizontal)
+        modeBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
+        modeBadge.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(modeBadge)
+
         versionLabel.font = .monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
         versionLabel.setContentHuggingPriority(.required, for: .horizontal)
         versionLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         versionLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(versionLabel)
 
-        pathTrailingToVersion = pathLabel.trailingAnchor.constraint(
-            equalTo: versionLabel.leadingAnchor, constant: -14
+        modeTrailingToVersion = modeBadge.trailingAnchor.constraint(
+            equalTo: versionLabel.leadingAnchor, constant: -10
         )
-        pathTrailingToEdge = pathLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
+        modeTrailingToEdge = modeBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
 
         NSLayoutConstraint.activate([
             topBorder.topAnchor.constraint(equalTo: topAnchor),
@@ -1715,6 +1711,9 @@ final class TerminalStatusBarView: NSView {
 
             pathLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             pathLabel.leadingAnchor.constraint(greaterThanOrEqualTo: identityLabel.trailingAnchor, constant: 16),
+            pathLabel.trailingAnchor.constraint(equalTo: modeBadge.leadingAnchor, constant: -10),
+
+            modeBadge.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             versionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             versionLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -1737,8 +1736,8 @@ final class TerminalStatusBarView: NSView {
         versionLabel.toolTip = hasVersion
             ? (build.isEmpty ? "MioTerm \(short)" : "MioTerm \(short)（build \(build)）")
             : nil
-        pathTrailingToVersion.isActive = hasVersion
-        pathTrailingToEdge.isActive = !hasVersion
+        modeTrailingToVersion.isActive = hasVersion
+        modeTrailingToEdge.isActive = !hasVersion
     }
 
     func update(_ controller: TerminalController?) {
@@ -1746,6 +1745,7 @@ final class TerminalStatusBarView: NSView {
         for view in [dot, stateLabel, identityLabel, pathIcon, pathLabel] {
             view.isHidden = !hasSession
         }
+        modeBadge.update(controller?.context.mode)
         guard let controller else {
             toolTip = nil
             applyColors()

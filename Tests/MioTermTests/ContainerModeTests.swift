@@ -180,4 +180,24 @@ struct ContainerModeTests {
         }
         #expect(reason.contains("Docker"))
     }
+
+    @Test func failedDockerExecRestoresPlainShellMode() {
+        var tracker = trackerOnHost()
+        tracker.submit(command: "docker exec -it zeek bash")
+        #expect(tracker.context.mode == .docker(container: "zeek"))
+
+        let failed = ContainerCommandDetector.looksLikeEntryFailure(in: [
+            "Error response from daemon: No such container: zeek",
+            "[root@target /var]#",
+        ])
+        #expect(failed)
+
+        _ = tracker.settle(
+            promptLine: "[root@target /var]#",
+            inAlternateScreen: false,
+            outputIndicatesContainerFailure: failed
+        )
+        #expect(tracker.context.mode == .shell)
+        #expect(tracker.context.followAllowed)
+    }
 }

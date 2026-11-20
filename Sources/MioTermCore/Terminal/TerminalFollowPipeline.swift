@@ -41,12 +41,18 @@ public final class TerminalFollowPipeline {
     /// 最近一次粘贴的单行文本：SSH 高延迟下用户粘贴完立刻按回车时，远端回显可能还没到屏幕，用它兜底。
     private var pendingPastedLine: String?
     private var screenLine: () -> String? = { nil }
+    private var recentLines: () -> [String] = { [] }
 
     public init() {}
 
     /// 屏幕最下面一行非空文本由宿主提供：读屏要碰视图，判定不要。
     public func setScreenLineProvider(_ provider: @escaping () -> String?) {
         screenLine = provider
+    }
+
+    /// 屏幕最近几行非空文本，用于识别 `docker exec` 等命令是否直接报错回到宿主提示符。
+    public func setRecentLinesProvider(_ provider: @escaping () -> [String]) {
+        recentLines = provider
     }
 
     /// 重开一条会话可能就换了一台机器，基线主机名与嵌套状态都要重来。
@@ -267,7 +273,15 @@ public final class TerminalFollowPipeline {
            !TerminalPrompt.isReadyForCommand(line) {
             return .waiting
         }
-        let changed = tracker.settle(promptLine: line, inAlternateScreen: false)
+        let linesForCheck = recentLines()
+        let failedContainerEntry = ContainerCommandDetector.looksLikeEntryFailure(
+            in: linesForCheck.isEmpty ? (line.map { [$0] } ?? []) : linesForCheck
+        )
+        let changed = tracker.settle(
+            promptLine: line,
+            inAlternateScreen: false,
+            outputIndicatesContainerFailure: failedContainerEntry
+        )
         // 丢掉定位这件事本身要留痕：否则日志里只看到「未上报」，看不出是提示符
         // 只报了末级目录名、和 cd 预测对不上，还是压根没读到提示符。
         let shown = tracker.lostTrackAtLastSettle

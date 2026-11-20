@@ -154,6 +154,7 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
             }
         }
         follow.setScreenLineProvider { [weak self] in self?.lastScreenLine() }
+        follow.setRecentLinesProvider { [weak self] in self?.recentScreenLines() ?? [] }
         follow.settleProbe = TerminalFollowPipeline.SettleProbe(
             idleFor: { [weak self] in self?.outputClock.idleFor ?? 0 },
             inAlternateScreen: { [weak self] in self?.isInAlternateScreen ?? false },
@@ -484,6 +485,21 @@ final class TerminalController: NSObject, LocalProcessTerminalViewDelegate, Term
             if !text.isEmpty { return text }
         }
         return nil
+    }
+
+    private func recentScreenLines(limit: Int = 6) -> [String] {
+        guard let snapshot = terminalView.terminalContentSnapshot(region: .history(maximumScrollbackRows: -1)) else {
+            return []
+        }
+        var lines: [String] = []
+        for row in snapshot.rows.reversed() where row.absoluteRow <= snapshot.cursorRow {
+            let text = row.text.trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty {
+                lines.append(text)
+                if lines.count >= limit { break }
+            }
+        }
+        return lines
     }
 
     /// 重开一条会话可能就换了一台机器，基线主机名与嵌套状态都要重来。
