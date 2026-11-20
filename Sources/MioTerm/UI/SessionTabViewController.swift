@@ -116,6 +116,15 @@ final class SessionTabViewController: NSViewController {
                 }
             }
         }
+        NotificationCenter.default.addObserver(
+            forName: .mioTermHostsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateChrome()
+            }
+        }
     }
 
     /// 终端画面接受标签拖拽：落点高亮浮在内容之上，但不拦截鼠标与拖拽命中。
@@ -561,7 +570,9 @@ final class SessionTabViewController: NSViewController {
     private func sessionKind(for controller: any SessionControlling) -> SessionTabBarView.SessionKind {
         guard let host = controller.host else { return .local }
         switch host.protocolKind {
-        case .ssh: return .ssh
+        case .ssh:
+            let icon = AppEnvironment.shared.hosts.host(id: host.id)?.systemIcon ?? host.systemIcon
+            return .ssh(icon)
         case .telnet: return .telnet
         case .serial: return .serial
         case .vnc: return .vnc
@@ -660,7 +671,7 @@ private final class TabBarScrollView: NSScrollView {
 final class SessionTabBarView: NSView {
     enum SessionKind: Equatable {
         case local
-        case ssh
+        case ssh(SSHSystemIcon)
         case telnet
         case serial
         case vnc
@@ -677,10 +688,17 @@ final class SessionTabBarView: NSView {
             }
         }
 
+        var iconImage: NSImage? {
+            if case .ssh(let systemIcon) = self, systemIcon != .default {
+                return Theme.iconImage(for: systemIcon)
+            }
+            return nil
+        }
+
         var tint: NSColor {
             switch self {
             case .local: return Theme.textSecondary
-            case .ssh: return Theme.tint(for: .ssh)
+            case .ssh(let systemIcon): return Theme.tint(for: systemIcon)
             case .telnet: return Theme.tint(for: .telnet)
             case .serial: return Theme.tint(for: .serial)
             case .vnc: return Theme.tint(for: .vnc)
@@ -994,6 +1012,7 @@ final class SessionTabBarView: NSView {
         let chip = SessionTabChip(
             title: tab.title,
             symbol: tab.kind.symbol,
+            customIcon: tab.kind.iconImage,
             symbolColor: tab.kind.tint,
             statusColor: Theme.color(for: tab.state),
             kindBadge: isCompact ? nil : tab.kind.badge,
@@ -1240,6 +1259,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
     private let compact: Bool
     private let hasKindBadge: Bool
     private let symbol: String?
+    private let customIcon: NSImage?
     private let symbolColor: NSColor
     private let statusColor: NSColor?
     private var selected = false
@@ -1249,6 +1269,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
     init(
         title: String,
         symbol: String?,
+        customIcon: NSImage? = nil,
         symbolColor: NSColor,
         statusColor: NSColor? = nil,
         kindBadge: String? = nil,
@@ -1260,6 +1281,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
         self.compact = compact
         self.hasKindBadge = !(kindBadge ?? "").isEmpty
         self.symbol = symbol
+        self.customIcon = customIcon
         self.symbolColor = symbolColor
         self.statusColor = statusColor
         super.init(frame: .zero)
@@ -1275,10 +1297,10 @@ final class SessionTabChip: NSView, NSDraggingSource {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
-        icon.image = symbol.flatMap { Self.iconImage(symbol: $0, color: symbolColor) }
+        icon.image = customIcon ?? symbol.flatMap { Self.iconImage(symbol: $0, color: symbolColor) }
         icon.contentTintColor = symbolColor
         icon.imageScaling = .scaleProportionallyDown
-        icon.isHidden = symbol == nil
+        icon.isHidden = customIcon == nil && symbol == nil
         icon.translatesAutoresizingMaskIntoConstraints = false
         addSubview(icon)
 
@@ -1387,7 +1409,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
     }
 
     func refreshAppearance() {
-        icon.image = symbol.flatMap { Self.iconImage(symbol: $0, color: symbolColor) }
+        icon.image = customIcon ?? symbol.flatMap { Self.iconImage(symbol: $0, color: symbolColor) }
         icon.contentTintColor = symbolColor
         statusDot.layer?.backgroundColor = Theme.layerColor(statusColor ?? symbolColor, for: self)
         kindBadgeLabel.textColor = symbolColor

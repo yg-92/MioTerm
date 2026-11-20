@@ -32,13 +32,14 @@ final class StylePreferencesWindowController: NSWindowController, NSTextFieldDel
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
 
-    func show() {
+    func show(relativeTo anchorWindow: NSWindow? = nil) {
         draft = store.settings
         editingModes.removeAll()
         mode.selectedSegment = Theme.isDark() ? 0 : 1
         presetPopup.selectItem(at: 0)
         loadFonts()
         reloadColors()
+        window?.positionCentered(relativeTo: anchorWindow)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
     }

@@ -123,7 +123,7 @@ enum Theme {
         switch kind {
         case .ssh: return "terminal"
         case .telnet: return "network"
-        case .serial: return "cable.connector"
+        case .serial: return "cpu"
         case .vnc: return "display"
         case .rdp: return "desktopcomputer"
         }

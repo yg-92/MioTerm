@@ -451,7 +451,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
         }
     }
 
-    func showStyles() {
+    func showStyles(relativeTo anchorWindow: NSWindow? = nil) {
         if styleWindow == nil {
             let editor = StylePreferencesWindowController(store: store)
             editor.onApply = { [weak self] settings in
@@ -467,7 +467,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate, N
             }
             styleWindow = editor
         }
-        styleWindow?.show()
+        styleWindow?.show(relativeTo: anchorWindow ?? window)
     }
 
     @objc private func opacityChanged(_ sender: NSSlider) {

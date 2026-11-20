@@ -1,5 +1,9 @@
 import Foundation
 
+public extension Notification.Name {
+    static let mioTermHostsDidChange = Notification.Name("MioTermHostsDidChange")
+}
+
 /// 主机配置仓库。配置是少量、低频写的 JSON，直接放主线程读写，
 /// 口令字段单独走 KeychainVault，因此这个文件里不含任何机密。
 @MainActor
@@ -75,6 +79,7 @@ public final class HostRepository {
         }
         try persist()
         onChange?()
+        NotificationCenter.default.post(name: .mioTermHostsDidChange, object: self)
         return normalized
     }
 

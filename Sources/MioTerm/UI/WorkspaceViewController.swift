@@ -454,7 +454,7 @@ final class WorkspaceViewController: NSSplitViewController {
 
     @objc func showStylePreferences(_ sender: Any?) {
         if preferences == nil { preferences = PreferencesWindowController(store: environment.settings) }
-        preferences?.showStyles()
+        preferences?.showStyles(relativeTo: view.window)
     }
 
     @objc func showPreferences(_ sender: Any?) {
