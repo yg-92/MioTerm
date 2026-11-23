@@ -23,6 +23,7 @@
 #define RDP_INST_PRE_CONNECT_OFFSET 384
 #define RDP_INST_POST_CONNECT_OFFSET 392
 #define RDP_INST_POST_DISCONNECT_OFFSET 440
+#define RDP_INST_LOAD_CHANNELS_OFFSET 472
 #define RDP_INST_VERIFY_CERT_EX_OFFSET 528
 #define RDP_INST_VERIFY_CHANGED_CERT_EX_OFFSET 536
 
@@ -662,29 +663,25 @@ static void cb_channel_disconnected(void* context, const void* e) {
     }
 }
 
-static RdpBool cb_pre_connect(void* instance) {
+static RdpBool cb_load_channels(void* instance) {
     if (!instance) return 0;
     void* context = ptr_at(instance, RDP_INST_CONTEXT_OFFSET);
-    if (context) {
-        if (g_fn.pubsub_subscribe) {
-            void* pubsub = ptr_at(context, RDP_CONTEXT_PUBSUB_OFFSET);
-            if (pubsub) {
-                g_fn.pubsub_subscribe(pubsub, "ChannelConnected", cb_channel_connected);
-                g_fn.pubsub_subscribe(pubsub, "ChannelDisconnected", cb_channel_disconnected);
-            }
-        }
-        if (g_fn.client_load_addins) {
-            void* channels = ptr_at(context, RDP_CONTEXT_CHANNELS_OFFSET);
-            void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
-            if (channels && settings) {
-                RdpBool ok = g_fn.client_load_addins(channels, settings);
-                MioRdpSession* session = session_from_context(context);
-                char buf[64];
-                snprintf(buf, sizeof(buf), "client_load_addins=%d", ok);
-                shim_log(session, buf);
-            }
+    if (context && g_fn.client_load_addins) {
+        void* channels = ptr_at(context, RDP_CONTEXT_CHANNELS_OFFSET);
+        void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
+        if (channels && settings) {
+            RdpBool ok = g_fn.client_load_addins(channels, settings);
+            MioRdpSession* session = session_from_context(context);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "LoadChannels client_load_addins=%d", ok);
+            shim_log(session, buf);
         }
     }
+    return 1;
+}
+
+static RdpBool cb_pre_connect(void* instance) {
+    if (!instance) return 0;
     return 1;
 }
 
@@ -837,6 +834,7 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
     set_ptr_at(instance, RDP_INST_PRE_CONNECT_OFFSET, (void*)cb_pre_connect);
     set_ptr_at(instance, RDP_INST_POST_CONNECT_OFFSET, (void*)cb_post_connect);
     set_ptr_at(instance, RDP_INST_POST_DISCONNECT_OFFSET, (void*)cb_post_disconnect);
+    set_ptr_at(instance, RDP_INST_LOAD_CHANNELS_OFFSET, (void*)cb_load_channels);
     set_ptr_at(instance, RDP_INST_VERIFY_CERT_EX_OFFSET, (void*)cb_verify_cert_ex);
     set_ptr_at(instance, RDP_INST_VERIFY_CHANGED_CERT_EX_OFFSET, (void*)cb_verify_changed_cert_ex);
 
@@ -862,6 +860,14 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
     pthread_mutex_init(&session->clip_lock, NULL);
     pthread_cond_init(&session->clip_cond, NULL);
     set_ptr_at(context, RDP_CONTEXT_SIZE, session);
+
+    if (g_fn.pubsub_subscribe) {
+        void* pubsub = ptr_at(context, RDP_CONTEXT_PUBSUB_OFFSET);
+        if (pubsub) {
+            g_fn.pubsub_subscribe(pubsub, "ChannelConnected", cb_channel_connected);
+            g_fn.pubsub_subscribe(pubsub, "ChannelDisconnected", cb_channel_disconnected);
+        }
+    }
 
     void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
     if (settings) {
