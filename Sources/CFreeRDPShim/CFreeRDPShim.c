@@ -497,6 +497,9 @@ static RdpUInt32 cb_cliprdr_server_capabilities(MioCliprdrClientContext* cliprdr
             if (session->clip_file && g_fn.clip_file_remote_set_flags) {
                 g_fn.clip_file_remote_set_flags(session->clip_file, set->generalFlags);
             }
+            char buf[96];
+            snprintf(buf, sizeof(buf), "cliprdr ServerCapabilities flags=0x%x", set->generalFlags);
+            shim_log(session, buf);
         }
     }
     return 0;
@@ -577,6 +580,13 @@ static RdpUInt32 cb_cliprdr_server_format_list(MioCliprdrClientContext* cliprdr,
         resp.common.msgType = MIO_CB_FORMAT_LIST_RESPONSE;
         resp.common.msgFlags = MIO_CB_RESPONSE_OK;
         cliprdr->ClientFormatListResponse(cliprdr, &resp);
+    }
+
+    if (has_files) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "cliprdr ServerFormatList num=%u has_text=%d has_files=%d fgd=%u",
+                 list->numFormats, has_text ? 1 : 0, has_files ? 1 : 0, fgd_fmt);
+        shim_log(session, buf);
     }
 
     if ((has_text || has_files) && session->callbacks.on_clipboard_formats) {
@@ -709,6 +719,11 @@ static RdpUInt32 cb_cliprdr_server_file_contents_response(MioCliprdrClientContex
         }
         session->pending_file_ready = true;
         pthread_cond_broadcast(&session->clip_cond);
+    } else {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "cliprdr unexpected FileContentsResponse stream=%u expected=%u flags=0x%x cb=%u",
+                 resp->streamId, session->pending_file_stream_id, resp->common.msgFlags, resp->cbRequested);
+        shim_log(session, buf);
     }
     pthread_mutex_unlock(&session->clip_lock);
     return 0;
@@ -1697,6 +1712,10 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     uint32_t raw_size = 0;
     uint8_t* raw = request_remote_format_data(session, fgd_fmt, &raw_size);
     if (!raw || raw_size == 0) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "clipboard_download_remote_files: FormatDataRequest(fgd=%u) failed (raw_size=%u lock=%u)",
+                 fgd_fmt, raw_size, lock_id);
+        shim_log(session, buf);
         free(raw);
         if (have_lock) {
             MioCliprdrLockClipboardData unlock_req = {0};
@@ -1713,6 +1732,10 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     RdpUInt32 parse_rc = g_fn.cliprdr_parse_file_list(raw, raw_size, &descs_raw, &count);
     free(raw);
     if (parse_rc != 0 || !descs_raw || count == 0) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "clipboard_download_remote_files: parse_file_list failed rc=%u count=%u raw=%u",
+                 parse_rc, count, raw_size);
+        shim_log(session, buf);
         free(descs_raw);
         if (have_lock) {
             MioCliprdrLockClipboardData unlock_req = {0};
