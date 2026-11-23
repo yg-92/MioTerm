@@ -259,7 +259,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         row.addArrangedSubview(glassButton(
             symbol: "sidebar.left",
             label: L10n.tr(.toolbarToggleSidebar),
-            action: #selector(NSSplitViewController.toggleSidebar(_:))
+            action: #selector(NSSplitViewController.toggleSidebar(_:)),
+            target: workspace
         ))
         if showingSession {
             row.addArrangedSubview(glassButton(

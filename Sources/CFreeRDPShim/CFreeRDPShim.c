@@ -309,6 +309,8 @@ struct MioRdpSession {
     size_t remote_text_cache_size;
     char* client_uri_list;
     uint64_t server_clip_generation;
+    uint32_t server_clip_caps;
+    uint32_t next_client_lock_id;
     uint32_t next_file_stream_id;
     uint32_t pending_file_stream_id;
     bool pending_file_ready;
@@ -380,10 +382,17 @@ typedef struct {
 } MioCliprdrFormatDataResponse;
 
 #define MIO_CB_FILECONTENTS_REQUEST 0x0008u
+#define MIO_CB_LOCK_CLIPDATA 0x000Au
+#define MIO_CB_UNLOCK_CLIPDATA 0x000Bu
 #define MIO_FILECONTENTS_SIZE 0x00000001u
 #define MIO_FILECONTENTS_RANGE 0x00000002u
 #define MIO_FD_FILESIZE 0x00000040u
 #define MIO_FILE_ATTRIBUTE_DIRECTORY 0x00000010u
+
+typedef struct {
+    MioCliprdrHeader common;
+    uint32_t clipDataId;
+} MioCliprdrLockClipboardData;
 
 typedef struct {
     MioCliprdrHeader common;
@@ -479,10 +488,15 @@ static RdpUInt32 cb_cliprdr_server_capabilities(MioCliprdrClientContext* cliprdr
     MioRdpSession* session = session_from_cliprdr(cliprdr);
     const MioCliprdrCapabilities* caps = (const MioCliprdrCapabilities*)arg;
     if (!session || !caps) return 0;
-    if (session->clip_file && g_fn.clip_file_remote_set_flags && caps->cCapabilitiesSets > 0 && caps->capabilitySets) {
+    if (caps->cCapabilitiesSets > 0 && caps->capabilitySets) {
         const MioCliprdrGeneralCapSet* set = (const MioCliprdrGeneralCapSet*)caps->capabilitySets;
         if (set->capabilitySetType == MIO_CB_CAPSTYPE_GENERAL) {
-            g_fn.clip_file_remote_set_flags(session->clip_file, set->generalFlags);
+            pthread_mutex_lock(&session->clip_lock);
+            session->server_clip_caps = set->generalFlags;
+            pthread_mutex_unlock(&session->clip_lock);
+            if (session->clip_file && g_fn.clip_file_remote_set_flags) {
+                g_fn.clip_file_remote_set_flags(session->clip_file, set->generalFlags);
+            }
         }
     }
     return 0;
@@ -1562,6 +1576,8 @@ static uint8_t* request_remote_file_contents(
     uint32_t flags,
     uint64_t offset,
     uint32_t cb_requested,
+    bool have_lock,
+    uint32_t lock_id,
     uint32_t* out_size,
     bool* out_ok
 ) {
@@ -1590,15 +1606,21 @@ static uint8_t* request_remote_file_contents(
 
     MioCliprdrFileContentsRequest req = {0};
     req.common.msgType = MIO_CB_FILECONTENTS_REQUEST;
+    req.common.dataLen = have_lock ? 28u : 24u;
     req.streamId = stream_id;
     req.listIndex = list_index;
     req.dwFlags = flags;
     req.nPositionLow = (uint32_t)(offset & 0xFFFFFFFFu);
     req.nPositionHigh = (uint32_t)((offset >> 32) & 0xFFFFFFFFu);
     req.cbRequested = cb_requested;
-    req.haveClipDataId = 0;
-    req.clipDataId = 0;
-    if (cliprdr->ClientFileContentsRequest(cliprdr, &req) != 0) {
+    req.haveClipDataId = have_lock ? 1 : 0;
+    req.clipDataId = have_lock ? lock_id : 0;
+    RdpUInt32 send_rc = cliprdr->ClientFileContentsRequest(cliprdr, &req);
+    if (send_rc != 0) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "ClientFileContentsRequest failed rc=%u idx=%u flags=0x%x cb=%u lock=%u",
+                 send_rc, list_index, flags, cb_requested, lock_id);
+        shim_log(session, buf);
         return NULL;
     }
 
@@ -1606,11 +1628,15 @@ static uint8_t* request_remote_file_contents(
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 10;
 
+    bool timed_out = false;
     pthread_mutex_lock(&session->clip_lock);
     while (!session->pending_file_ready && !session->closing &&
            session->server_clip_generation == generation) {
         int rc = pthread_cond_timedwait(&session->clip_cond, &session->clip_lock, &ts);
-        if (rc == ETIMEDOUT) break;
+        if (rc == ETIMEDOUT) {
+            timed_out = true;
+            break;
+        }
     }
     bool ready = session->pending_file_ready && session->server_clip_generation == generation;
     bool ok = ready && session->pending_file_ok;
@@ -1618,6 +1644,12 @@ static uint8_t* request_remote_file_contents(
     uint32_t size = ok ? session->pending_file_size : 0;
     if (!ok) {
         free(session->pending_file_data);
+        char buf[192];
+        snprintf(buf, sizeof(buf),
+                 "FileContentsResponse failed idx=%u flags=0x%x offset=%llu cb=%u ready=%d ok=%d timeout=%d lock=%u",
+                 list_index, flags, (unsigned long long)offset, cb_requested, ready ? 1 : 0,
+                 session->pending_file_ok ? 1 : 0, timed_out ? 1 : 0, lock_id);
+        shim_log(session, buf);
     }
     session->pending_file_data = NULL;
     session->pending_file_size = 0;
@@ -1637,13 +1669,42 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     bool has_files = session->server_has_files;
     uint32_t fgd_fmt = session->server_fgd_format_id;
     uint64_t generation = session->server_clip_generation;
+    uint32_t server_caps = session->server_clip_caps;
+    MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)session->cliprdr;
+    uint32_t lock_id = 0;
+    bool have_lock = false;
+    if (has_files && fgd_fmt != 0 && cliprdr &&
+        (server_caps & MIO_CB_CAN_LOCK_CLIPDATA) != 0 &&
+        cliprdr->ClientLockClipboardData && cliprdr->ClientUnlockClipboardData) {
+        lock_id = ++session->next_client_lock_id;
+        if (lock_id == 0) lock_id = ++session->next_client_lock_id;
+        have_lock = true;
+    }
     pthread_mutex_unlock(&session->clip_lock);
     if (!has_files || fgd_fmt == 0) return NULL;
+
+    if (have_lock) {
+        MioCliprdrLockClipboardData lock_req = {0};
+        lock_req.common.msgType = MIO_CB_LOCK_CLIPDATA;
+        lock_req.common.dataLen = 4;
+        lock_req.clipDataId = lock_id;
+        if (cliprdr->ClientLockClipboardData(cliprdr, &lock_req) != 0) {
+            have_lock = false;
+            lock_id = 0;
+        }
+    }
 
     uint32_t raw_size = 0;
     uint8_t* raw = request_remote_format_data(session, fgd_fmt, &raw_size);
     if (!raw || raw_size == 0) {
         free(raw);
+        if (have_lock) {
+            MioCliprdrLockClipboardData unlock_req = {0};
+            unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
+            unlock_req.common.dataLen = 4;
+            unlock_req.clipDataId = lock_id;
+            cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
+        }
         return NULL;
     }
 
@@ -1653,6 +1714,13 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     free(raw);
     if (parse_rc != 0 || !descs_raw || count == 0) {
         free(descs_raw);
+        if (have_lock) {
+            MioCliprdrLockClipboardData unlock_req = {0};
+            unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
+            unlock_req.common.dataLen = 4;
+            unlock_req.clipDataId = lock_id;
+            cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
+        }
         return NULL;
     }
 
@@ -1669,6 +1737,13 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
                              (unsigned long long)max_total_bytes);
                     shim_log(session, buf);
                     free(descs_raw);
+                    if (have_lock) {
+                        MioCliprdrLockClipboardData unlock_req = {0};
+                        unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
+                        unlock_req.common.dataLen = 4;
+                        unlock_req.clipDataId = lock_id;
+                        cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
+                    }
                     return NULL;
                 }
                 declared_total += sz;
@@ -1678,6 +1753,13 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
 
     if (!mkdir_p(dest_dir)) {
         free(descs_raw);
+        if (have_lock) {
+            MioCliprdrLockClipboardData unlock_req = {0};
+            unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
+            unlock_req.common.dataLen = 4;
+            unlock_req.clipDataId = lock_id;
+            cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
+        }
         return NULL;
     }
 
@@ -1686,24 +1768,34 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     char* top_paths = (char*)malloc(out_cap);
     if (!top_paths) {
         free(descs_raw);
+        if (have_lock) {
+            MioCliprdrLockClipboardData unlock_req = {0};
+            unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
+            unlock_req.common.dataLen = 4;
+            unlock_req.clipDataId = lock_id;
+            cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
+        }
         return NULL;
     }
     top_paths[0] = '\0';
 
     uint64_t downloaded_total = 0;
     bool all_ok = true;
+    const char* fail_step = "none";
 
     for (RdpUInt32 i = 0; i < count; i++) {
         pthread_mutex_lock(&session->clip_lock);
         bool cancelled = session->closing || session->server_clip_generation != generation;
         pthread_mutex_unlock(&session->clip_lock);
         if (cancelled) {
+            fail_step = "cancelled";
             all_ok = false;
             break;
         }
 
         char rel_path[1024];
         if (!decode_win_relpath(descs[i].cFileName, rel_path, sizeof(rel_path))) {
+            fail_step = "decode_path";
             all_ok = false;
             break;
         }
@@ -1711,6 +1803,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
         char full_path[2048];
         int n = snprintf(full_path, sizeof(full_path), "%s/%s", dest_dir, rel_path);
         if (n <= 0 || (size_t)n >= sizeof(full_path)) {
+            fail_step = "path_len";
             all_ok = false;
             break;
         }
@@ -1738,6 +1831,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
                     size_t next_cap = (out_cap + (size_t)tn + 1) * 2;
                     char* grown = (char*)realloc(top_paths, next_cap);
                     if (!grown) {
+                        fail_step = "oom";
                         all_ok = false;
                         break;
                     }
@@ -1751,6 +1845,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
 
         if ((descs[i].dwFileAttributes & MIO_FILE_ATTRIBUTE_DIRECTORY) != 0) {
             if (!mkdir_p(full_path)) {
+                fail_step = "mkdir_entry";
                 all_ok = false;
                 break;
             }
@@ -1764,6 +1859,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             bool dir_ok = mkdir_p(full_path);
             *last_slash = '/';
             if (!dir_ok) {
+                fail_step = "mkdir_parent";
                 all_ok = false;
                 break;
             }
@@ -1776,10 +1872,11 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             uint32_t sz_bytes = 0;
             bool sz_ok = false;
             uint8_t* sz_buf = request_remote_file_contents(
-                session, generation, i, MIO_FILECONTENTS_SIZE, 0, 8, &sz_bytes, &sz_ok
+                session, generation, i, MIO_FILECONTENTS_SIZE, 0, 8, have_lock, lock_id, &sz_bytes, &sz_ok
             );
             if (!sz_ok || !sz_buf || sz_bytes < 8) {
                 free(sz_buf);
+                fail_step = "file_size";
                 all_ok = false;
                 break;
             }
@@ -1790,34 +1887,38 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
         }
 
         if (max_total_bytes > 0 && (file_size > max_total_bytes || downloaded_total > max_total_bytes - file_size)) {
+            fail_step = "max_bytes";
             all_ok = false;
             break;
         }
 
         FILE* fp = fopen(full_path, "wb");
         if (!fp) {
+            fail_step = "fopen";
             all_ok = false;
             break;
         }
 
         uint64_t offset = 0;
-        const uint32_t chunk_size = 262144u;
+        const uint32_t chunk_size = 65536u;
         while (offset < file_size) {
             uint64_t remaining = file_size - offset;
             uint32_t to_read = remaining > chunk_size ? chunk_size : (uint32_t)remaining;
             uint32_t got = 0;
             bool chunk_ok = false;
             uint8_t* chunk = request_remote_file_contents(
-                session, generation, i, MIO_FILECONTENTS_RANGE, offset, to_read, &got, &chunk_ok
+                session, generation, i, MIO_FILECONTENTS_RANGE, offset, to_read, have_lock, lock_id, &got, &chunk_ok
             );
             if (!chunk_ok || !chunk || got == 0) {
                 free(chunk);
+                fail_step = "file_range";
                 all_ok = false;
                 break;
             }
             size_t written = fwrite(chunk, 1, got, fp);
             free(chunk);
             if (written != got) {
+                fail_step = "fwrite";
                 all_ok = false;
                 break;
             }
@@ -1829,10 +1930,17 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     }
 
     free(descs_raw);
+    if (have_lock) {
+        MioCliprdrLockClipboardData unlock_req = {0};
+        unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
+        unlock_req.common.dataLen = 4;
+        unlock_req.clipDataId = lock_id;
+        cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
+    }
 
-    char log_buf[160];
-    snprintf(log_buf, sizeof(log_buf), "clipboard_download_remote_files(count=%u bytes=%llu) -> %s",
-             count, (unsigned long long)downloaded_total, all_ok ? "ok" : "fail");
+    char log_buf[192];
+    snprintf(log_buf, sizeof(log_buf), "clipboard_download_remote_files(count=%u bytes=%llu lock=%u step=%s) -> %s",
+             count, (unsigned long long)downloaded_total, lock_id, fail_step, all_ok ? "ok" : "fail");
     shim_log(session, log_buf);
 
     if (!all_ok || out_len == 0) {

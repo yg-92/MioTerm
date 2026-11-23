@@ -422,6 +422,7 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case tabSplitUngroup
     case tabSplitCloseGroup
     case tabDetachToWindow
+    case tabReattachToMainWindow
     case sessionKindLocal
     case sessionKindSerial
     case tabSplitWithSelected

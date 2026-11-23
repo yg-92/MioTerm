@@ -167,11 +167,15 @@ final class WorkspaceViewController: NSSplitViewController {
         sidebarCollapse.userToggled()
         if let panelItem {
             let nextCollapsed = !panelItem.isCollapsed
-            NSAnimationContext.runAnimationGroup { context in
+            NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.22
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 panelItem.animator().isCollapsed = nextCollapsed
-            }
+            }, completionHandler: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.updateSidebarExpandButton(animated: true)
+                }
+            })
         }
         updateSidebarExpandButton(animated: true)
     }
@@ -535,11 +539,20 @@ final class WorkspaceViewController: NSSplitViewController {
         winController.onReconnect = { [weak self] session in
             self?.reconnect(session)
         }
+        winController.onReattach = { [weak self] session in
+            self?.reattachDetachedDesktop(session)
+        }
         winController.onDidClose = { [weak self] id in
             self?.detachedVNCWindows.removeValue(forKey: id)
         }
         detachedVNCWindows[controller.sessionID] = winController
         winController.present()
+    }
+
+    private func reattachDetachedDesktop(_ controller: any SessionControlling) {
+        sessions.append(controller)
+        view.window?.makeKeyAndOrderFront(nil)
+        controller.focus()
     }
 
     private func presentHostForm(_ host: HostProfile) {

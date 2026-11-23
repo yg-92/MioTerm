@@ -7,8 +7,10 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
     let sessionController: any SessionControlling
     private let tabController: TerminalTabViewController
     var onReconnect: ((any SessionControlling) -> Void)?
+    var onReattach: ((any SessionControlling) -> Void)?
     var onDidClose: ((UUID) -> Void)?
     private var stateToken: UUID?
+    private var isReattaching = false
 
     init(controller: any SessionControlling, screenPoint: NSPoint?, anchorWindow: NSWindow?) {
         self.sessionController = controller
@@ -26,6 +28,7 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         window.contentViewController = tabController
         super.init(window: window)
         window.delegate = self
+        installReattachTitlebarButton(in: window)
 
         tabController.setPanePresentation(split: false, active: true)
         tabController.onReconnect = { [weak self] session in
@@ -66,12 +69,48 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         tabController.setReconnecting(busy)
     }
 
+    private func installReattachTitlebarButton(in window: NSWindow) {
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.layoutAttribute = .right
+
+        let button = NSButton(
+            title: L10n.tr(.tabReattachToMainWindow),
+            image: NSImage(systemSymbolName: "arrow.down.right.and.arrow.up.left", accessibilityDescription: L10n.tr(.tabReattachToMainWindow)) ?? NSImage(),
+            target: self,
+            action: #selector(reattachToMainWindow)
+        )
+        button.imagePosition = .imageLeading
+        button.bezelStyle = .accessoryBarAction
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11, weight: .medium)
+        button.toolTip = L10n.tr(.tabReattachToMainWindow)
+        button.sizeToFit()
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: button.frame.width + 12, height: 28))
+        button.frame.origin = NSPoint(x: 4, y: floor((container.bounds.height - button.frame.height) / 2))
+        container.addSubview(button)
+        accessory.view = container
+        window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    @objc func reattachToMainWindow() {
+        guard !isReattaching else { return }
+        isReattaching = true
+        sessionController.sessionView.removeFromSuperview()
+        let controller = sessionController
+        let callback = onReattach
+        close()
+        callback?(controller)
+    }
+
     func windowWillClose(_ notification: Notification) {
         sessionController.removeStateObserver(stateToken)
         stateToken = nil
         sessionController.onTitleChange = nil
-        sessionController.stop()
-        AppEnvironment.shared.unregister(sessionController)
+        if !isReattaching {
+            sessionController.stop()
+            AppEnvironment.shared.unregister(sessionController)
+        }
         onDidClose?(sessionController.sessionID)
     }
 }
