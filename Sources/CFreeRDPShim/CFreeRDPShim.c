@@ -304,6 +304,7 @@ struct MioRdpSession {
     size_t remote_fgd_cache_size;
     uint8_t* remote_text_cache;
     size_t remote_text_cache_size;
+    char* client_uri_list;
 };
 
 #define MIO_CF_TEXT 1u
@@ -541,9 +542,20 @@ static RdpUInt32 cb_cliprdr_server_format_data_request(MioCliprdrClientContext* 
     uint32_t data_size = 0;
     uint32_t fgd_id = 0;
     uint32_t file_flags = 0;
+    RdpBool file_updated = 0;
 
     pthread_mutex_lock(&session->clip_lock);
     fgd_id = session->client_fgd_format_id;
+    if (fgd_id != 0 && req->requestedFormatId == fgd_id &&
+        session->clip_file && session->client_uri_list && g_fn.clip_file_update_client_data) {
+        // 必须在 Windows 下发 ServerLockClipboardData 之后、响应 FileGroupDescriptorW 时更新，
+        // 这样 FreeRDP 会把文件列表绑定到当前的 clipDataId 锁槽，后续 FileContentsRequest 才能命中。
+        file_updated = g_fn.clip_file_update_client_data(
+            session->clip_file,
+            session->client_uri_list,
+            strlen(session->client_uri_list)
+        );
+    }
     if (session->clipboard && g_fn.clipboard_get_data) {
         data = g_fn.clipboard_get_data(session->clipboard, req->requestedFormatId, &data_size);
     }
@@ -570,9 +582,9 @@ static RdpUInt32 cb_cliprdr_server_format_data_request(MioCliprdrClientContext* 
         }
     }
 
-    char buf[160];
-    snprintf(buf, sizeof(buf), "cliprdr ServerFormatDataRequest fmt=%u (fgd=%u) raw=%u resp=%u flags=0x%x",
-             req->requestedFormatId, fgd_id, raw_size, data_size, file_flags);
+    char buf[192];
+    snprintf(buf, sizeof(buf), "cliprdr ServerFormatDataRequest fmt=%u (fgd=%u) updated=%d raw=%u resp=%u flags=0x%x",
+             req->requestedFormatId, fgd_id, file_updated, raw_size, data_size, file_flags);
     shim_log(session, buf);
 
     MioCliprdrFormatDataResponse resp = {0};
@@ -1088,6 +1100,8 @@ void mio_rdp_destroy(MioRdpSession* session) {
     session->remote_fgd_cache = NULL;
     free(session->remote_text_cache);
     session->remote_text_cache = NULL;
+    free(session->client_uri_list);
+    session->client_uri_list = NULL;
     pthread_mutex_unlock(&session->clip_lock);
 
     if (session->instance) {
@@ -1212,9 +1226,11 @@ bool mio_rdp_clipboard_send_text(MioRdpSession* session, const char* utf8_text) 
         pthread_mutex_unlock(&session->clip_lock);
         return false;
     }
-    if (session->clip_file && g_fn.clip_file_clear) {
-        g_fn.clip_file_clear(session->clip_file);
+    if (session->clip_file && g_fn.clip_file_notify_new_client_format_list) {
+        g_fn.clip_file_notify_new_client_format_list(session->clip_file);
     }
+    free(session->client_uri_list);
+    session->client_uri_list = NULL;
     g_fn.clipboard_empty(session->clipboard);
     uint32_t utf8_id = g_fn.clipboard_get_format_id(session->clipboard, "UTF8_STRING");
     g_fn.clipboard_set_data(session->clipboard, utf8_id, utf8_text, (uint32_t)(strlen(utf8_text) + 1));
@@ -1248,16 +1264,19 @@ bool mio_rdp_clipboard_send_files(MioRdpSession* session, const char* uri_list) 
     }
 
     size_t len = strlen(uri_list);
+    char* uri_copy = strdup(uri_list);
+    if (!uri_copy) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return false;
+    }
     if (g_fn.clip_file_notify_new_client_format_list) {
         g_fn.clip_file_notify_new_client_format_list(session->clip_file);
     }
-    if (g_fn.clip_file_clear) {
-        g_fn.clip_file_clear(session->clip_file);
-    }
+    free(session->client_uri_list);
+    session->client_uri_list = uri_copy;
     g_fn.clipboard_empty(session->clipboard);
     uint32_t uri_id = g_fn.clipboard_get_format_id(session->clipboard, "text/uri-list");
     g_fn.clipboard_set_data(session->clipboard, uri_id, uri_list, (uint32_t)(len + 1));
-    RdpBool updated = g_fn.clip_file_update_client_data(session->clip_file, uri_list, len);
     uint32_t fgd_id = session->client_fgd_format_id;
     pthread_mutex_unlock(&session->clip_lock);
 
@@ -1270,7 +1289,7 @@ bool mio_rdp_clipboard_send_files(MioRdpSession* session, const char* uri_list) 
     list.formats = formats;
     RdpUInt32 rc = cliprdr->ClientFormatList(cliprdr, &list);
     char buf[160];
-    snprintf(buf, sizeof(buf), "clipboard_send_files(len=%zu updated=%d fgd=%u) -> rc=%u", len, updated, fgd_id, rc);
+    snprintf(buf, sizeof(buf), "clipboard_send_files(len=%zu fgd=%u) -> rc=%u", len, fgd_id, rc);
     shim_log(session, buf);
     return rc == 0;
 }
