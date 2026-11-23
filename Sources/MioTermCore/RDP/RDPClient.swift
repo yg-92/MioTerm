@@ -20,6 +20,7 @@ public final class RDPClient: @unchecked Sendable {
     public var onRemoteClipboardChanged: (@Sendable (_ hasText: Bool, _ hasFiles: Bool) -> Void)?
 
     private let stateLock = NSLock()
+    private let clipboardSendQueue = DispatchQueue(label: "com.mio.term.rdp.clipboard-send", qos: .userInitiated)
     private var session: OpaquePointer?
     private var stopped = false
     private var lastButtonMask: UInt8 = 0
@@ -158,6 +159,19 @@ public final class RDPClient: @unchecked Sendable {
         let uriList = resolvedURLs.map(\.absoluteString).joined(separator: "\r\n") + "\r\n"
         return uriList.withCString { ptr in
             mio_rdp_clipboard_send_files(activeSession, ptr)
+        }
+    }
+
+    public func sendClipboardTextAsync(_ text: String) {
+        clipboardSendQueue.async { [weak self] in
+            _ = self?.sendClipboardText(text)
+        }
+    }
+
+    public func sendClipboardFilesAsync(_ urls: [URL], completion: (@Sendable (Bool) -> Void)? = nil) {
+        clipboardSendQueue.async { [weak self] in
+            let ok = self?.sendClipboardFiles(urls) ?? false
+            completion?(ok)
         }
     }
 

@@ -108,17 +108,19 @@ final class RDPController: SessionControlling {
 
     private func sendFiles(_ urls: [URL]) {
         guard clipboardReady, let client, !urls.isEmpty else { return }
-        guard client.sendClipboardFiles(urls) else { return }
         focus()
         syncModifiers([])
-        Task { @MainActor [weak self, weak client] in
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            guard let self, let client, self.client === client, self.state == .running else { return }
-            // 在 Windows 端模拟 Ctrl+V，使拖入/选择的文件像复制粘贴一样直接落到当前窗口或桌面。
-            client.sendScancode(0x1D, down: true)
-            client.sendScancode(0x2F, down: true)
-            client.sendScancode(0x2F, down: false)
-            client.sendScancode(0x1D, down: false)
+        client.sendClipboardFilesAsync(urls) { [weak self, weak client] ok in
+            guard ok else { return }
+            Task { @MainActor [weak self, weak client] in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard let self, let client, self.client === client, self.state == .running else { return }
+                // 在 Windows 端模拟 Ctrl+V，使拖入/选择的文件像复制粘贴一样直接落到当前窗口或桌面。
+                client.sendScancode(0x1D, down: true)
+                client.sendScancode(0x2F, down: true)
+                client.sendScancode(0x2F, down: false)
+                client.sendScancode(0x1D, down: false)
+            }
         }
     }
 
@@ -243,11 +245,11 @@ final class RDPController: SessionControlling {
 
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
-            client.sendClipboardFiles(urls)
+            client.sendClipboardFilesAsync(urls)
             return
         }
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
-            client.sendClipboardText(text)
+            client.sendClipboardTextAsync(text)
         }
     }
 
@@ -295,8 +297,8 @@ final class RDPController: SessionControlling {
 
     private static func registerClipboardStagingDir(_ dir: URL) {
         recentClipboardStagingDirs.append(dir)
-        // 保留最近 2 个中转目录，避免另一个 RDP 会话正在粘贴上一批文件时被提前清理。
-        while recentClipboardStagingDirs.count > 2 {
+        // 保留最近 8 个中转目录，避免并发传输或连续复制多次时正在读取的文件被提前清理。
+        while recentClipboardStagingDirs.count > 8 {
             let obsolete = recentClipboardStagingDirs.removeFirst()
             try? FileManager.default.removeItem(at: obsolete)
         }
