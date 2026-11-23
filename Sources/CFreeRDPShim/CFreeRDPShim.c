@@ -85,6 +85,8 @@ typedef struct {
 
     int (*client_parse_args)(void* settings, int argc, char** argv, RdpBool allow_unknown);
     RdpBool (*client_load_addins)(void* channels, void* settings);
+    int (*register_addin_provider)(void* provider, RdpUInt32 flags);
+    void* load_static_addin_entry;
 
     void* (*clipboard_create)(void);
     void (*clipboard_destroy)(void* clipboard);
@@ -201,6 +203,11 @@ static bool try_load_from_dir(const char* dir) {
     if (client) {
         g_fn.client_parse_args = dlsym(client, "freerdp_client_settings_parse_command_line_arguments");
         g_fn.client_load_addins = dlsym(client, "freerdp_client_load_addins");
+        g_fn.load_static_addin_entry = dlsym(client, "freerdp_channels_load_static_addin_entry");
+        g_fn.register_addin_provider = dlsym(freerdp, "freerdp_register_addin_provider");
+        if (g_fn.register_addin_provider && g_fn.load_static_addin_entry) {
+            g_fn.register_addin_provider(g_fn.load_static_addin_entry, 0);
+        }
         g_fn.clip_file_new = dlsym(client, "cliprdr_file_context_new");
         g_fn.clip_file_free = dlsym(client, "cliprdr_file_context_free");
         g_fn.clip_file_init = dlsym(client, "cliprdr_file_context_init");
