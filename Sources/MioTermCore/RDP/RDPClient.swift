@@ -147,13 +147,15 @@ public final class RDPClient: @unchecked Sendable {
 
     @discardableResult
     public func sendClipboardFiles(_ urls: [URL]) -> Bool {
-        let fileURLs = urls.filter(\.isFileURL)
-        guard !fileURLs.isEmpty else { return false }
+        let resolvedURLs = urls
+            .filter(\.isFileURL)
+            .map { URL(fileURLWithPath: $0.standardizedFileURL.path) }
+        guard !resolvedURLs.isEmpty else { return false }
         stateLock.lock()
         let activeSession = session
         stateLock.unlock()
         guard let activeSession else { return false }
-        let uriList = fileURLs.map(\.absoluteString).joined(separator: "\r\n") + "\r\n"
+        let uriList = resolvedURLs.map(\.absoluteString).joined(separator: "\r\n") + "\r\n"
         return uriList.withCString { ptr in
             mio_rdp_clipboard_send_files(activeSession, ptr)
         }
