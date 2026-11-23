@@ -894,6 +894,7 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", true);
         set_bool_setting(settings, "FreeRDP_RedirectClipboard", true);
         set_bool_setting(settings, "FreeRDP_SupportDynamicChannels", true);
+        set_bool_setting(settings, "FreeRDP_SupportGraphicsPipeline", false);
         set_bool_setting(settings, "FreeRDP_SupportDisplayControl", true);
         set_bool_setting(settings, "FreeRDP_DynamicResolutionUpdate", true);
 
@@ -956,7 +957,7 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
     bool disp_ready = false;
     bool should_resize = false;
     pthread_mutex_lock(&session->lock);
-    if (session->resize_pending && session->disp) {
+    if (session->resize_pending && session->disp && session->disp_ready) {
         disp = session->disp;
         req_w = session->pending_width;
         req_h = session->pending_height;
