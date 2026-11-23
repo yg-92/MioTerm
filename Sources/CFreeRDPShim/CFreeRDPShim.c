@@ -87,6 +87,8 @@ typedef struct {
     RdpBool (*client_load_addins)(void* channels, void* settings);
     int (*register_addin_provider)(void* provider, RdpUInt32 flags);
     void* load_static_addin_entry;
+    void (*client_on_channel_connected)(void* context, const void* e);
+    void (*client_on_channel_disconnected)(void* context, const void* e);
 
     void* (*clipboard_create)(void);
     void (*clipboard_destroy)(void* clipboard);
@@ -204,6 +206,8 @@ static bool try_load_from_dir(const char* dir) {
         g_fn.client_parse_args = dlsym(client, "freerdp_client_settings_parse_command_line_arguments");
         g_fn.client_load_addins = dlsym(client, "freerdp_client_load_addins");
         g_fn.load_static_addin_entry = dlsym(client, "freerdp_channels_load_static_addin_entry");
+        g_fn.client_on_channel_connected = dlsym(client, "freerdp_client_OnChannelConnectedEventHandler");
+        g_fn.client_on_channel_disconnected = dlsym(client, "freerdp_client_OnChannelDisconnectedEventHandler");
         g_fn.register_addin_provider = dlsym(freerdp, "freerdp_register_addin_provider");
         if (g_fn.register_addin_provider && g_fn.load_static_addin_entry) {
             g_fn.register_addin_provider(g_fn.load_static_addin_entry, 0);
@@ -589,8 +593,16 @@ static RdpUInt32 cb_disp_caps(void* disp, RdpUInt32 max_num_monitors, RdpUInt32 
 static void cb_channel_connected(void* context, const void* e) {
     MioRdpSession* session = session_from_context(context);
     if (!session || !e) return;
+    if (g_fn.client_on_channel_connected) {
+        g_fn.client_on_channel_connected(context, e);
+    }
     const char* name = *(const char**)((const char*)e + RDP_EVENT_CHANNEL_NAME_OFFSET);
     void* iface = *(void**)((const char*)e + RDP_EVENT_CHANNEL_INTERFACE_OFFSET);
+    if (name) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "ChannelConnected: %s (iface=%p)", name, iface);
+        shim_log(session, buf);
+    }
     if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0 && iface) {
         pthread_mutex_lock(&session->lock);
         session->disp = iface;
@@ -631,6 +643,9 @@ static void cb_channel_connected(void* context, const void* e) {
 static void cb_channel_disconnected(void* context, const void* e) {
     MioRdpSession* session = session_from_context(context);
     if (!session || !e) return;
+    if (g_fn.client_on_channel_disconnected) {
+        g_fn.client_on_channel_disconnected(context, e);
+    }
     const char* name = *(const char**)((const char*)e + RDP_EVENT_CHANNEL_NAME_OFFSET);
     if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0) {
         pthread_mutex_lock(&session->lock);

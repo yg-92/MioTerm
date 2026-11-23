@@ -342,6 +342,11 @@ final class RDPController: SessionControlling {
                 client.sendScancode(scancode, down: isDown)
             }
         }
+        if activeModifierFlags.contains(.capsLock) != flags.contains(.capsLock) {
+            // Caps Lock (0x3A) 在 Windows 端按按下+抬起触发一次大小写锁定切换。
+            client.sendScancode(0x3A, down: true)
+            client.sendScancode(0x3A, down: false)
+        }
         activeModifierFlags = flags
     }
 
