@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import MioTermCore
+import QuartzCore
 
 /// VNC 远程桌面渲染与输入视图：
 /// 维护本地 BGRA 像素缓冲，等比自适应窗口大小绘制，
@@ -31,6 +32,7 @@ final class VNCView: NSView {
     private var fbWidth = 0
     private var fbHeight = 0
     private var framebuffer = Data()
+    private var hasRenderedFrame = false
     private var buttonMask: UInt8 = 0
     private var trackingArea: NSTrackingArea?
     private var activeModifierFlags: NSEvent.ModifierFlags = []
@@ -39,6 +41,15 @@ final class VNCView: NSView {
     private var lastReportedSize: CGSize = .zero
 
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private let waitingLabel: NSTextField = {
+        let label = NSTextField(labelWithString: "MioTerm")
+        label.font = .systemFont(ofSize: 34, weight: .semibold)
+        label.textColor = .white
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.wantsLayer = true
+        return label
+    }()
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -49,9 +60,48 @@ final class VNCView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
         menu = buildContextMenu()
+        setupWaitingOverlay()
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    private func setupWaitingOverlay() {
+        addSubview(waitingLabel)
+        NSLayoutConstraint.activate([
+            waitingLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            waitingLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        startWaitingAnimation()
+    }
+
+    private func startWaitingAnimation() {
+        waitingLabel.isHidden = false
+        waitingLabel.wantsLayer = true
+        guard let labelLayer = waitingLabel.layer else { return }
+        if labelLayer.animation(forKey: "mioTermWaitingPulse") == nil {
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 0.95
+            pulse.toValue = 0.18
+            pulse.duration = 1.25
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pulse.isRemovedOnCompletion = false
+            labelLayer.add(pulse, forKey: "mioTermWaitingPulse")
+        }
+    }
+
+    private func stopWaitingAnimation() {
+        waitingLabel.layer?.removeAnimation(forKey: "mioTermWaitingPulse")
+        waitingLabel.isHidden = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil && !hasRenderedFrame {
+            startWaitingAnimation()
+        }
+    }
 
     func configureFramebuffer(width: Int, height: Int) {
         let w = max(1, width)
@@ -64,6 +114,8 @@ final class VNCView: NSView {
     }
 
     func clearFramebuffer() {
+        hasRenderedFrame = false
+        startWaitingAnimation()
         guard fbWidth != 0 || fbHeight != 0 || !framebuffer.isEmpty else { return }
         fbWidth = 0
         fbHeight = 0
@@ -72,15 +124,22 @@ final class VNCView: NSView {
     }
 
     func apply(_ updates: [VNCFrameUpdate]) {
+        var drewPixels = false
         for update in updates {
             switch update {
             case .resize(let width, let height):
                 configureFramebuffer(width: width, height: height)
             case .rawRect(let x, let y, let width, let height, let bgra):
                 blitRawRect(x: x, y: y, width: width, height: height, bgra: bgra)
+                if width > 0 && height > 0 { drewPixels = true }
             case .copyRect(let x, let y, let width, let height, let srcX, let srcY):
                 copyRect(x: x, y: y, width: width, height: height, srcX: srcX, srcY: srcY)
+                if width > 0 && height > 0 { drewPixels = true }
             }
+        }
+        if drewPixels && !hasRenderedFrame {
+            hasRenderedFrame = true
+            stopWaitingAnimation()
         }
         needsDisplay = true
     }
