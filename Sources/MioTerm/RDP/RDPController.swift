@@ -467,6 +467,25 @@ final class RDPController: SessionControlling {
         case kVK_PageDown: return 0x151
         case kVK_ForwardDelete: return 0x153
         case kVK_Command: return 0x15B
+        // 小数字键盘（Numpad）
+        case kVK_ANSI_Keypad0: return 0x52
+        case kVK_ANSI_Keypad1: return 0x4F
+        case kVK_ANSI_Keypad2: return 0x50
+        case kVK_ANSI_Keypad3: return 0x51
+        case kVK_ANSI_Keypad4: return 0x4B
+        case kVK_ANSI_Keypad5: return 0x4C
+        case kVK_ANSI_Keypad6: return 0x4D
+        case kVK_ANSI_Keypad7: return 0x47
+        case kVK_ANSI_Keypad8: return 0x48
+        case kVK_ANSI_Keypad9: return 0x49
+        case kVK_ANSI_KeypadDecimal: return 0x53
+        case kVK_ANSI_KeypadPlus: return 0x4E
+        case kVK_ANSI_KeypadMinus: return 0x4A
+        case kVK_ANSI_KeypadMultiply: return 0x37
+        case kVK_ANSI_KeypadDivide: return 0x135
+        case kVK_ANSI_KeypadEnter: return 0x11C
+        case kVK_ANSI_KeypadClear: return 0x45
+        case kVK_ANSI_KeypadEquals: return 0x0D
         default: return nil
         }
     }

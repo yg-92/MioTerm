@@ -83,6 +83,7 @@ typedef struct {
     RdpBool (*input_send_mouse_event)(void* input, uint16_t flags, uint16_t x, uint16_t y);
     RdpBool (*input_send_keyboard_event_ex)(void* input, RdpBool down, RdpBool repeat, RdpUInt32 rdp_scancode);
     RdpBool (*input_send_unicode_keyboard_event)(void* input, uint16_t flags, uint16_t code);
+    RdpBool (*input_send_synchronize_event)(void* input, RdpUInt32 flags);
 
     RdpUInt32 (*wait_for_multiple_objects)(RdpUInt32 count, const void** handles, RdpBool wait_all, RdpUInt32 ms);
     int (*pubsub_subscribe)(void* pubSub, const char* eventName, ...);
@@ -232,6 +233,7 @@ static bool try_load_from_dir(const char* dir) {
     }
     g_fn.cliprdr_serialize_file_list_ex = dlsym(freerdp, "cliprdr_serialize_file_list_ex");
     g_fn.cliprdr_parse_file_list = dlsym(freerdp, "cliprdr_parse_file_list");
+    g_fn.input_send_synchronize_event = dlsym(freerdp, "freerdp_input_send_synchronize_event");
 
     g_fn.winpr_handle = winpr;
     g_fn.freerdp_handle = freerdp;
@@ -1108,6 +1110,13 @@ bool mio_rdp_connect(MioRdpSession* session) {
             session->callbacks.on_error(session->userdata, msg ? msg : "FreeRDP connect failed");
         }
         return false;
+    }
+    if (session->context && g_fn.input_send_synchronize_event) {
+        void* input = ptr_at(session->context, RDP_CONTEXT_INPUT_OFFSET);
+        if (input) {
+            // 连接建立后同步开启远端 Num Lock (KBD_SYNC_NUM_LOCK = 0x02)，确保小数字键盘默认输出数字。
+            g_fn.input_send_synchronize_event(input, 0x02u);
+        }
     }
     return true;
 }
