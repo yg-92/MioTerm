@@ -527,6 +527,16 @@ static RdpUInt32 cb_cliprdr_monitor_ready(MioCliprdrClientContext* cliprdr, cons
     caps.capabilitySets = &gen;
     cliprdr->ClientCapabilities(cliprdr, &caps);
 
+    // 按 [MS-RDPECLIP] 1.3.2.1 规范：收到 MonitorReady 后必须发一次初始 FormatList（即使为空），
+    // 否则 Windows rdpclip.exe 会一直停在初始化阶段，不会在远端 Ctrl+C 时推送 ServerFormatList。
+    if (cliprdr->ClientFormatList) {
+        MioCliprdrFormatList empty_list = {0};
+        empty_list.common.msgType = MIO_CB_FORMAT_LIST;
+        empty_list.numFormats = 0;
+        empty_list.formats = NULL;
+        cliprdr->ClientFormatList(cliprdr, &empty_list);
+    }
+
     pthread_mutex_lock(&session->clip_lock);
     session->clip_ready = true;
     pthread_mutex_unlock(&session->clip_lock);
