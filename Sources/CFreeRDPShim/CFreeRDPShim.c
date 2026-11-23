@@ -76,6 +76,8 @@ typedef struct {
     RdpBool (*gdi_init)(void* instance, RdpUInt32 format);
     RdpBool (*gdi_resize)(void* gdi, RdpUInt32 width, RdpUInt32 height);
     void (*gdi_free)(void* instance);
+    RdpBool (*gdi_graphics_pipeline_init)(void* gdi, void* gfx);
+    void (*gdi_graphics_pipeline_uninit)(void* gdi, void* gfx);
 
     RdpBool (*input_send_mouse_event)(void* input, uint16_t flags, uint16_t x, uint16_t y);
     RdpBool (*input_send_keyboard_event_ex)(void* input, RdpBool down, RdpBool repeat, RdpUInt32 rdp_scancode);
@@ -181,6 +183,8 @@ static bool try_load_from_dir(const char* dir) {
     LOAD_SYM(freerdp, gdi_init, "gdi_init");
     LOAD_SYM(freerdp, gdi_resize, "gdi_resize");
     LOAD_SYM(freerdp, gdi_free, "gdi_free");
+    g_fn.gdi_graphics_pipeline_init = dlsym(freerdp, "gdi_graphics_pipeline_init");
+    g_fn.gdi_graphics_pipeline_uninit = dlsym(freerdp, "gdi_graphics_pipeline_uninit");
 
     LOAD_SYM(freerdp, input_send_mouse_event, "freerdp_input_send_mouse_event");
     LOAD_SYM(freerdp, input_send_keyboard_event_ex, "freerdp_input_send_keyboard_event_ex");
@@ -597,7 +601,15 @@ static void cb_channel_connected(void* context, const void* e) {
         snprintf(buf, sizeof(buf), "ChannelConnected: %s (iface=%p)", name, iface);
         shim_log(session, buf);
     }
-    if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0 && iface) {
+    if (name && strcmp(name, "Microsoft::Windows::RDS::Graphics") == 0 && iface) {
+        void* gdi = ptr_at(context, RDP_CONTEXT_GDI_OFFSET);
+        if (gdi && g_fn.gdi_graphics_pipeline_init) {
+            RdpBool ok = g_fn.gdi_graphics_pipeline_init(gdi, iface);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "gdi_graphics_pipeline_init=%d", ok);
+            shim_log(session, buf);
+        }
+    } else if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0 && iface) {
         pthread_mutex_lock(&session->lock);
         session->disp = iface;
         session->disp_ready = false;
@@ -638,7 +650,13 @@ static void cb_channel_disconnected(void* context, const void* e) {
     MioRdpSession* session = session_from_context(context);
     if (!session || !e) return;
     const char* name = *(const char**)((const char*)e + RDP_EVENT_CHANNEL_NAME_OFFSET);
-    if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0) {
+    void* iface = *(void**)((const char*)e + RDP_EVENT_CHANNEL_INTERFACE_OFFSET);
+    if (name && strcmp(name, "Microsoft::Windows::RDS::Graphics") == 0 && iface) {
+        void* gdi = ptr_at(context, RDP_CONTEXT_GDI_OFFSET);
+        if (gdi && g_fn.gdi_graphics_pipeline_uninit) {
+            g_fn.gdi_graphics_pipeline_uninit(gdi, iface);
+        }
+    } else if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0) {
         pthread_mutex_lock(&session->lock);
         session->disp = NULL;
         session->disp_ready = false;
@@ -894,7 +912,7 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", true);
         set_bool_setting(settings, "FreeRDP_RedirectClipboard", true);
         set_bool_setting(settings, "FreeRDP_SupportDynamicChannels", true);
-        set_bool_setting(settings, "FreeRDP_SupportGraphicsPipeline", false);
+        set_bool_setting(settings, "FreeRDP_SupportGraphicsPipeline", true);
         set_bool_setting(settings, "FreeRDP_SupportDisplayControl", true);
         set_bool_setting(settings, "FreeRDP_DynamicResolutionUpdate", true);
 
