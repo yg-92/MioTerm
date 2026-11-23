@@ -149,7 +149,7 @@ public final class RDPClient: @unchecked Sendable {
     public func sendClipboardFiles(_ urls: [URL]) -> Bool {
         let resolvedURLs = urls
             .filter(\.isFileURL)
-            .map { URL(fileURLWithPath: $0.standardizedFileURL.path) }
+            .map { URL(fileURLWithPath: $0.standardizedFileURL.path, isDirectory: false) }
         guard !resolvedURLs.isEmpty else { return false }
         stateLock.lock()
         let activeSession = session
