@@ -66,12 +66,14 @@ typedef struct {
     const char* (*freerdp_get_last_error_string)(RdpUInt32 code);
 
     ssize_t (*freerdp_settings_get_key_for_name)(const char* value);
+    RdpUInt32 (*freerdp_settings_get_uint32)(const void* settings, size_t id);
     RdpBool (*freerdp_settings_set_string)(void* settings, size_t id, const char* val);
     RdpBool (*freerdp_settings_set_uint16)(void* settings, size_t id, uint16_t val);
     RdpBool (*freerdp_settings_set_uint32)(void* settings, size_t id, RdpUInt32 val);
     RdpBool (*freerdp_settings_set_bool)(void* settings, size_t id, RdpBool val);
 
     RdpBool (*gdi_init)(void* instance, RdpUInt32 format);
+    RdpBool (*gdi_resize)(void* gdi, RdpUInt32 width, RdpUInt32 height);
     void (*gdi_free)(void* instance);
 
     RdpBool (*input_send_mouse_event)(void* input, uint16_t flags, uint16_t x, uint16_t y);
@@ -167,12 +169,14 @@ static bool try_load_from_dir(const char* dir) {
     LOAD_SYM(freerdp, freerdp_get_last_error_string, "freerdp_get_last_error_string");
 
     LOAD_SYM(freerdp, freerdp_settings_get_key_for_name, "freerdp_settings_get_key_for_name");
+    LOAD_SYM(freerdp, freerdp_settings_get_uint32, "freerdp_settings_get_uint32");
     LOAD_SYM(freerdp, freerdp_settings_set_string, "freerdp_settings_set_string");
     LOAD_SYM(freerdp, freerdp_settings_set_uint16, "freerdp_settings_set_uint16");
     LOAD_SYM(freerdp, freerdp_settings_set_uint32, "freerdp_settings_set_uint32");
     LOAD_SYM(freerdp, freerdp_settings_set_bool, "freerdp_settings_set_bool");
 
     LOAD_SYM(freerdp, gdi_init, "gdi_init");
+    LOAD_SYM(freerdp, gdi_resize, "gdi_resize");
     LOAD_SYM(freerdp, gdi_free, "gdi_free");
 
     LOAD_SYM(freerdp, input_send_mouse_event, "freerdp_input_send_mouse_event");
@@ -259,6 +263,7 @@ struct MioRdpSession {
     uint32_t pending_width;
     uint32_t pending_height;
     bool resize_pending;
+    bool disp_ready;
     bool gdi_initialized;
     bool connected;
 
@@ -549,15 +554,32 @@ static RdpUInt32 cb_cliprdr_server_format_data_response(MioCliprdrClientContext*
     return 0;
 }
 
+static RdpUInt32 cb_disp_caps(void* disp, RdpUInt32 max_num_monitors, RdpUInt32 max_area_a, RdpUInt32 max_area_b) {
+    (void)max_num_monitors;
+    (void)max_area_a;
+    (void)max_area_b;
+    if (!disp) return 0;
+    MioRdpSession* session = (MioRdpSession*)ptr_at(disp, 8);
+    if (session) {
+        pthread_mutex_lock(&session->lock);
+        session->disp_ready = true;
+        pthread_mutex_unlock(&session->lock);
+    }
+    return 0;
+}
+
 static void cb_channel_connected(void* context, const void* e) {
     MioRdpSession* session = session_from_context(context);
     if (!session || !e) return;
     const char* name = *(const char**)((const char*)e + RDP_EVENT_CHANNEL_NAME_OFFSET);
     void* iface = *(void**)((const char*)e + RDP_EVENT_CHANNEL_INTERFACE_OFFSET);
-    if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0) {
+    if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0 && iface) {
         pthread_mutex_lock(&session->lock);
         session->disp = iface;
+        session->disp_ready = false;
         pthread_mutex_unlock(&session->lock);
+        set_ptr_at(iface, 8, session);
+        set_ptr_at(iface, 16, (void*)cb_disp_caps);
     } else if (name && strcmp(name, "cliprdr") == 0 && iface) {
         MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)iface;
         pthread_mutex_lock(&session->clip_lock);
@@ -594,6 +616,7 @@ static void cb_channel_disconnected(void* context, const void* e) {
     if (name && strcmp(name, "Microsoft::Windows::RDS::DisplayControl") == 0) {
         pthread_mutex_lock(&session->lock);
         session->disp = NULL;
+        session->disp_ready = false;
         pthread_mutex_unlock(&session->lock);
     } else if (name && strcmp(name, "cliprdr") == 0) {
         pthread_mutex_lock(&session->clip_lock);
@@ -657,15 +680,28 @@ static RdpBool cb_end_paint(void* context) {
     return 1;
 }
 
+static uint32_t get_u32_setting(void* settings, const char* name) {
+    ssize_t key = g_fn.freerdp_settings_get_key_for_name(name);
+    if (key < 0) return 0;
+    return g_fn.freerdp_settings_get_uint32(settings, (size_t)key);
+}
+
 static RdpBool cb_desktop_resize(void* context) {
     MioRdpSession* session = session_from_context(context);
-    if (!session || !session->callbacks.on_connected) return 1;
+    if (!session) return 1;
     void* gdi = ptr_at(context, RDP_CONTEXT_GDI_OFFSET);
+    void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
     if (!gdi) return 1;
-    int32_t width = i32_at(gdi, RDP_GDI_WIDTH_OFFSET);
-    int32_t height = i32_at(gdi, RDP_GDI_HEIGHT_OFFSET);
-    if (width > 0 && height > 0) {
-        session->callbacks.on_connected(session->userdata, width, height);
+    uint32_t width = settings ? get_u32_setting(settings, "FreeRDP_DesktopWidth") : 0;
+    uint32_t height = settings ? get_u32_setting(settings, "FreeRDP_DesktopHeight") : 0;
+    if (width > 0 && height > 0 && g_fn.gdi_resize) {
+        g_fn.gdi_resize(gdi, width, height);
+    } else {
+        width = (uint32_t)i32_at(gdi, RDP_GDI_WIDTH_OFFSET);
+        height = (uint32_t)i32_at(gdi, RDP_GDI_HEIGHT_OFFSET);
+    }
+    if (width > 0 && height > 0 && session->callbacks.on_connected) {
+        session->callbacks.on_connected(session->userdata, (int32_t)width, (int32_t)height);
     }
     return 1;
 }
@@ -877,7 +913,7 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
     uint32_t req_h = 0;
     bool should_resize = false;
     pthread_mutex_lock(&session->lock);
-    if (session->resize_pending && session->disp) {
+    if (session->resize_pending && session->disp && session->disp_ready) {
         disp = session->disp;
         req_w = session->pending_width;
         req_h = session->pending_height;
@@ -894,6 +930,10 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
             layout.Flags = 0x00000001; // DISPLAY_CONTROL_MONITOR_PRIMARY
             layout.Width = req_w;
             layout.Height = req_h;
+            uint32_t phys_w = (req_w * 254u) / 960u;
+            uint32_t phys_h = (req_h * 254u) / 960u;
+            layout.PhysicalWidth = phys_w < 10 ? 10 : (phys_w > 10000 ? 10000 : phys_w);
+            layout.PhysicalHeight = phys_h < 10 ? 10 : (phys_h > 10000 ? 10000 : phys_h);
             layout.DesktopScaleFactor = 100;
             layout.DeviceScaleFactor = 100;
             send_layout(disp, 1, &layout);
