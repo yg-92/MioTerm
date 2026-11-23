@@ -228,8 +228,12 @@ final class VNCView: NSView {
     }
 
     private func remotePoint(from event: NSEvent, allowOutside: Bool = false) -> (Int, Int)? {
+        remotePoint(fromWindowLocation: event.locationInWindow, allowOutside: allowOutside)
+    }
+
+    private func remotePoint(fromWindowLocation locationInWindow: NSPoint, allowOutside: Bool = false) -> (Int, Int)? {
         guard fbWidth > 0, fbHeight > 0 else { return nil }
-        let local = convert(event.locationInWindow, from: nil)
+        let local = convert(locationInWindow, from: nil)
         let rect = contentRect()
         guard rect.width > 0, rect.height > 0 else { return nil }
         if !allowOutside {
@@ -479,6 +483,16 @@ final class VNCView: NSView {
                   options: [.urlReadingFileURLsOnly: true]
               ) as? [URL],
               !urls.isEmpty else { return false }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        window?.makeFirstResponder(self)
+        onFocus?()
+        if let (x, y) = remotePoint(fromWindowLocation: sender.draggingLocation, allowOutside: false) {
+            lastRemotePoint = (x, y)
+            onPointerEvent?(x, y, 0)
+            onPointerEvent?(x, y, 1)
+            onPointerEvent?(x, y, 0)
+        }
         onSendFiles(urls)
         return true
     }

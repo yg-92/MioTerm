@@ -109,10 +109,12 @@ typedef struct {
     RdpBool (*clip_file_clear)(void* file);
     RdpBool (*clip_file_set_locally_available)(void* file, RdpBool available);
     RdpBool (*clip_file_remote_set_flags)(void* file, RdpUInt32 flags);
+    RdpUInt32 (*clip_file_current_flags)(void* file);
     RdpUInt32 (*clip_file_notify_new_server_format_list)(void* file);
     RdpUInt32 (*clip_file_notify_new_client_format_list)(void* file);
     RdpBool (*clip_file_update_client_data)(void* file, const char* data, size_t size);
     RdpBool (*clip_file_set_local_clipboard_data)(void* file, const void* (*fkt)(void*, const char*, size_t*), void* userdata, const char** mime_types, size_t count);
+    RdpUInt32 (*cliprdr_serialize_file_list_ex)(RdpUInt32 flags, const void* file_descriptor_array, RdpUInt32 file_descriptor_count, uint8_t** format_data, RdpUInt32* format_data_length);
 } FreeRDPFunctions;
 
 static pthread_mutex_t g_loader_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -220,11 +222,13 @@ static bool try_load_from_dir(const char* dir) {
         g_fn.clip_file_clear = dlsym(client, "cliprdr_file_context_clear");
         g_fn.clip_file_set_locally_available = dlsym(client, "cliprdr_file_context_set_locally_available");
         g_fn.clip_file_remote_set_flags = dlsym(client, "cliprdr_file_context_remote_set_flags");
+        g_fn.clip_file_current_flags = dlsym(client, "cliprdr_file_context_current_flags");
         g_fn.clip_file_notify_new_server_format_list = dlsym(client, "cliprdr_file_context_notify_new_server_format_list");
         g_fn.clip_file_notify_new_client_format_list = dlsym(client, "cliprdr_file_context_notify_new_client_format_list");
         g_fn.clip_file_update_client_data = dlsym(client, "cliprdr_file_context_update_client_data");
         g_fn.clip_file_set_local_clipboard_data = dlsym(client, "cliprdr_file_context_set_local_clipboard_data");
     }
+    g_fn.cliprdr_serialize_file_list_ex = dlsym(freerdp, "cliprdr_serialize_file_list_ex");
 
     g_fn.winpr_handle = winpr;
     g_fn.freerdp_handle = freerdp;
@@ -414,6 +418,8 @@ static MioRdpSession* session_from_context(void* context) {
     return (MioRdpSession*)ptr_at(context, RDP_CONTEXT_SIZE);
 }
 
+static void shim_log(MioRdpSession* session, const char* message);
+
 static MioRdpSession* session_from_cliprdr(MioCliprdrClientContext* cliprdr) {
     if (!cliprdr) return NULL;
     return session_from_context(cliprdr->rdpcontext);
@@ -514,10 +520,17 @@ static RdpUInt32 cb_cliprdr_server_format_list(MioCliprdrClientContext* cliprdr,
 }
 
 static RdpUInt32 cb_cliprdr_server_format_list_response(MioCliprdrClientContext* cliprdr, const void* arg) {
-    (void)cliprdr;
-    (void)arg;
+    MioRdpSession* session = session_from_cliprdr(cliprdr);
+    const MioCliprdrFormatListResponse* resp = (const MioCliprdrFormatListResponse*)arg;
+    if (session && resp) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "cliprdr ServerFormatListResponse flags=0x%x", resp->common.msgFlags);
+        shim_log(session, buf);
+    }
     return 0;
 }
+
+#define MIO_FILEDESCRIPTORW_SIZE 592u
 
 static RdpUInt32 cb_cliprdr_server_format_data_request(MioCliprdrClientContext* cliprdr, const void* arg) {
     MioRdpSession* session = session_from_cliprdr(cliprdr);
@@ -526,12 +539,41 @@ static RdpUInt32 cb_cliprdr_server_format_data_request(MioCliprdrClientContext* 
 
     void* data = NULL;
     uint32_t data_size = 0;
+    uint32_t fgd_id = 0;
+    uint32_t file_flags = 0;
 
     pthread_mutex_lock(&session->clip_lock);
+    fgd_id = session->client_fgd_format_id;
     if (session->clipboard && g_fn.clipboard_get_data) {
         data = g_fn.clipboard_get_data(session->clipboard, req->requestedFormatId, &data_size);
     }
+    if (session->clip_file && g_fn.clip_file_current_flags) {
+        file_flags = g_fn.clip_file_current_flags(session->clip_file);
+    }
     pthread_mutex_unlock(&session->clip_lock);
+
+    uint32_t raw_size = data_size;
+    if (fgd_id != 0 && req->requestedFormatId == fgd_id && data && data_size >= MIO_FILEDESCRIPTORW_SIZE &&
+        (data_size % MIO_FILEDESCRIPTORW_SIZE) == 0 && g_fn.cliprdr_serialize_file_list_ex) {
+        uint8_t* serialized = NULL;
+        RdpUInt32 serialized_size = 0;
+        RdpUInt32 count = data_size / MIO_FILEDESCRIPTORW_SIZE;
+        RdpUInt32 ser_rc = g_fn.cliprdr_serialize_file_list_ex(file_flags, data, count, &serialized, &serialized_size);
+        free(data);
+        if (ser_rc == 0 && serialized && serialized_size > 0) {
+            data = serialized;
+            data_size = serialized_size;
+        } else {
+            free(serialized);
+            data = NULL;
+            data_size = 0;
+        }
+    }
+
+    char buf[160];
+    snprintf(buf, sizeof(buf), "cliprdr ServerFormatDataRequest fmt=%u (fgd=%u) raw=%u resp=%u flags=0x%x",
+             req->requestedFormatId, fgd_id, raw_size, data_size, file_flags);
+    shim_log(session, buf);
 
     MioCliprdrFormatDataResponse resp = {0};
     resp.common.msgType = MIO_CB_FORMAT_DATA_RESPONSE;

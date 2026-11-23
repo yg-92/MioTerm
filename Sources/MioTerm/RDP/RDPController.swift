@@ -87,34 +87,18 @@ final class RDPController: SessionControlling {
     }
 
     private func sendFiles(_ urls: [URL]) {
-        guard let sharedDir = client?.sharedDirectory else { return }
-        let targetDir = URL(fileURLWithPath: sharedDir, isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
-            var copiedCount = 0
-            for url in urls {
-                let destination = targetDir.appendingPathComponent(url.lastPathComponent)
-                if url.standardizedFileURL == destination.standardizedFileURL {
-                    copiedCount += 1
-                    continue
-                }
-                if FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.removeItem(at: destination)
-                }
-                try FileManager.default.copyItem(at: url, to: destination)
-                copiedCount += 1
-            }
-            AlertPresenter.notify(
-                title: L10n.tr(.rdpFileCopiedTitle),
-                message: L10n.tr(.rdpFileCopiedMsg, copiedCount, sharedDir),
-                in: desktopView.window
-            )
-        } catch {
-            AlertPresenter.fail(
-                title: L10n.tr(.rdpFileCopyFailedTitle),
-                message: error.localizedDescription,
-                in: desktopView.window
-            )
+        guard clipboardReady, let client, !urls.isEmpty else { return }
+        guard client.sendClipboardFiles(urls) else { return }
+        focus()
+        syncModifiers([])
+        Task { @MainActor [weak self, weak client] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard let self, let client, self.client === client, self.state == .running else { return }
+            // 在 Windows 端模拟 Ctrl+V，使拖入/选择的文件像复制粘贴一样直接落到当前窗口或桌面。
+            client.sendScancode(0x1D, down: true)
+            client.sendScancode(0x2F, down: true)
+            client.sendScancode(0x2F, down: false)
+            client.sendScancode(0x1D, down: false)
         }
     }
 
