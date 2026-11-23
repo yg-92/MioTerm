@@ -34,7 +34,11 @@ final class RDPController: SessionControlling {
         return "\(subject) · \(state.label)"
     }
 
+    private static let rdpClipboardDidUpdateNotification = Notification.Name("MioTermRDPClipboardDidUpdate")
+    private static var recentClipboardStagingDirs: [URL] = []
+
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
+    private var clipboardObserver: NSObjectProtocol?
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
@@ -50,6 +54,22 @@ final class RDPController: SessionControlling {
         self.host = host
         self.title = host.displayName
         wireView()
+        clipboardObserver = NotificationCenter.default.addObserver(
+            forName: Self.rdpClipboardDidUpdateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            Task { @MainActor [weak self] in
+                guard let self, (note.object as AnyObject?) !== self else { return }
+                self.syncLocalPasteboardToRemote()
+            }
+        }
+    }
+
+    deinit {
+        if let clipboardObserver {
+            NotificationCenter.default.removeObserver(clipboardObserver)
+        }
     }
 
     private func wireView() {
@@ -234,8 +254,28 @@ final class RDPController: SessionControlling {
     private func handleRemoteClipboardChanged(hasText: Bool, hasFiles: Bool, client: RDPClient) {
         clipboardFetchTask?.cancel()
         if hasFiles {
-            if client.publishRemoteClipboardFiles() {
-                lastSyncedPasteboardChangeCount = NSPasteboard.general.changeCount
+            clipboardFetchTask = Task.detached(priority: .userInitiated) { [weak self, weak client] in
+                guard let client else { return }
+                let stagingDir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("MioTermRDPClipboard", isDirectory: true)
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                let urls = client.downloadRemoteClipboardFiles(to: stagingDir)
+                guard !urls.isEmpty else {
+                    try? FileManager.default.removeItem(at: stagingDir)
+                    return
+                }
+                await MainActor.run { [weak self, weak client] in
+                    guard let self, let client, self.client === client, !Task.isCancelled else {
+                        try? FileManager.default.removeItem(at: stagingDir)
+                        return
+                    }
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    pasteboard.writeObjects(urls as [NSURL])
+                    self.lastSyncedPasteboardChangeCount = pasteboard.changeCount
+                    Self.registerClipboardStagingDir(stagingDir)
+                    NotificationCenter.default.post(name: Self.rdpClipboardDidUpdateNotification, object: self)
+                }
             }
             return
         }
@@ -248,7 +288,17 @@ final class RDPController: SessionControlling {
                 pasteboard.clearContents()
                 pasteboard.setString(text, forType: .string)
                 self.lastSyncedPasteboardChangeCount = pasteboard.changeCount
+                NotificationCenter.default.post(name: Self.rdpClipboardDidUpdateNotification, object: self)
             }
+        }
+    }
+
+    private static func registerClipboardStagingDir(_ dir: URL) {
+        recentClipboardStagingDirs.append(dir)
+        // 保留最近 2 个中转目录，避免另一个 RDP 会话正在粘贴上一批文件时被提前清理。
+        while recentClipboardStagingDirs.count > 2 {
+            let obsolete = recentClipboardStagingDirs.removeFirst()
+            try? FileManager.default.removeItem(at: obsolete)
         }
     }
 

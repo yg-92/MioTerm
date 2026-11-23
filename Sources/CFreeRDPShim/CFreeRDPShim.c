@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 // FreeRDP 3.x ABI offsets (verified on arm64 macOS FreeRDP 3.33.1)
@@ -115,6 +116,7 @@ typedef struct {
     RdpBool (*clip_file_update_client_data)(void* file, const char* data, size_t size);
     RdpBool (*clip_file_set_local_clipboard_data)(void* file, const void* (*fkt)(void*, const char*, size_t*), void* userdata, const char** mime_types, size_t count);
     RdpUInt32 (*cliprdr_serialize_file_list_ex)(RdpUInt32 flags, const void* file_descriptor_array, RdpUInt32 file_descriptor_count, uint8_t** format_data, RdpUInt32* format_data_length);
+    RdpUInt32 (*cliprdr_parse_file_list)(const uint8_t* format_data, RdpUInt32 format_data_length, void** file_descriptor_array, RdpUInt32* file_descriptor_count);
 } FreeRDPFunctions;
 
 static pthread_mutex_t g_loader_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -229,6 +231,7 @@ static bool try_load_from_dir(const char* dir) {
         g_fn.clip_file_set_local_clipboard_data = dlsym(client, "cliprdr_file_context_set_local_clipboard_data");
     }
     g_fn.cliprdr_serialize_file_list_ex = dlsym(freerdp, "cliprdr_serialize_file_list_ex");
+    g_fn.cliprdr_parse_file_list = dlsym(freerdp, "cliprdr_parse_file_list");
 
     g_fn.winpr_handle = winpr;
     g_fn.freerdp_handle = freerdp;
@@ -305,6 +308,13 @@ struct MioRdpSession {
     uint8_t* remote_text_cache;
     size_t remote_text_cache_size;
     char* client_uri_list;
+    uint64_t server_clip_generation;
+    uint32_t next_file_stream_id;
+    uint32_t pending_file_stream_id;
+    bool pending_file_ready;
+    bool pending_file_ok;
+    uint8_t* pending_file_data;
+    uint32_t pending_file_size;
 };
 
 #define MIO_CF_TEXT 1u
@@ -368,6 +378,45 @@ typedef struct {
     MioCliprdrHeader common;
     const uint8_t* requestedFormatData;
 } MioCliprdrFormatDataResponse;
+
+#define MIO_CB_FILECONTENTS_REQUEST 0x0008u
+#define MIO_FILECONTENTS_SIZE 0x00000001u
+#define MIO_FILECONTENTS_RANGE 0x00000002u
+#define MIO_FD_FILESIZE 0x00000040u
+#define MIO_FILE_ATTRIBUTE_DIRECTORY 0x00000010u
+
+typedef struct {
+    MioCliprdrHeader common;
+    uint32_t streamId;
+    uint32_t listIndex;
+    uint32_t dwFlags;
+    uint32_t nPositionLow;
+    uint32_t nPositionHigh;
+    uint32_t cbRequested;
+    RdpBool haveClipDataId;
+    uint32_t clipDataId;
+} MioCliprdrFileContentsRequest;
+
+typedef struct {
+    MioCliprdrHeader common;
+    uint32_t streamId;
+    uint32_t cbRequested;
+    const uint8_t* requestedData;
+} MioCliprdrFileContentsResponse;
+
+typedef struct {
+    uint32_t dwFlags;
+    uint8_t clsid[16];
+    uint8_t sizel[8];
+    uint8_t pointl[8];
+    uint32_t dwFileAttributes;
+    uint64_t ftCreationTime;
+    uint64_t ftLastAccessTime;
+    uint64_t ftLastWriteTime;
+    uint32_t nFileSizeHigh;
+    uint32_t nFileSizeLow;
+    uint16_t cFileName[260];
+} MioFileDescriptorW;
 
 typedef struct MioCliprdrClientContext MioCliprdrClientContext;
 typedef RdpUInt32 (*MioCliprdrFn)(MioCliprdrClientContext* context, const void* arg);
@@ -501,6 +550,8 @@ static RdpUInt32 cb_cliprdr_server_format_list(MioCliprdrClientContext* cliprdr,
     session->server_text_format_id = text_fmt;
     session->server_has_files = has_files;
     session->server_fgd_format_id = fgd_fmt;
+    session->server_clip_generation++;
+    pthread_cond_broadcast(&session->clip_cond);
     pthread_mutex_unlock(&session->clip_lock);
 
     if (session->clip_file && g_fn.clip_file_notify_new_server_format_list) {
@@ -622,6 +673,33 @@ static RdpUInt32 cb_cliprdr_server_format_data_response(MioCliprdrClientContext*
     return 0;
 }
 
+static RdpUInt32 cb_cliprdr_server_file_contents_response(MioCliprdrClientContext* cliprdr, const void* arg) {
+    MioRdpSession* session = session_from_cliprdr(cliprdr);
+    const MioCliprdrFileContentsResponse* resp = (const MioCliprdrFileContentsResponse*)arg;
+    if (!session || !resp) return 0;
+
+    pthread_mutex_lock(&session->clip_lock);
+    if (resp->streamId == session->pending_file_stream_id) {
+        free(session->pending_file_data);
+        session->pending_file_data = NULL;
+        session->pending_file_size = 0;
+        session->pending_file_ok = (resp->common.msgFlags & MIO_CB_RESPONSE_OK) != 0;
+        if (session->pending_file_ok && resp->requestedData && resp->cbRequested > 0) {
+            session->pending_file_data = (uint8_t*)malloc(resp->cbRequested);
+            if (session->pending_file_data) {
+                memcpy(session->pending_file_data, resp->requestedData, resp->cbRequested);
+                session->pending_file_size = resp->cbRequested;
+            } else {
+                session->pending_file_ok = false;
+            }
+        }
+        session->pending_file_ready = true;
+        pthread_cond_broadcast(&session->clip_cond);
+    }
+    pthread_mutex_unlock(&session->clip_lock);
+    return 0;
+}
+
 static void shim_log(MioRdpSession* session, const char* message) {
     if (session && session->callbacks.on_log && message) {
         session->callbacks.on_log(session->userdata, message);
@@ -696,6 +774,7 @@ static void cb_channel_connected(void* context, const void* e) {
         cliprdr->ServerFormatListResponse = cb_cliprdr_server_format_list_response;
         cliprdr->ServerFormatDataRequest = cb_cliprdr_server_format_data_request;
         cliprdr->ServerFormatDataResponse = cb_cliprdr_server_format_data_response;
+        cliprdr->ServerFileContentsResponse = cb_cliprdr_server_file_contents_response;
         pthread_mutex_unlock(&session->clip_lock);
     }
 }
@@ -1102,6 +1181,8 @@ void mio_rdp_destroy(MioRdpSession* session) {
     session->remote_text_cache = NULL;
     free(session->client_uri_list);
     session->client_uri_list = NULL;
+    free(session->pending_file_data);
+    session->pending_file_data = NULL;
     pthread_mutex_unlock(&session->clip_lock);
 
     if (session->instance) {
@@ -1399,6 +1480,366 @@ bool mio_rdp_clipboard_publish_remote_files(MioRdpSession* session) {
         mimes[count++] = "text/plain;charset=utf-8";
     }
     return g_fn.clip_file_set_local_clipboard_data(session->clip_file, cb_remote_data_fkt, session, mimes, count) != 0;
+}
+
+static bool decode_win_relpath(const uint16_t* wname, char* out, size_t out_cap) {
+    if (!wname || !out || out_cap < 4) return false;
+    size_t pos = 0;
+    for (size_t i = 0; i < 260; i++) {
+        uint16_t wc = wname[i];
+        if (wc == 0) break;
+        uint32_t cp = wc;
+        if (wc >= 0xD800 && wc <= 0xDBFF && i + 1 < 260) {
+            uint16_t low = wname[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                cp = 0x10000u + (((uint32_t)(wc - 0xD800u) << 10) | (uint32_t)(low - 0xDC00u));
+                i++;
+            }
+        }
+        if (cp == '\\') cp = '/';
+        if (cp < 0x80) {
+            if (pos + 1 >= out_cap) return false;
+            out[pos++] = (char)cp;
+        } else if (cp < 0x800) {
+            if (pos + 2 >= out_cap) return false;
+            out[pos++] = (char)(0xC0 | (cp >> 6));
+            out[pos++] = (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            if (pos + 3 >= out_cap) return false;
+            out[pos++] = (char)(0xE0 | (cp >> 12));
+            out[pos++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[pos++] = (char)(0x80 | (cp & 0x3F));
+        } else {
+            if (pos + 4 >= out_cap) return false;
+            out[pos++] = (char)(0xF0 | (cp >> 18));
+            out[pos++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            out[pos++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[pos++] = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    out[pos] = '\0';
+    // 去掉前导斜杠并拒绝任何包含 ".." 的路径穿越片段
+    char* start = out;
+    while (*start == '/') start++;
+    if (start != out) memmove(out, start, strlen(start) + 1);
+    size_t len = strlen(out);
+    while (len > 0 && out[len - 1] == '/') {
+        out[--len] = '\0';
+    }
+    if (len == 0) return false;
+    const char* p = out;
+    while (*p) {
+        const char* slash = strchr(p, '/');
+        size_t seg_len = slash ? (size_t)(slash - p) : strlen(p);
+        if (seg_len == 2 && p[0] == '.' && p[1] == '.') return false;
+        if (!slash) break;
+        p = slash + 1;
+    }
+    return true;
+}
+
+static bool mkdir_p(const char* path) {
+    if (!path || !path[0]) return false;
+    char tmp[2048];
+    size_t len = strlen(path);
+    if (len >= sizeof(tmp)) return false;
+    memcpy(tmp, path, len + 1);
+    for (char* p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return false;
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return false;
+    return true;
+}
+
+static uint8_t* request_remote_file_contents(
+    MioRdpSession* session,
+    uint64_t generation,
+    uint32_t list_index,
+    uint32_t flags,
+    uint64_t offset,
+    uint32_t cb_requested,
+    uint32_t* out_size,
+    bool* out_ok
+) {
+    *out_size = 0;
+    *out_ok = false;
+
+    pthread_mutex_lock(&session->clip_lock);
+    if (session->closing || !session->clip_ready || !session->cliprdr ||
+        session->server_clip_generation != generation) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return NULL;
+    }
+    MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)session->cliprdr;
+    if (!cliprdr->ClientFileContentsRequest) {
+        pthread_mutex_unlock(&session->clip_lock);
+        return NULL;
+    }
+    uint32_t stream_id = ++session->next_file_stream_id;
+    free(session->pending_file_data);
+    session->pending_file_data = NULL;
+    session->pending_file_size = 0;
+    session->pending_file_stream_id = stream_id;
+    session->pending_file_ready = false;
+    session->pending_file_ok = false;
+    pthread_mutex_unlock(&session->clip_lock);
+
+    MioCliprdrFileContentsRequest req = {0};
+    req.common.msgType = MIO_CB_FILECONTENTS_REQUEST;
+    req.streamId = stream_id;
+    req.listIndex = list_index;
+    req.dwFlags = flags;
+    req.nPositionLow = (uint32_t)(offset & 0xFFFFFFFFu);
+    req.nPositionHigh = (uint32_t)((offset >> 32) & 0xFFFFFFFFu);
+    req.cbRequested = cb_requested;
+    req.haveClipDataId = 0;
+    req.clipDataId = 0;
+    if (cliprdr->ClientFileContentsRequest(cliprdr, &req) != 0) {
+        return NULL;
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 10;
+
+    pthread_mutex_lock(&session->clip_lock);
+    while (!session->pending_file_ready && !session->closing &&
+           session->server_clip_generation == generation) {
+        int rc = pthread_cond_timedwait(&session->clip_cond, &session->clip_lock, &ts);
+        if (rc == ETIMEDOUT) break;
+    }
+    bool ready = session->pending_file_ready && session->server_clip_generation == generation;
+    bool ok = ready && session->pending_file_ok;
+    uint8_t* data = ok ? session->pending_file_data : NULL;
+    uint32_t size = ok ? session->pending_file_size : 0;
+    if (!ok) {
+        free(session->pending_file_data);
+    }
+    session->pending_file_data = NULL;
+    session->pending_file_size = 0;
+    session->pending_file_ready = false;
+    session->pending_file_ok = false;
+    pthread_mutex_unlock(&session->clip_lock);
+
+    *out_ok = ok;
+    *out_size = size;
+    return data;
+}
+
+char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char* dest_dir, uint64_t max_total_bytes) {
+    if (!session || !dest_dir || !dest_dir[0] || !g_fn.cliprdr_parse_file_list) return NULL;
+
+    pthread_mutex_lock(&session->clip_lock);
+    bool has_files = session->server_has_files;
+    uint32_t fgd_fmt = session->server_fgd_format_id;
+    uint64_t generation = session->server_clip_generation;
+    pthread_mutex_unlock(&session->clip_lock);
+    if (!has_files || fgd_fmt == 0) return NULL;
+
+    uint32_t raw_size = 0;
+    uint8_t* raw = request_remote_format_data(session, fgd_fmt, &raw_size);
+    if (!raw || raw_size == 0) {
+        free(raw);
+        return NULL;
+    }
+
+    void* descs_raw = NULL;
+    RdpUInt32 count = 0;
+    RdpUInt32 parse_rc = g_fn.cliprdr_parse_file_list(raw, raw_size, &descs_raw, &count);
+    free(raw);
+    if (parse_rc != 0 || !descs_raw || count == 0) {
+        free(descs_raw);
+        return NULL;
+    }
+
+    const MioFileDescriptorW* descs = (const MioFileDescriptorW*)descs_raw;
+    if (max_total_bytes > 0) {
+        uint64_t declared_total = 0;
+        for (RdpUInt32 i = 0; i < count; i++) {
+            if ((descs[i].dwFileAttributes & MIO_FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+                (descs[i].dwFlags & MIO_FD_FILESIZE) != 0) {
+                uint64_t sz = ((uint64_t)descs[i].nFileSizeHigh << 32) | (uint64_t)descs[i].nFileSizeLow;
+                if (sz > max_total_bytes || declared_total > max_total_bytes - sz) {
+                    char buf[160];
+                    snprintf(buf, sizeof(buf), "clipboard_download_remote_files skipped: exceeds max_total_bytes=%llu",
+                             (unsigned long long)max_total_bytes);
+                    shim_log(session, buf);
+                    free(descs_raw);
+                    return NULL;
+                }
+                declared_total += sz;
+            }
+        }
+    }
+
+    if (!mkdir_p(dest_dir)) {
+        free(descs_raw);
+        return NULL;
+    }
+
+    size_t out_cap = 1024;
+    size_t out_len = 0;
+    char* top_paths = (char*)malloc(out_cap);
+    if (!top_paths) {
+        free(descs_raw);
+        return NULL;
+    }
+    top_paths[0] = '\0';
+
+    uint64_t downloaded_total = 0;
+    bool all_ok = true;
+
+    for (RdpUInt32 i = 0; i < count; i++) {
+        pthread_mutex_lock(&session->clip_lock);
+        bool cancelled = session->closing || session->server_clip_generation != generation;
+        pthread_mutex_unlock(&session->clip_lock);
+        if (cancelled) {
+            all_ok = false;
+            break;
+        }
+
+        char rel_path[1024];
+        if (!decode_win_relpath(descs[i].cFileName, rel_path, sizeof(rel_path))) {
+            all_ok = false;
+            break;
+        }
+
+        char full_path[2048];
+        int n = snprintf(full_path, sizeof(full_path), "%s/%s", dest_dir, rel_path);
+        if (n <= 0 || (size_t)n >= sizeof(full_path)) {
+            all_ok = false;
+            break;
+        }
+
+        // 记录顶层文件/目录路径（去重）
+        char top_entry[2048];
+        const char* first_slash = strchr(rel_path, '/');
+        size_t top_seg_len = first_slash ? (size_t)(first_slash - rel_path) : strlen(rel_path);
+        int tn = snprintf(top_entry, sizeof(top_entry), "%s/%.*s\n", dest_dir, (int)top_seg_len, rel_path);
+        if (tn > 0 && (size_t)tn < sizeof(top_entry)) {
+            bool exists = false;
+            const char* cursor = top_paths;
+            while (*cursor) {
+                const char* nl = strchr(cursor, '\n');
+                size_t line_len = nl ? (size_t)(nl - cursor + 1) : strlen(cursor);
+                if (line_len == (size_t)tn && memcmp(cursor, top_entry, line_len) == 0) {
+                    exists = true;
+                    break;
+                }
+                if (!nl) break;
+                cursor = nl + 1;
+            }
+            if (!exists) {
+                if (out_len + (size_t)tn + 1 > out_cap) {
+                    size_t next_cap = (out_cap + (size_t)tn + 1) * 2;
+                    char* grown = (char*)realloc(top_paths, next_cap);
+                    if (!grown) {
+                        all_ok = false;
+                        break;
+                    }
+                    top_paths = grown;
+                    out_cap = next_cap;
+                }
+                memcpy(top_paths + out_len, top_entry, (size_t)tn + 1);
+                out_len += (size_t)tn;
+            }
+        }
+
+        if ((descs[i].dwFileAttributes & MIO_FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            if (!mkdir_p(full_path)) {
+                all_ok = false;
+                break;
+            }
+            continue;
+        }
+
+        // 确保父目录存在
+        char* last_slash = strrchr(full_path, '/');
+        if (last_slash && last_slash != full_path) {
+            *last_slash = '\0';
+            bool dir_ok = mkdir_p(full_path);
+            *last_slash = '/';
+            if (!dir_ok) {
+                all_ok = false;
+                break;
+            }
+        }
+
+        uint64_t file_size = 0;
+        if ((descs[i].dwFlags & MIO_FD_FILESIZE) != 0) {
+            file_size = ((uint64_t)descs[i].nFileSizeHigh << 32) | (uint64_t)descs[i].nFileSizeLow;
+        } else {
+            uint32_t sz_bytes = 0;
+            bool sz_ok = false;
+            uint8_t* sz_buf = request_remote_file_contents(
+                session, generation, i, MIO_FILECONTENTS_SIZE, 0, 8, &sz_bytes, &sz_ok
+            );
+            if (!sz_ok || !sz_buf || sz_bytes < 8) {
+                free(sz_buf);
+                all_ok = false;
+                break;
+            }
+            for (int b = 0; b < 8; b++) {
+                file_size |= ((uint64_t)sz_buf[b]) << (8 * b);
+            }
+            free(sz_buf);
+        }
+
+        if (max_total_bytes > 0 && (file_size > max_total_bytes || downloaded_total > max_total_bytes - file_size)) {
+            all_ok = false;
+            break;
+        }
+
+        FILE* fp = fopen(full_path, "wb");
+        if (!fp) {
+            all_ok = false;
+            break;
+        }
+
+        uint64_t offset = 0;
+        const uint32_t chunk_size = 262144u;
+        while (offset < file_size) {
+            uint64_t remaining = file_size - offset;
+            uint32_t to_read = remaining > chunk_size ? chunk_size : (uint32_t)remaining;
+            uint32_t got = 0;
+            bool chunk_ok = false;
+            uint8_t* chunk = request_remote_file_contents(
+                session, generation, i, MIO_FILECONTENTS_RANGE, offset, to_read, &got, &chunk_ok
+            );
+            if (!chunk_ok || !chunk || got == 0) {
+                free(chunk);
+                all_ok = false;
+                break;
+            }
+            size_t written = fwrite(chunk, 1, got, fp);
+            free(chunk);
+            if (written != got) {
+                all_ok = false;
+                break;
+            }
+            offset += got;
+            downloaded_total += got;
+        }
+        fclose(fp);
+        if (!all_ok) break;
+    }
+
+    free(descs_raw);
+
+    char log_buf[160];
+    snprintf(log_buf, sizeof(log_buf), "clipboard_download_remote_files(count=%u bytes=%llu) -> %s",
+             count, (unsigned long long)downloaded_total, all_ok ? "ok" : "fail");
+    shim_log(session, log_buf);
+
+    if (!all_ok || out_len == 0) {
+        free(top_paths);
+        return NULL;
+    }
+    return top_paths;
 }
 
 void mio_rdp_free_string(char* str) {

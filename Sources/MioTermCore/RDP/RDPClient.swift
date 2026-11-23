@@ -181,6 +181,26 @@ public final class RDPClient: @unchecked Sendable {
         return mio_rdp_clipboard_publish_remote_files(activeSession)
     }
 
+    public func downloadRemoteClipboardFiles(
+        to directory: URL,
+        maxTotalBytes: UInt64 = 512 * 1024 * 1024
+    ) -> [URL] {
+        stateLock.lock()
+        let activeSession = session
+        stateLock.unlock()
+        guard let activeSession else { return [] }
+        guard let ptr = directory.path.withCString({ dirC in
+            mio_rdp_clipboard_download_remote_files(activeSession, dirC, maxTotalBytes)
+        }) else {
+            return []
+        }
+        let raw = String(cString: ptr)
+        mio_rdp_free_string(ptr)
+        return raw
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { URL(fileURLWithPath: String($0), isDirectory: false) }
+    }
+
     // MARK: - 会话循环
 
     private func runSession() {

@@ -51,6 +51,7 @@ bool mio_rdp_clipboard_send_text(MioRdpSession* session, const char* utf8_text);
 bool mio_rdp_clipboard_send_files(MioRdpSession* session, const char* uri_list);
 char* mio_rdp_clipboard_fetch_remote_text(MioRdpSession* session);
 bool mio_rdp_clipboard_publish_remote_files(MioRdpSession* session);
+char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char* dest_dir, uint64_t max_total_bytes);
 void mio_rdp_free_string(char* str);
 
 #ifdef __cplusplus
