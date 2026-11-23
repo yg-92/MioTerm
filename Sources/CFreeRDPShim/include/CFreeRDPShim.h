@@ -19,12 +19,14 @@ typedef struct {
     const char* shared_dir;
     uint32_t width;
     uint32_t height;
+    uint32_t scale_percent;
 } MioRdpConfig;
 
 typedef struct {
     void (*on_connected)(void* userdata, int32_t width, int32_t height);
     void (*on_frame)(void* userdata, const uint8_t* bgra, int32_t width, int32_t height, int32_t stride);
     void (*on_error)(void* userdata, const char* message);
+    void (*on_log)(void* userdata, const char* message);
     void (*on_disconnected)(void* userdata);
     void (*on_clipboard_ready)(void* userdata);
     void (*on_clipboard_formats)(void* userdata, bool has_text, bool has_files);
@@ -43,7 +45,7 @@ void mio_rdp_destroy(MioRdpSession* session);
 void mio_rdp_send_mouse(MioRdpSession* session, uint16_t flags, uint16_t x, uint16_t y);
 void mio_rdp_send_key(MioRdpSession* session, bool down, uint32_t rdp_scancode);
 void mio_rdp_send_unicode(MioRdpSession* session, bool down, uint16_t code);
-void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height);
+void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height, uint32_t scale_percent);
 
 bool mio_rdp_clipboard_send_text(MioRdpSession* session, const char* utf8_text);
 bool mio_rdp_clipboard_send_files(MioRdpSession* session, const char* uri_list);

@@ -128,8 +128,9 @@ final class RDPController: SessionControlling {
         }
 
         state = .starting
-        let width = max(800, Int(desktopView.bounds.width))
-        let height = max(600, Int(desktopView.bounds.height))
+        let scale = displayScaleFactor()
+        let width = max(800, min(8192, (Int(desktopView.bounds.width * CGFloat(scale)) + 1) & ~1))
+        let height = max(600, min(8192, (Int(desktopView.bounds.height * CGFloat(scale)) + 1) & ~1))
         let rdpClient = RDPClient(
             host: host.address,
             port: host.port,
@@ -137,7 +138,8 @@ final class RDPController: SessionControlling {
             password: password ?? "",
             domain: "",
             width: width,
-            height: height
+            height: height,
+            scalePercent: scale * 100
         )
         self.client = rdpClient
         rdpClient.onClipboardReady = { [weak self, weak rdpClient] in
@@ -266,9 +268,17 @@ final class RDPController: SessionControlling {
         }
     }
 
+    private func displayScaleFactor() -> Int {
+        let raw = desktopView.window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 1.0
+        return max(1, min(2, Int(round(raw))))
+    }
+
     private func scheduleResize(for size: CGSize) {
-        let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
-        let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
+        let scale = displayScaleFactor()
+        let targetWidth = max(200, min(8192, (Int(size.width * CGFloat(scale)) + 1) & ~1))
+        let targetHeight = max(200, min(8192, (Int(size.height * CGFloat(scale)) + 1) & ~1))
         guard abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4 else {
             return
         }
@@ -276,7 +286,7 @@ final class RDPController: SessionControlling {
         resizeTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard let self, !Task.isCancelled, self.state == .running else { return }
-            self.client?.requestResize(width: targetWidth, height: targetHeight)
+            self.client?.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale * 100)
         }
     }
 

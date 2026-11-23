@@ -14,6 +14,7 @@ public final class RDPClient: @unchecked Sendable {
     public let sharedDirectory: String
     private let initialWidth: Int
     private let initialHeight: Int
+    private let initialScalePercent: Int
 
     public var onClipboardReady: (@Sendable () -> Void)?
     public var onRemoteClipboardChanged: (@Sendable (_ hasText: Bool, _ hasFiles: Bool) -> Void)?
@@ -31,7 +32,8 @@ public final class RDPClient: @unchecked Sendable {
         domain: String = "",
         sharedDirectory: String? = nil,
         width: Int = 1280,
-        height: Int = 800
+        height: Int = 800,
+        scalePercent: Int = 100
     ) {
         self.host = host
         self.port = port
@@ -43,6 +45,7 @@ public final class RDPClient: @unchecked Sendable {
         self.sharedDirectory = sharedDirectory ?? defaultDownloads
         self.initialWidth = width
         self.initialHeight = height
+        self.initialScalePercent = scalePercent
 
         var cont: AsyncStream<VNCEvent>.Continuation!
         self.events = AsyncStream { cont = $0 }
@@ -123,12 +126,12 @@ public final class RDPClient: @unchecked Sendable {
         mio_rdp_send_unicode(activeSession, down, code)
     }
 
-    public func requestResize(width: Int, height: Int) {
+    public func requestResize(width: Int, height: Int, scalePercent: Int = 100) {
         stateLock.lock()
         let activeSession = session
         stateLock.unlock()
         guard let activeSession, width >= 200, height >= 200 else { return }
-        mio_rdp_resize(activeSession, UInt32(width), UInt32(height))
+        mio_rdp_resize(activeSession, UInt32(width), UInt32(height), UInt32(max(100, scalePercent)))
     }
 
     @discardableResult
@@ -202,6 +205,10 @@ public final class RDPClient: @unchecked Sendable {
             let text = msg.map { String(cString: $0) } ?? L10n.tr(.rdpConnectFailed)
             box.owner?.handleError(text)
         }
+        callbacks.on_log = { _, msg in
+            guard let msg else { return }
+            FileLogger.shared.info("RDP: \(String(cString: msg))")
+        }
         callbacks.on_clipboard_ready = { userdata in
             guard let userdata else { return }
             let box = Unmanaged<CallbackBox>.fromOpaque(userdata).takeUnretainedValue()
@@ -226,7 +233,8 @@ public final class RDPClient: @unchecked Sendable {
                                 domain: domainC,
                                 shared_dir: sharedC,
                                 width: UInt32(max(640, initialWidth)),
-                                height: UInt32(max(480, initialHeight))
+                                height: UInt32(max(480, initialHeight)),
+                                scale_percent: UInt32(max(100, initialScalePercent))
                             )
                             return mio_rdp_create(&config, callbacks, box.toOpaque())
                         }

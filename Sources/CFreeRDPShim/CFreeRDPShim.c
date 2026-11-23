@@ -269,6 +269,8 @@ struct MioRdpSession {
     pthread_mutex_t lock;
     uint32_t pending_width;
     uint32_t pending_height;
+    uint32_t pending_scale_percent;
+    uint32_t scale_percent;
     bool resize_pending;
     bool disp_ready;
     bool gdi_initialized;
@@ -561,6 +563,12 @@ static RdpUInt32 cb_cliprdr_server_format_data_response(MioCliprdrClientContext*
     return 0;
 }
 
+static void shim_log(MioRdpSession* session, const char* message) {
+    if (session && session->callbacks.on_log && message) {
+        session->callbacks.on_log(session->userdata, message);
+    }
+}
+
 static RdpUInt32 cb_disp_caps(void* disp, RdpUInt32 max_num_monitors, RdpUInt32 max_area_a, RdpUInt32 max_area_b) {
     (void)max_num_monitors;
     (void)max_area_a;
@@ -571,6 +579,9 @@ static RdpUInt32 cb_disp_caps(void* disp, RdpUInt32 max_num_monitors, RdpUInt32 
         pthread_mutex_lock(&session->lock);
         session->disp_ready = true;
         pthread_mutex_unlock(&session->lock);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "DisplayControlCaps maxMonitors=%u area=(%u,%u)", max_num_monitors, max_area_a, max_area_b);
+        shim_log(session, buf);
     }
     return 0;
 }
@@ -587,6 +598,7 @@ static void cb_channel_connected(void* context, const void* e) {
         pthread_mutex_unlock(&session->lock);
         set_ptr_at(iface, 8, session);
         set_ptr_at(iface, 16, (void*)cb_disp_caps);
+        shim_log(session, "ChannelConnected: DisplayControl");
     } else if (name && strcmp(name, "cliprdr") == 0 && iface) {
         MioCliprdrClientContext* cliprdr = (MioCliprdrClientContext*)iface;
         pthread_mutex_lock(&session->clip_lock);
@@ -660,7 +672,11 @@ static RdpBool cb_pre_connect(void* instance) {
             void* channels = ptr_at(context, RDP_CONTEXT_CHANNELS_OFFSET);
             void* settings = ptr_at(context, RDP_CONTEXT_SETTINGS_OFFSET);
             if (channels && settings) {
-                g_fn.client_load_addins(channels, settings);
+                RdpBool ok = g_fn.client_load_addins(channels, settings);
+                MioRdpSession* session = session_from_context(context);
+                char buf[64];
+                snprintf(buf, sizeof(buf), "client_load_addins=%d", ok);
+                shim_log(session, buf);
             }
         }
     }
@@ -708,6 +724,9 @@ static RdpBool cb_desktop_resize(void* context) {
         height = (uint32_t)i32_at(gdi, RDP_GDI_HEIGHT_OFFSET);
     }
     if (width > 0 && height > 0 && session->callbacks.on_connected) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "cb_desktop_resize=%ux%u", width, height);
+        shim_log(session, buf);
         session->callbacks.on_connected(session->userdata, (int32_t)width, (int32_t)height);
     }
     return 1;
@@ -832,6 +851,8 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
     session->context = context;
     session->callbacks = callbacks;
     session->userdata = userdata;
+    session->scale_percent = (config->scale_percent >= 100 && config->scale_percent <= 500) ? config->scale_percent : 100;
+    session->pending_scale_percent = session->scale_percent;
     pthread_mutex_init(&session->lock, NULL);
     pthread_mutex_init(&session->clip_lock, NULL);
     pthread_cond_init(&session->clip_cond, NULL);
@@ -846,6 +867,8 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_str_setting(settings, "FreeRDP_Domain", config->domain);
         set_u32_setting(settings, "FreeRDP_DesktopWidth", config->width > 0 ? config->width : 1280);
         set_u32_setting(settings, "FreeRDP_DesktopHeight", config->height > 0 ? config->height : 800);
+        set_u32_setting(settings, "FreeRDP_DesktopScaleFactor", session->scale_percent);
+        set_u32_setting(settings, "FreeRDP_DeviceScaleFactor", session->scale_percent);
         set_u32_setting(settings, "FreeRDP_ColorDepth", 32);
         set_bool_setting(settings, "FreeRDP_SoftwareGdi", true);
         set_bool_setting(settings, "FreeRDP_IgnoreCertificate", true);
@@ -918,12 +941,16 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
     void* disp = NULL;
     uint32_t req_w = 0;
     uint32_t req_h = 0;
+    uint32_t req_scale = 100;
+    bool disp_ready = false;
     bool should_resize = false;
     pthread_mutex_lock(&session->lock);
-    if (session->resize_pending && session->disp && session->disp_ready) {
+    if (session->resize_pending && session->disp) {
         disp = session->disp;
         req_w = session->pending_width;
         req_h = session->pending_height;
+        req_scale = session->pending_scale_percent >= 100 ? session->pending_scale_percent : 100;
+        disp_ready = session->disp_ready;
         session->resize_pending = false;
         should_resize = true;
     }
@@ -941,9 +968,17 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
             uint32_t phys_h = (req_h * 254u) / 960u;
             layout.PhysicalWidth = phys_w < 10 ? 10 : (phys_w > 10000 ? 10000 : phys_w);
             layout.PhysicalHeight = phys_h < 10 ? 10 : (phys_h > 10000 ? 10000 : phys_h);
-            layout.DesktopScaleFactor = 100;
-            layout.DeviceScaleFactor = 100;
-            send_layout(disp, 1, &layout);
+            layout.DesktopScaleFactor = req_scale;
+            layout.DeviceScaleFactor = req_scale;
+            RdpUInt32 rc = send_layout(disp, 1, &layout);
+            char buf[128];
+            snprintf(buf, sizeof(buf), "send_layout(%ux%u scale=%u ready=%d) -> rc=%u", req_w, req_h, req_scale, disp_ready ? 1 : 0, rc);
+            shim_log(session, buf);
+            if (rc != 0 && !disp_ready) {
+                pthread_mutex_lock(&session->lock);
+                session->resize_pending = true;
+                pthread_mutex_unlock(&session->lock);
+            }
         }
     }
     return 1;
@@ -999,15 +1034,17 @@ void mio_rdp_destroy(MioRdpSession* session) {
     free(session);
 }
 
-void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height) {
+void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height, uint32_t scale_percent) {
     if (!session || !session->connected) return;
     uint32_t w = width < 200 ? 200 : (width > 8192 ? 8192 : width);
     uint32_t h = height < 200 ? 200 : (height > 8192 ? 8192 : height);
     w = (w + 1u) & ~1u;
     h = (h + 1u) & ~1u;
+    uint32_t scale = (scale_percent >= 100 && scale_percent <= 500) ? scale_percent : 100;
     pthread_mutex_lock(&session->lock);
     session->pending_width = w;
     session->pending_height = h;
+    session->pending_scale_percent = scale;
     session->resize_pending = true;
     pthread_mutex_unlock(&session->lock);
 }
