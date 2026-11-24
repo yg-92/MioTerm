@@ -6,6 +6,29 @@ enum RDPResolutionMode: Equatable {
     case fitWindow
     case matchScreen
     case fixed(width: Int, height: Int)
+
+    var storageKey: String {
+        switch self {
+        case .fitWindow: return "fitWindow"
+        case .matchScreen: return "matchScreen"
+        case .fixed(let w, let h): return "\(w)x\(h)"
+        }
+    }
+
+    init?(storageKey: String) {
+        switch storageKey {
+        case "fitWindow":
+            self = .fitWindow
+        case "matchScreen":
+            self = .matchScreen
+        default:
+            let parts = storageKey.split(separator: "x")
+            guard parts.count == 2,
+                  let w = Int(parts[0]), let h = Int(parts[1]),
+                  w >= 200, h >= 200 else { return nil }
+            self = .fixed(width: w, height: h)
+        }
+    }
 }
 
 /// RDP 远程桌面会话控制器：通过动态加载的 FreeRDP 3.x 连接，
@@ -41,6 +64,7 @@ final class RDPController: SessionControlling {
     }
 
     private static let rdpClipboardDidUpdateNotification = Notification.Name("MioTermRDPClipboardDidUpdate")
+    private static let displayPreferencesKey = "MioTerm.rdpDisplayPreferences"
     private static var recentClipboardStagingDirs: [URL] = []
 
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
@@ -62,6 +86,7 @@ final class RDPController: SessionControlling {
     init(host: HostProfile) {
         self.host = host
         self.title = host.displayName
+        loadSavedDisplaySettings()
         wireView()
         clipboardObserver = NotificationCenter.default.addObserver(
             forName: Self.rdpClipboardDidUpdateNotification,
@@ -340,6 +365,30 @@ final class RDPController: SessionControlling {
         (desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size
     }
 
+    private func loadSavedDisplaySettings() {
+        guard let hostID = host?.id,
+              let all = UserDefaults.standard.dictionary(forKey: Self.displayPreferencesKey) as? [String: [String: Any]],
+              let saved = all[hostID] else { return }
+        if let rawRes = saved["resolution"] as? String,
+           let mode = RDPResolutionMode(storageKey: rawRes) {
+            self.resolutionMode = mode
+        }
+        if let savedScale = saved["scalePercent"] as? Int,
+           savedScale >= 100 && savedScale <= 200 {
+            self.scalePercent = savedScale
+        }
+    }
+
+    private func saveDisplaySettings() {
+        guard let hostID = host?.id else { return }
+        var all = (UserDefaults.standard.dictionary(forKey: Self.displayPreferencesKey) as? [String: [String: Any]]) ?? [:]
+        all[hostID] = [
+            "resolution": resolutionMode.storageKey,
+            "scalePercent": scalePercent,
+        ]
+        UserDefaults.standard.set(all, forKey: Self.displayPreferencesKey)
+    }
+
     private func resolvedTargetSize(forConnect: Bool) -> (width: Int, height: Int) {
         switch resolutionMode {
         case .fixed(let w, let h):
@@ -371,6 +420,7 @@ final class RDPController: SessionControlling {
         let clampedScale = max(100, min(200, scalePercent))
         self.resolutionMode = resolution
         self.scalePercent = clampedScale
+        saveDisplaySettings()
         resizeTask?.cancel()
         resizeTask = nil
         guard state == .running, let client else { return }
