@@ -124,6 +124,21 @@ final class VNCView: NSView {
         needsDisplay = true
     }
 
+    /// 整帧交换缓冲并返回旧缓冲供 RDPClient 乒乓复用，消除每帧分配/释放数 MB 大内存引起的抖动。
+    func swapFramebuffer(width: Int, height: Int, bgra: Data) -> Data {
+        guard width > 0, height > 0, bgra.count == width * height * 4 else { return Data() }
+        let previous = framebuffer
+        fbWidth = width
+        fbHeight = height
+        framebuffer = bgra
+        if !hasRenderedFrame {
+            hasRenderedFrame = true
+            stopWaitingAnimation()
+        }
+        needsDisplay = true
+        return previous
+    }
+
     func apply(_ updates: [VNCFrameUpdate]) {
         var drewPixels = false
         for update in updates {

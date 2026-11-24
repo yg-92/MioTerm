@@ -1080,7 +1080,12 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_DeviceRedirection", false);
         set_bool_setting(settings, "FreeRDP_RedirectDrives", false);
         set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", false);
+        set_bool_setting(settings, "FreeRDP_RedirectPrinters", false);
+        set_bool_setting(settings, "FreeRDP_RedirectSmartCards", false);
+        set_bool_setting(settings, "FreeRDP_RedirectSerialPorts", false);
+        set_bool_setting(settings, "FreeRDP_RedirectParallelPorts", false);
         set_bool_setting(settings, "FreeRDP_AudioPlayback", config->enable_audio);
+        set_bool_setting(settings, "FreeRDP_SoundBeepsEnabled", config->enable_audio);
         set_bool_setting(settings, "FreeRDP_AudioCapture", false);
         set_bool_setting(settings, "FreeRDP_RemoteConsoleAudio", false);
         set_bool_setting(settings, "FreeRDP_RedirectClipboard", true);
@@ -1093,6 +1098,7 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_CompressionEnabled", true);
         set_bool_setting(settings, "FreeRDP_RemoteFxCodec", true);
         set_bool_setting(settings, "FreeRDP_NSCodec", true);
+        set_u32_setting(settings, "FreeRDP_OffscreenSupportLevel", 0u);
         set_bool_setting(settings, "FreeRDP_FrameMarkerCommandEnabled", true);
         set_bool_setting(settings, "FreeRDP_SurfaceFrameMarkerEnabled", true);
         set_bool_setting(settings, "FreeRDP_NetworkAutoDetect", true);
@@ -1105,7 +1111,9 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_DisableThemes", false);
         set_u32_setting(settings, "FreeRDP_PerformanceFlags", 0x00000180u); // FONT_SMOOTHING | DESKTOP_COMPOSITION
         set_bool_setting(settings, "FreeRDP_GfxH264", true);
-        set_bool_setting(settings, "FreeRDP_GfxAVC444", true);
+        // 关闭双路 YUV444 解码器（AVC444），保留 GfxH264 / RemoteFX / NSCodec，可为每个会话节省约 40-50 MB 内存。
+        set_bool_setting(settings, "FreeRDP_GfxAVC444", false);
+        set_bool_setting(settings, "FreeRDP_GfxAVC444v2", false);
     }
 
     return session;

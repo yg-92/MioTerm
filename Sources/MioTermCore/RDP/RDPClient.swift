@@ -30,6 +30,7 @@ public final class RDPClient: @unchecked Sendable {
     private var captureConnectError = false
     private var capturedConnectError: String?
     private var latestFrame: (width: Int, height: Int, bgra: Data)?
+    private var recycledFrameBuffer: Data?
     private var frameNotificationScheduled = false
 
     public init(
@@ -74,6 +75,7 @@ public final class RDPClient: @unchecked Sendable {
         let alreadyStopped = stopped
         stopped = true
         latestFrame = nil
+        recycledFrameBuffer = nil
         stateLock.unlock()
 
         if !alreadyStopped {
@@ -315,6 +317,7 @@ public final class RDPClient: @unchecked Sendable {
             let toDestroy = activeSession
             session = nil
             latestFrame = nil
+            recycledFrameBuffer = nil
             stateLock.unlock()
             if let toDestroy {
                 mio_rdp_disconnect(toDestroy)
@@ -439,14 +442,37 @@ public final class RDPClient: @unchecked Sendable {
         return frame
     }
 
+    public func recycleFrameBuffer(_ buffer: Data) {
+        guard !buffer.isEmpty else { return }
+        stateLock.lock()
+        if !stopped {
+            recycledFrameBuffer = buffer
+        }
+        stateLock.unlock()
+    }
+
     private func handleFrame(ptr: UnsafePointer<UInt8>, width: Int, height: Int, stride: Int) {
         guard width > 0, height > 0, stride >= width * 4 else { return }
         let rowBytes = width * 4
-        var bgra = Data(count: rowBytes * height)
+        let neededBytes = rowBytes * height
+
+        var bgra: Data
+        stateLock.lock()
+        if let recycled = recycledFrameBuffer, recycled.count == neededBytes {
+            bgra = recycled
+            recycledFrameBuffer = nil
+        } else if let pending = latestFrame, pending.bgra.count == neededBytes {
+            bgra = pending.bgra
+            latestFrame = nil
+        } else {
+            bgra = Data(count: neededBytes)
+        }
+        stateLock.unlock()
+
         bgra.withUnsafeMutableBytes { dstRaw in
             guard let dstBase = dstRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
             if stride == rowBytes {
-                memcpy(dstBase, ptr, rowBytes * height)
+                memcpy(dstBase, ptr, neededBytes)
             } else {
                 for row in 0..<height {
                     memcpy(dstBase + row * rowBytes, ptr + row * stride, rowBytes)
@@ -455,6 +481,9 @@ public final class RDPClient: @unchecked Sendable {
         }
         if let onFrameReady {
             stateLock.lock()
+            if let old = latestFrame?.bgra, old.count == neededBytes, recycledFrameBuffer == nil {
+                recycledFrameBuffer = old
+            }
             latestFrame = (width, height, bgra)
             let shouldNotify = !frameNotificationScheduled
             frameNotificationScheduled = true
