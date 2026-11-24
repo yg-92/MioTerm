@@ -1076,6 +1076,7 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_SoftwareGdi", true);
         set_bool_setting(settings, "FreeRDP_IgnoreCertificate", true);
         set_u32_setting(settings, "FreeRDP_TlsSecLevel", 0);
+        set_str_setting(settings, "FreeRDP_AllowedTlsCiphers", "DEFAULT:@SECLEVEL=0");
         set_u16_setting(settings, "FreeRDP_TLSMinVersion", 0x0301);
         set_u16_setting(settings, "FreeRDP_TLSMaxVersion", 0x0303);
         set_bool_setting(settings, "FreeRDP_NlaSecurity", true);

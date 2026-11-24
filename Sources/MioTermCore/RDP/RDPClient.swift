@@ -332,6 +332,7 @@ public final class RDPClient: @unchecked Sendable {
     }
 
     private func yieldFailed(_ message: String) {
+        FileLogger.shared.error("RDP (\(host):\(port)): \(message)")
         if !isStopped {
             continuation.yield(.failed(message))
             stop()
