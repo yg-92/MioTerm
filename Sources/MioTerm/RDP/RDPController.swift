@@ -79,6 +79,7 @@ final class RDPController: SessionControlling {
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
     private var appliedRemoteScale: Int = 100
     private var didQueueInitialDisplaySync = false
+    private var lastRequestedReconnectSize: (width: Int, height: Int)?
     private(set) var resolutionMode: RDPResolutionMode = .fitWindow
     private(set) var scalePercent: Int = 100
     private var lastPassword: String?
@@ -164,6 +165,7 @@ final class RDPController: SessionControlling {
     }
 
     func start(password: String?) {
+        lastRequestedReconnectSize = nil
         start(password: password, explicitSize: nil, preserveFramebuffer: false)
     }
 
@@ -399,29 +401,38 @@ final class RDPController: SessionControlling {
     }
 
     private func resolvedTargetSize(forConnect: Bool) -> (width: Int, height: Int) {
+        let baseWidth: Int
+        let baseHeight: Int
         switch resolutionMode {
         case .fixed(let w, let h):
-            return (
-                max(200, min(8192, (w + 1) & ~1)),
-                max(200, min(8192, (h + 1) & ~1))
-            )
+            baseWidth = w
+            baseHeight = h
         case .matchScreen:
             let screenSize = screenLogicalSize()
-            return (
-                max(800, min(8192, (Int(screenSize.width) + 1) & ~1)),
-                max(600, min(8192, (Int(screenSize.height) + 1) & ~1))
-            )
+            baseWidth = max(800, Int(screenSize.width))
+            baseHeight = max(600, Int(screenSize.height))
         case .fitWindow:
-            // 建连时按当前显示器完整逻辑分辨率请求（如 1920×1080）：
-            // Win10/11 连上后走 DisplayControl 无感动态调分辨率；
-            // Win7 不自动重连，由 VNCView 在最大化/全屏下直接铺满无黑边。
             let base = forConnect ? screenLogicalSize() : desktopView.bounds.size
-            let minW = forConnect ? 800 : 200
-            let minH = forConnect ? 600 : 200
-            return (
-                max(minW, min(8192, (Int(base.width) + 1) & ~1)),
-                max(minH, min(8192, (Int(base.height) + 1) & ~1))
-            )
+            baseWidth = max(forConnect ? 800 : 200, Int(base.width))
+            baseHeight = max(forConnect ? 600 : 200, Int(base.height))
+        }
+        return (
+            max(200, min(8192, (baseWidth + 1) & ~1)),
+            max(200, min(8192, (baseHeight + 1) & ~1))
+        )
+    }
+
+    /// Win7 等不支持 DisplayControl 的主机通过“保留画面 + 先断连等 500ms 再重连”切换精确分辨率，
+    /// 避免快速重连触发“远程桌面服务当前正忙”，也避免跨屏/换电脑时分辨率错位模糊。
+    private func reconnectForResize(to target: (width: Int, height: Int)) {
+        let password = lastPassword
+        lastRequestedReconnectSize = target
+        stop(clearFramebuffer: false)
+        state = .starting
+        resizeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.start(password: password, explicitSize: target, preserveFramebuffer: true)
         }
     }
 
@@ -429,6 +440,7 @@ final class RDPController: SessionControlling {
         let clampedScale = max(100, min(200, scalePercent))
         self.resolutionMode = resolution
         self.scalePercent = clampedScale
+        self.lastRequestedReconnectSize = nil
         saveDisplaySettings()
         resizeTask?.cancel()
         resizeTask = nil
@@ -438,24 +450,12 @@ final class RDPController: SessionControlling {
             appliedRemoteScale = clampedScale
             client.requestResize(width: target.width, height: target.height, scalePercent: clampedScale)
         } else {
-            // Win7 不支持动态改分辨率，仅在用户主动切换下拉选时重连；
-            // 先断开并等待 500ms 让 Windows 远程桌面服务释放旧会话，避免触发“远程桌面服务当前正忙”。
-            let password = lastPassword
-            stop(clearFramebuffer: false)
-            state = .starting
-            resizeTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                guard let self, !Task.isCancelled else { return }
-                self.start(password: password, explicitSize: target, preserveFramebuffer: true)
-            }
+            reconnectForResize(to: target)
         }
     }
 
     private func scheduleResize(for size: CGSize) {
         guard resolutionMode == .fitWindow else { return }
-        // 只有支持 DisplayControl 的主机（Win10/11 等）才在窗口大小变化时动态调整，
-        // Win7 绝不因拖出或缩放窗口自动重连登录。
-        guard client?.supportsDynamicResize == true else { return }
         let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
         let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
         let sizeChanged = abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4
@@ -464,17 +464,35 @@ final class RDPController: SessionControlling {
             return
         }
         let scale = scalePercent
+        let supportsDynamic = client?.supportsDynamicResize == true
+        let delayNs: UInt64 = supportsDynamic ? 250_000_000 : 800_000_000
         resizeTask?.cancel()
         resizeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: delayNs)
             guard let self,
                   !Task.isCancelled,
                   self.state == .running,
                   self.resolutionMode == .fitWindow,
-                  let client = self.client,
-                  client.supportsDynamicResize else { return }
-            self.appliedRemoteScale = scale
-            client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
+                  let client = self.client else { return }
+            if client.supportsDynamicResize {
+                self.appliedRemoteScale = scale
+                client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
+            } else {
+                // Win7 跨屏拖出或最大化后尺寸发生明显变化（>=64px）且窗口已停止缩放时，
+                // 延迟 500ms 平滑重连到当前屏幕窗口的 1:1 精确分辨率，保证清晰不模糊且不触发服务正忙。
+                guard let win = self.desktopView.window,
+                      !win.inLiveResize,
+                      !self.desktopView.isHiddenOrHasHiddenAncestor,
+                      win.windowController is VNCWindowController,
+                      abs(targetWidth - self.currentRemoteSize.width) >= 64 || abs(targetHeight - self.currentRemoteSize.height) >= 64 else {
+                    return
+                }
+                if let prev = self.lastRequestedReconnectSize,
+                   prev.width == targetWidth && prev.height == targetHeight {
+                    return
+                }
+                self.reconnectForResize(to: (targetWidth, targetHeight))
+            }
         }
     }
 

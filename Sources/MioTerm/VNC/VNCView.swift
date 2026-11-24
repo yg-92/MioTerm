@@ -151,7 +151,7 @@ final class VNCView: NSView {
             stopWaitingAnimation()
         }
         let targetRect = contentRect()
-        let exactPixelMatch = Int(targetRect.width) == width && Int(targetRect.height) == height
+        let exactPixelMatch = abs(Int(targetRect.width) - width) <= 2 && abs(Int(targetRect.height) - height) <= 2
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         surfaceLayer.isHidden = false
@@ -213,7 +213,7 @@ final class VNCView: NSView {
             CATransaction.setDisableActions(true)
             let targetRect = contentRect()
             surfaceLayer.frame = targetRect
-            let exactPixelMatch = Int(targetRect.width) == fbWidth && Int(targetRect.height) == fbHeight
+            let exactPixelMatch = abs(Int(targetRect.width) - fbWidth) <= 2 && abs(Int(targetRect.height) - fbHeight) <= 2
             surfaceLayer.magnificationFilter = exactPixelMatch ? .nearest : .trilinear
             surfaceLayer.minificationFilter = .trilinear
             CATransaction.commit()
