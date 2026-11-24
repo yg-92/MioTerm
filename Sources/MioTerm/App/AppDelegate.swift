@@ -1,10 +1,12 @@
 import AppKit
+import Carbon.HIToolbox
 import MioTermCore
 
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var mainWindow: MainWindowController?
     private var pendingOpenURLs: [URL] = []
+    private var windowCycleMonitor: Any?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -21,6 +23,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         let controller = MainWindowController()
         mainWindow = controller
         controller.show()
+        windowCycleMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.handleWindowCycleKeyEvent(event) else { return event }
+            return nil
+        }
         if !pendingOpenURLs.isEmpty {
             let urls = pendingOpenURLs
             pendingOpenURLs.removeAll()
@@ -82,7 +88,44 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        if let windowCycleMonitor {
+            NSEvent.removeMonitor(windowCycleMonitor)
+            self.windowCycleMonitor = nil
+        }
         mainWindow?.closeSessions()
+    }
+
+    /// 统一接管 ⌘` / ⌘⇧` 窗口轮换：避免被远端 RDP/VNC 视图拦截，并兼容中文输入法下按键字符为 `·` 的情况。
+    private func handleWindowCycleKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let allowed: NSEvent.ModifierFlags = [.command, .shift]
+        guard flags.contains(.command),
+              flags.subtracting(allowed).isEmpty,
+              Int(event.keyCode) == kVK_ANSI_Grave else {
+            return false
+        }
+        if let vncView = NSApp.keyWindow?.firstResponder as? VNCView {
+            vncView.resetRemoteModifiers()
+        }
+        cycleAppWindows(reverse: flags.contains(.shift))
+        return true
+    }
+
+    private func cycleAppWindows(reverse: Bool) {
+        let candidates = NSApp.orderedWindows.filter { window in
+            window.isVisible && !window.isMiniaturized && window.canBecomeKey && !window.isExcludedFromWindowsMenu
+        }
+        guard candidates.count > 1, let current = candidates.first else { return }
+        if reverse {
+            candidates.last?.makeKeyAndOrderFront(nil)
+        } else {
+            let next = candidates[1]
+            let backmost = candidates.last
+            next.makeKeyAndOrderFront(nil)
+            if let backmost, backmost !== current {
+                current.order(.below, relativeTo: backmost.windowNumber)
+            }
+        }
     }
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -13,6 +13,7 @@ final class VNCView: NSView {
     var onRawKeyDown: ((NSEvent) -> Bool)?
     var onRawKeyUp: ((NSEvent) -> Bool)?
     var onRawFlagsChanged: ((NSEvent) -> Bool)?
+    var onResetModifiers: (() -> Void)?
     var shouldInterceptCommandEquivalent: ((NSEvent) -> Bool)?
     var onFocus: (() -> Void)?
     var onResize: ((CGSize) -> Void)?
@@ -330,6 +331,10 @@ final class VNCView: NSView {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command) {
             let chars = (event.charactersIgnoringModifiers ?? "").lowercased()
+            let isWindowCycle = Int(event.keyCode) == kVK_ANSI_Grave || chars == "`" || chars == "~"
+            if isWindowCycle {
+                return super.performKeyEquivalent(with: event)
+            }
             let keepLocalAppShortcuts: Set<String> = ["q", "w", "h", "m", ","]
             if !keepLocalAppShortcuts.contains(chars) && shouldInterceptCommandEquivalent?(event) == true {
                 keyDown(with: event)
@@ -384,6 +389,28 @@ final class VNCView: NSView {
             }
         }
         activeModifierFlags = next
+    }
+
+    /// 切换本地窗口前主动释放远端按住的修饰键，避免 Command 映射为 Ctrl/Win 后切走导致远端卡键。
+    func resetRemoteModifiers() {
+        if let onResetModifiers {
+            onResetModifiers()
+            activeModifierFlags = []
+            return
+        }
+        guard !activeModifierFlags.isEmpty else { return }
+        let mapping = AppEnvironment.shared.settings.settings.remoteKeyMapping
+        let mappings: [(NSEvent.ModifierFlags, UInt32?)] = [
+            (.shift, 0xFFE1),
+            (.control, mapping.controlKey.x11Keysym),
+            (.option, mapping.optionKey.x11Keysym),
+            (.command, mapping.commandKey.x11Keysym),
+        ]
+        for (flag, keysym) in mappings {
+            guard let keysym, activeModifierFlags.contains(flag) else { continue }
+            onKeyEvent?(keysym, false)
+        }
+        activeModifierFlags = []
     }
 
     private func keysyms(for event: NSEvent) -> [UInt32] {

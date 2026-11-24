@@ -88,6 +88,9 @@ final class RDPController: SessionControlling {
             self?.syncModifiers(event.modifierFlags)
             return true
         }
+        desktopView.onResetModifiers = { [weak self] in
+            self?.syncModifiers([])
+        }
         desktopView.shouldInterceptCommandEquivalent = { [weak self] _ in
             self?.keyMapping.commandKey != .disabled
         }
