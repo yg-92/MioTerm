@@ -1076,9 +1076,9 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_NlaSecurity", !config->disable_nla);
         set_bool_setting(settings, "FreeRDP_TlsSecurity", true);
         set_bool_setting(settings, "FreeRDP_RdpSecurity", true);
-        set_bool_setting(settings, "FreeRDP_DeviceRedirection", true);
-        set_bool_setting(settings, "FreeRDP_RedirectDrives", true);
-        set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", true);
+        set_bool_setting(settings, "FreeRDP_DeviceRedirection", false);
+        set_bool_setting(settings, "FreeRDP_RedirectDrives", false);
+        set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", false);
         set_bool_setting(settings, "FreeRDP_RedirectClipboard", true);
         set_bool_setting(settings, "FreeRDP_SupportDynamicChannels", true);
         set_bool_setting(settings, "FreeRDP_SupportGraphicsPipeline", true);
@@ -1102,13 +1102,6 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_u32_setting(settings, "FreeRDP_PerformanceFlags", 0x00000180u); // FONT_SMOOTHING | DESKTOP_COMPOSITION
         set_bool_setting(settings, "FreeRDP_GfxH264", true);
         set_bool_setting(settings, "FreeRDP_GfxAVC444", true);
-
-        if (config->shared_dir && config->shared_dir[0] && g_fn.client_parse_args) {
-            char drive_arg[1024];
-            snprintf(drive_arg, sizeof(drive_arg), "/drive:MioTerm,%s", config->shared_dir);
-            char* argv[] = {"mioterm-rdp", drive_arg};
-            g_fn.client_parse_args(settings, 2, argv, 1);
-        }
     }
 
     return session;
