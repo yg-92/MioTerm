@@ -112,6 +112,29 @@ public final class HostRepository {
         onChange?()
     }
 
+    /// 批量重命名分组：按 `groupName` 匹配（兼容将「未分组」批量归入新分组，以及留空移回未分组）。
+    @discardableResult
+    public func renameGroup(from oldGroupName: String, to newGroupName: String) throws -> Int {
+        let trimmedNew = newGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ungroupedLabel = L10n.tr(.hostGroupUngrouped)
+        let storedTarget = (trimmedNew.isEmpty || trimmedNew == ungroupedLabel) ? "" : trimmedNew
+        let displayTarget = storedTarget.isEmpty ? ungroupedLabel : storedTarget
+        guard displayTarget != oldGroupName else { return 0 }
+
+        var updatedCount = 0
+        let now = Date()
+        for index in hosts.indices where hosts[index].groupName == oldGroupName {
+            hosts[index].group = storedTarget
+            hosts[index].updatedAt = now
+            updatedCount += 1
+        }
+        guard updatedCount > 0 else { return 0 }
+        try persist()
+        onChange?()
+        NotificationCenter.default.post(name: .mioTermHostsDidChange, object: self)
+        return updatedCount
+    }
+
     /// 指纹确认结果单独落库，不经过表单，避免表单里的旧值把新指纹覆盖掉。
     public func recordHostKey(id: String, algorithm: String, fingerprint: String) throws {
         guard let index = hosts.firstIndex(where: { $0.id == id }) else { return }

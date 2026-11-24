@@ -264,6 +264,11 @@ public enum L10nKey: String, CaseIterable, Sendable {
     case sidebarMenuFavorite
     case sidebarMenuRefreshFingerprint
     case sidebarMenuDelete
+    case sidebarMenuRenameGroup
+    case sidebarRenameGroupTitle
+    case sidebarRenameGroupMessage
+    case sidebarRenameGroupPlaceholder
+    case sidebarRenameGroupFailedTitle
     case sidebarCollapseGroup
     case sidebarExpandGroup
     case sidebarFavorited

@@ -291,6 +291,12 @@ final class HostSidebarViewController: NSViewController {
     // MARK: - 右键菜单
 
     private func buildMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        return menu
+    }
+
+    private func populateHostMenu(_ menu: NSMenu) {
         let titles: [(String, Selector)] = [
             (L10n.tr(.sidebarMenuConnect), #selector(connectSelected(_:))),
             (L10n.tr(.sidebarMenuTest), #selector(testSelected(_:))),
@@ -300,11 +306,11 @@ final class HostSidebarViewController: NSViewController {
             (L10n.tr(.sidebarMenuRefreshFingerprint), #selector(refreshFingerprintSelected(_:))),
             (L10n.tr(.sidebarMenuDelete), #selector(deleteSelected(_:))),
         ]
-        let menu = NSMenu()
         for (title, action) in titles {
-            menu.addItem(NSMenuItem(title: title, action: action, keyEquivalent: ""))
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
         }
-        for item in menu.items { item.target = self }
 
         let iconMenuItem = NSMenuItem(title: L10n.tr(.hostMenuChangeSystemIcon), action: nil, keyEquivalent: "")
         let iconSubmenu = NSMenu()
@@ -317,7 +323,6 @@ final class HostSidebarViewController: NSViewController {
         }
         iconMenuItem.submenu = iconSubmenu
         menu.insertItem(iconMenuItem, at: 3)
-        return menu
     }
 
     @objc private func newHostTapped(_ sender: Any?) {
@@ -334,6 +339,9 @@ final class HostSidebarViewController: NSViewController {
     }
 
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(renameGroupSelected(_:)) {
+            return menuGroupName != nil
+        }
         if menuItem.action == #selector(changeSystemIcon(_:)) {
             guard let host = menuHost, host.protocolKind == .ssh else { return false }
             let raw = menuItem.representedObject as? String
@@ -348,6 +356,54 @@ final class HostSidebarViewController: NSViewController {
         let index = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
         guard index >= 0 else { return nil }
         return (outlineView.item(atRow: index) as? Row)?.host
+    }
+
+    private var menuGroupName: String? {
+        let index = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
+        guard index >= 0 else { return nil }
+        return (outlineView.item(atRow: index) as? Row)?.groupName
+    }
+
+    @objc private func renameGroupSelected(_ sender: NSMenuItem) {
+        guard let oldName = menuGroupName else { return }
+        let alert = NSAlert()
+        alert.messageText = L10n.tr(.sidebarRenameGroupTitle)
+        alert.informativeText = L10n.tr(.sidebarRenameGroupMessage, oldName)
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: L10n.tr(.commonOK))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        input.placeholderString = L10n.tr(.sidebarRenameGroupPlaceholder)
+        input.stringValue = (oldName == L10n.tr(.hostGroupUngrouped)) ? "" : oldName
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let response = await AlertPresenter.present(alert, in: self.view.window)
+            guard response == .alertFirstButtonReturn else { return }
+            let rawNew = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let targetDisplay = rawNew.isEmpty ? L10n.tr(.hostGroupUngrouped) : rawNew
+            do {
+                let count = try self.repository.renameGroup(from: oldName, to: rawNew)
+                if count > 0 {
+                    if self.collapsedGroups.remove(oldName) != nil {
+                        self.collapsedGroups.insert(targetDisplay)
+                    }
+                    if self.searchCollapsedGroups.remove(oldName) != nil {
+                        self.searchCollapsedGroups.insert(targetDisplay)
+                    }
+                    self.reload()
+                }
+            } catch {
+                AlertPresenter.fail(
+                    title: L10n.tr(.sidebarRenameGroupFailedTitle),
+                    message: error.localizedDescription,
+                    in: self.view.window
+                )
+            }
+        }
     }
 
     @objc private func connectSelected(_ sender: NSMenuItem) {
@@ -383,6 +439,25 @@ final class HostSidebarViewController: NSViewController {
     @objc private func deleteSelected(_ sender: NSMenuItem) {
         guard let host = menuHost else { return }
         delegate?.hostSidebar(self, didRequestDelete: host)
+    }
+}
+
+// MARK: - NSMenuDelegate
+
+extension HostSidebarViewController: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        if menuGroupName != nil {
+            let renameItem = NSMenuItem(
+                title: L10n.tr(.sidebarMenuRenameGroup),
+                action: #selector(renameGroupSelected(_:)),
+                keyEquivalent: ""
+            )
+            renameItem.target = self
+            menu.addItem(renameItem)
+        } else if menuHost != nil {
+            populateHostMenu(menu)
+        }
     }
 }
 
