@@ -77,6 +77,8 @@ final class RDPController: SessionControlling {
     private var lastSyncedPasteboardChangeCount: Int = -1
     private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
+    private var appliedRemoteScale: Int = 100
+    private var didQueueInitialDisplaySync = false
     private(set) var resolutionMode: RDPResolutionMode = .fitWindow
     private(set) var scalePercent: Int = 100
     private var lastPassword: String?
@@ -176,6 +178,8 @@ final class RDPController: SessionControlling {
 
         state = .starting
         lastPassword = password
+        didQueueInitialDisplaySync = false
+        appliedRemoteScale = 100
         let initial = explicitSize ?? resolvedTargetSize(forConnect: true)
         let rdpClient = RDPClient(
             host: host.address,
@@ -233,9 +237,16 @@ final class RDPController: SessionControlling {
                 title = desktopName
                 onTitleChange?(desktopName)
             }
-            let viewSize = desktopView.bounds.size
-            if viewSize.width >= 200, viewSize.height >= 200 {
-                scheduleResize(for: viewSize)
+            if !didQueueInitialDisplaySync {
+                didQueueInitialDisplaySync = true
+                // Windows 重连到已有会话时往往会忽略建连握手里的 DesktopScaleFactor，
+                // 这里直接通过 DisplayControl 排队发送一次目标分辨率与缩放（待 disp_ready 就绪后立即下发；
+                // 不支持 DisplayControl 的 Win7 不会触发任何动作）。
+                let target = resolvedTargetSize(forConnect: false)
+                if scalePercent != 100 || resolutionMode != .fitWindow || abs(target.width - width) >= 4 || abs(target.height - height) >= 4 {
+                    appliedRemoteScale = scalePercent
+                    client?.requestResize(width: target.width, height: target.height, scalePercent: scalePercent)
+                }
             }
         case .frameUpdates(let updates):
             for update in updates {
@@ -424,6 +435,7 @@ final class RDPController: SessionControlling {
         guard state == .running, let client else { return }
         let target = resolvedTargetSize(forConnect: false)
         if client.supportsDynamicResize {
+            appliedRemoteScale = clampedScale
             client.requestResize(width: target.width, height: target.height, scalePercent: clampedScale)
         } else {
             // Win7 不支持动态改分辨率，仅在用户主动切换下拉选时重连；
@@ -446,7 +458,9 @@ final class RDPController: SessionControlling {
         guard client?.supportsDynamicResize == true else { return }
         let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
         let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
-        guard abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4 else {
+        let sizeChanged = abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4
+        let scaleChanged = appliedRemoteScale != scalePercent
+        guard sizeChanged || scaleChanged else {
             return
         }
         let scale = scalePercent
@@ -459,6 +473,7 @@ final class RDPController: SessionControlling {
                   self.resolutionMode == .fitWindow,
                   let client = self.client,
                   client.supportsDynamicResize else { return }
+            self.appliedRemoteScale = scale
             client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
         }
     }
