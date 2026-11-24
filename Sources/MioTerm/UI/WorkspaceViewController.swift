@@ -703,6 +703,15 @@ extension WorkspaceViewController: HostSidebarDelegate {
         newHost(nil)
     }
 
+    func hostSidebar(_ sidebar: HostSidebarViewController, didRequestNewHostInGroup group: String) {
+        presentHostForm(HostProfile(
+            group: group,
+            authMethod: .password,
+            connectTimeout: environment.settings.settings.defaultConnectTimeout,
+            keepaliveInterval: environment.settings.settings.defaultKeepaliveInterval
+        ))
+    }
+
     func hostSidebarDidRequestNewLocalTerminal(_ sidebar: HostSidebarViewController) {
         newLocalTerminal(nil)
     }

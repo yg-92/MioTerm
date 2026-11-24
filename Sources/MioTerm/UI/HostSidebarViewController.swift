@@ -13,6 +13,7 @@ protocol HostSidebarDelegate: AnyObject {
     func hostSidebar(_ sidebar: HostSidebarViewController, didRequestFingerprintRefresh host: HostProfile)
     func hostSidebar(_ sidebar: HostSidebarViewController, didRequestTest host: HostProfile)
     func hostSidebarDidRequestNewHost(_ sidebar: HostSidebarViewController)
+    func hostSidebar(_ sidebar: HostSidebarViewController, didRequestNewHostInGroup group: String)
     func hostSidebarDidRequestNewLocalTerminal(_ sidebar: HostSidebarViewController)
 }
 
@@ -350,7 +351,8 @@ final class HostSidebarViewController: NSViewController {
     }
 
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(renameGroupSelected(_:)) {
+        if menuItem.action == #selector(renameGroupSelected(_:))
+            || menuItem.action == #selector(addHostInGroupSelected(_:)) {
             return menuGroupName != nil
         }
         if menuItem.action == #selector(changeSystemIcon(_:)) {
@@ -373,6 +375,12 @@ final class HostSidebarViewController: NSViewController {
         let index = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
         guard index >= 0 else { return nil }
         return (outlineView.item(atRow: index) as? Row)?.groupName
+    }
+
+    @objc private func addHostInGroupSelected(_ sender: NSMenuItem) {
+        guard let groupName = menuGroupName else { return }
+        let normalized = groupName == L10n.tr(.hostGroupUngrouped) ? "" : groupName
+        delegate?.hostSidebar(self, didRequestNewHostInGroup: normalized)
     }
 
     @objc private func renameGroupSelected(_ sender: NSMenuItem) {
@@ -460,6 +468,14 @@ extension HostSidebarViewController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         if menuGroupName != nil {
+            let addHostItem = NSMenuItem(
+                title: L10n.tr(.menuNewHost),
+                action: #selector(addHostInGroupSelected(_:)),
+                keyEquivalent: ""
+            )
+            addHostItem.target = self
+            menu.addItem(addHostItem)
+
             let renameItem = NSMenuItem(
                 title: L10n.tr(.sidebarMenuRenameGroup),
                 action: #selector(renameGroupSelected(_:)),
