@@ -53,6 +53,7 @@ final class RDPController: SessionControlling {
     private var lastSyncedPasteboardChangeCount: Int = -1
     private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
+    private var lastRequestedReconnectSize: (width: Int, height: Int)?
     private(set) var resolutionMode: RDPResolutionMode = .fitWindow
     private(set) var scalePercent: Int = 100
     private var lastPassword: String?
@@ -137,12 +138,13 @@ final class RDPController: SessionControlling {
     }
 
     func start(password: String?) {
-        start(password: password, explicitSize: nil)
+        lastRequestedReconnectSize = nil
+        start(password: password, explicitSize: nil, preserveFramebuffer: false)
     }
 
-    private func start(password: String?, explicitSize: (width: Int, height: Int)?) {
+    private func start(password: String?, explicitSize: (width: Int, height: Int)?, preserveFramebuffer: Bool) {
         guard let host else { return }
-        stop()
+        stop(clearFramebuffer: !preserveFramebuffer)
 
         guard FreeRDPAvailability.isInstalled else {
             state = .failed(L10n.tr(.rdpDependencyMissing, FreeRDPAvailability.installCommand))
@@ -235,6 +237,10 @@ final class RDPController: SessionControlling {
     }
 
     func stop() {
+        stop(clearFramebuffer: true)
+    }
+
+    private func stop(clearFramebuffer: Bool) {
         resizeTask?.cancel()
         resizeTask = nil
         clipboardPollTask?.cancel()
@@ -248,7 +254,9 @@ final class RDPController: SessionControlling {
         eventTask = nil
         client?.stop()
         client = nil
-        desktopView.clearFramebuffer()
+        if clearFramebuffer {
+            desktopView.clearFramebuffer()
+        }
     }
 
     private func startClipboardPolling() {
@@ -356,15 +364,15 @@ final class RDPController: SessionControlling {
                 max(600, min(8192, (Int(screenSize.height) + 1) & ~1))
             )
         case .fitWindow:
-            // 建连时按最大化窗口可用内容区（屏幕 visibleFrame 减去标题栏高度）请求，
-            // 确保不支持 DisplayControl 的 Win7 拖出最大化时左右无黑边；
-            // 连上后支持动态调整的新版 Windows 会由 scheduleResize 实时跟随窗口尺寸。
-            let base = forConnect ? maximizedWindowContentSize() : desktopView.bounds.size
-            let minW = forConnect ? 800 : 200
-            let minH = forConnect ? 600 : 200
+            // 直接按当前实际视图尺寸请求，保证主窗口、拖出窗口、最大化或全屏下都是 1:1 铺满无黑边；
+            // 若建连时视图尚未完成布局，再回退到最大化窗口可用内容区。
+            let viewSize = desktopView.bounds.size
+            let base = (viewSize.width >= 400 && viewSize.height >= 300)
+                ? viewSize
+                : maximizedWindowContentSize()
             return (
-                max(minW, min(8192, (Int(base.width) + 1) & ~1)),
-                max(minH, min(8192, (Int(base.height) + 1) & ~1))
+                max(200, min(8192, (Int(base.width) + 1) & ~1)),
+                max(200, min(8192, (Int(base.height) + 1) & ~1))
             )
         }
     }
@@ -373,6 +381,7 @@ final class RDPController: SessionControlling {
         let clampedScale = max(100, min(200, scalePercent))
         self.resolutionMode = resolution
         self.scalePercent = clampedScale
+        self.lastRequestedReconnectSize = nil
         resizeTask?.cancel()
         resizeTask = nil
         guard state == .running, let client else { return }
@@ -380,8 +389,9 @@ final class RDPController: SessionControlling {
         if client.supportsDynamicResize {
             client.requestResize(width: target.width, height: target.height, scalePercent: clampedScale)
         } else {
-            // 不支持 DisplayControl 的旧版 Windows（如 Win7）通过无缝重连生效精确的目标分辨率与缩放。
-            start(password: lastPassword, explicitSize: target)
+            // 不支持 DisplayControl 的旧版 Windows（如 Win7）保留当前画面无缝重连到精确目标尺寸。
+            lastRequestedReconnectSize = target
+            start(password: lastPassword, explicitSize: target, preserveFramebuffer: true)
         }
     }
 
@@ -389,15 +399,36 @@ final class RDPController: SessionControlling {
         guard resolutionMode == .fitWindow else { return }
         let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
         let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
-        guard abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4 else {
-            return
-        }
+        let dw = abs(targetWidth - currentRemoteSize.width)
+        let dh = abs(targetHeight - currentRemoteSize.height)
+        guard dw >= 4 || dh >= 4 else { return }
         let scale = scalePercent
+        let supportsDynamic = client?.supportsDynamicResize == true
+        let delayNs: UInt64 = supportsDynamic ? 250_000_000 : 550_000_000
         resizeTask?.cancel()
         resizeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard let self, !Task.isCancelled, self.state == .running, self.resolutionMode == .fitWindow else { return }
-            self.client?.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
+            try? await Task.sleep(nanoseconds: delayNs)
+            guard let self,
+                  !Task.isCancelled,
+                  self.state == .running,
+                  self.resolutionMode == .fitWindow,
+                  let client = self.client else { return }
+            if client.supportsDynamicResize {
+                client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
+            } else {
+                // Win7 等不支持 DisplayControl 的主机：窗口尺寸稳定变化超过 16px 后，保留画面无缝重连匹配精确像素，彻底消除黑边。
+                guard self.desktopView.window != nil,
+                      !self.desktopView.isHiddenOrHasHiddenAncestor,
+                      abs(targetWidth - self.currentRemoteSize.width) >= 16 || abs(targetHeight - self.currentRemoteSize.height) >= 16 else {
+                    return
+                }
+                if let prev = self.lastRequestedReconnectSize,
+                   prev.width == targetWidth && prev.height == targetHeight {
+                    return
+                }
+                self.lastRequestedReconnectSize = (targetWidth, targetHeight)
+                self.start(password: self.lastPassword, explicitSize: (targetWidth, targetHeight), preserveFramebuffer: true)
+            }
         }
     }
 
