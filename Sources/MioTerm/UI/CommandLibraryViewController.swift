@@ -133,6 +133,7 @@ final class CommandLibraryViewController: NSViewController, NSTableViewDataSourc
         scroll.documentView = tableView
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
         scroll.borderType = .noBorder
 
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 460))

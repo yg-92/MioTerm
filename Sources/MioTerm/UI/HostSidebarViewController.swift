@@ -111,6 +111,8 @@ final class HostSidebarViewController: NSViewController {
 
         scrollView.documentView = outlineView
         scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = false
         scrollView.backgroundColor = .clear
 

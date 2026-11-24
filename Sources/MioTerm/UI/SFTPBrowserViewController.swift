@@ -131,6 +131,7 @@ final class SFTPBrowserViewController: NSViewController {
         treeScroll.documentView = fileTable
         treeScroll.hasVerticalScroller = true
         treeScroll.autohidesScrollers = true
+        treeScroll.scrollerStyle = .overlay
         treeScroll.borderType = .noBorder
         treeScroll.drawsBackground = false
         treeScroll.backgroundColor = .clear
@@ -139,6 +140,7 @@ final class SFTPBrowserViewController: NSViewController {
         transferScroll.documentView = transferTable
         transferScroll.hasVerticalScroller = true
         transferScroll.autohidesScrollers = true
+        transferScroll.scrollerStyle = .overlay
         transferScroll.borderType = .noBorder
         transferScroll.drawsBackground = false
         transferScroll.backgroundColor = .clear
