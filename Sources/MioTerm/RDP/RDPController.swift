@@ -137,6 +137,10 @@ final class RDPController: SessionControlling {
     }
 
     func start(password: String?) {
+        start(password: password, explicitSize: nil)
+    }
+
+    private func start(password: String?, explicitSize: (width: Int, height: Int)?) {
         guard let host else { return }
         stop()
 
@@ -147,7 +151,7 @@ final class RDPController: SessionControlling {
 
         state = .starting
         lastPassword = password
-        let initial = resolvedTargetSize(forConnect: true)
+        let initial = explicitSize ?? resolvedTargetSize(forConnect: true)
         let rdpClient = RDPClient(
             host: host.address,
             port: host.port,
@@ -326,6 +330,18 @@ final class RDPController: SessionControlling {
         }
     }
 
+    private func maximizedWindowContentSize() -> CGSize {
+        guard let screen = desktopView.window?.screen ?? NSScreen.main else {
+            return desktopView.bounds.size
+        }
+        if desktopView.window?.styleMask.contains(.fullScreen) == true {
+            return screen.frame.size
+        }
+        let visible = screen.visibleFrame.size
+        let titlebarHeight: CGFloat = 28
+        return CGSize(width: visible.width, height: max(600, visible.height - titlebarHeight))
+    }
+
     private func resolvedTargetSize(forConnect: Bool) -> (width: Int, height: Int) {
         switch resolutionMode {
         case .fixed(let w, let h):
@@ -334,17 +350,16 @@ final class RDPController: SessionControlling {
                 max(200, min(8192, (h + 1) & ~1))
             )
         case .matchScreen:
-            let screenSize = (desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size
+            let screenSize = maximizedWindowContentSize()
             return (
                 max(800, min(8192, (Int(screenSize.width) + 1) & ~1)),
                 max(600, min(8192, (Int(screenSize.height) + 1) & ~1))
             )
         case .fitWindow:
-            // 建连时按当前显示器完整逻辑分辨率请求，确保不支持 DisplayControl 的 Win7 也能获得完整宽屏；
+            // 建连时按最大化窗口可用内容区（屏幕 visibleFrame 减去标题栏高度）请求，
+            // 确保不支持 DisplayControl 的 Win7 拖出最大化时左右无黑边；
             // 连上后支持动态调整的新版 Windows 会由 scheduleResize 实时跟随窗口尺寸。
-            let base = forConnect
-                ? ((desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size)
-                : desktopView.bounds.size
+            let base = forConnect ? maximizedWindowContentSize() : desktopView.bounds.size
             let minW = forConnect ? 800 : 200
             let minH = forConnect ? 600 : 200
             return (
@@ -365,8 +380,8 @@ final class RDPController: SessionControlling {
         if client.supportsDynamicResize {
             client.requestResize(width: target.width, height: target.height, scalePercent: clampedScale)
         } else {
-            // 不支持 DisplayControl 的旧版 Windows（如 Win7）通过无缝重连生效新分辨率与缩放。
-            start(password: lastPassword)
+            // 不支持 DisplayControl 的旧版 Windows（如 Win7）通过无缝重连生效精确的目标分辨率与缩放。
+            start(password: lastPassword, explicitSize: target)
         }
     }
 
