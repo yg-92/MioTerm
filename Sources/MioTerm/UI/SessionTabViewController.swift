@@ -29,8 +29,23 @@ final class SessionTabViewController: NSViewController {
     private var tabControllers: [UUID: TerminalTabViewController] = [:]
     private var modeTokens: [UUID: UUID] = [:]
     private var stateTokens: [UUID: UUID] = [:]
+    /// 正在拖出主窗口预览拆分时的临时隐藏会话：拖在窗口外时主窗口立即切走，拖回窗口内时无缝还原。
+    private var dragDetachingID: UUID?
     private var selectedIndex: Int? {
         order.firstIndex { $0.sessionID == paneLayout.selected }
+    }
+
+    private var effectiveSelectedController: (any SessionControlling)? {
+        guard let detachingID = dragDetachingID else { return selectedController }
+        if selectedController?.sessionID == detachingID {
+            return order.first { $0.sessionID != detachingID }
+        }
+        return selectedController
+    }
+
+    private var effectiveSelectedIndex: Int? {
+        guard let controller = effectiveSelectedController else { return nil }
+        return order.firstIndex { $0 === controller }
     }
 
     var isSplit: Bool { paneLayout.isSplit }
@@ -94,6 +109,7 @@ final class SessionTabViewController: NSViewController {
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
         tabBar.onMove = { [weak self] id, destination in self?.moveSession(id: id, to: destination) }
         tabBar.onDetach = { [weak self] id, point in self?.detachDesktop(id: id, at: point) }
+        tabBar.onDetachPreviewChange = { [weak self] id, active in self?.setDragDetaching(id: id, active: active) }
         tabBar.snapshotForSession = { [weak self] id in self?.sessionSnapshot(for: id) }
         tabBar.onNew = { [weak self] in self?.newLocalTerminal() }
         tabBar.onSplit = { [weak self] in self?.showSplitChooser() }
@@ -252,10 +268,18 @@ final class SessionTabViewController: NSViewController {
     }
 
     func detachDesktop(id: UUID, at screenPoint: NSPoint?) {
+        dragDetachingID = nil
         guard let index = order.firstIndex(where: { $0.sessionID == id }),
               order[index] is VNCController || order[index] is RDPController,
               let detached = removeSession(at: index, stopAndUnregister: false) else { return }
         onDetachDesktop?(detached, screenPoint)
+    }
+
+    private func setDragDetaching(id: UUID, active: Bool) {
+        let next: UUID? = active ? id : nil
+        guard dragDetachingID != next else { return }
+        dragDetachingID = next
+        presentSelection()
     }
 
     private func sessionSnapshot(for id: UUID) -> NSImage? {
@@ -384,6 +408,23 @@ final class SessionTabViewController: NSViewController {
     }
 
     private func presentSelection() {
+        if let detachingID = dragDetachingID,
+           paneLayout.primary == detachingID || paneLayout.secondary == detachingID {
+            let fallback = effectiveSelectedController
+            if let fallback, let tab = tabControllers[fallback.sessionID] {
+                terminalSplit.show(primary: tab, secondary: nil)
+                content.show(terminalSplit)
+                updateChrome()
+                onSessionsChange?(fallback)
+            } else {
+                terminalSplit.clear()
+                clearTerminalFocus()
+                content.show(welcome)
+                updateChrome()
+                onSessionsChange?(nil)
+            }
+            return
+        }
         if let primaryID = paneLayout.primary,
            let primary = tabControllers[primaryID] {
             terminalSplit.show(primary: primary, secondary: paneLayout.secondary.flatMap { tabControllers[$0] })
@@ -612,10 +653,10 @@ final class SessionTabViewController: NSViewController {
                 splitGroupID: paneLayout.groupID(for: controller.sessionID)
             )
         }
-        tabBar.update(tabs: entries, selected: selectedIndex)
-        tabBar.updateSplit(isSplit: paneLayout.isSplit, enabled: selectedController != nil)
+        tabBar.update(tabs: entries, selected: effectiveSelectedIndex)
+        tabBar.updateSplit(isSplit: paneLayout.isSplit && dragDetachingID == nil, enabled: effectiveSelectedController != nil)
         for (id, tab) in tabControllers {
-            tab.setPanePresentation(split: paneLayout.isSplit, active: id == paneLayout.selected)
+            tab.setPanePresentation(split: paneLayout.isSplit && dragDetachingID == nil, active: id == effectiveSelectedController?.sessionID)
         }
         let hasTabs = !order.isEmpty
         tabBar.isHidden = !hasTabs
@@ -626,7 +667,7 @@ final class SessionTabViewController: NSViewController {
 
     /// 脚部常驻，主页上只留右下角的版本号；选中会话后补上连接状态、主机与目录。
     private func updateStatusBar() {
-        statusBar.update(selectedController)
+        statusBar.update(effectiveSelectedController)
     }
 
     private func newLocalTerminal() {
@@ -765,6 +806,7 @@ final class SessionTabBarView: NSView {
     var onClose: ((Int) -> Void)?
     var onMove: ((UUID, Int) -> Void)?
     var onDetach: ((UUID, NSPoint) -> Void)?
+    var onDetachPreviewChange: ((UUID, Bool) -> Void)?
     var snapshotForSession: ((UUID) -> NSImage?)?
     var onNew: (() -> Void)?
     var onSplit: (() -> Void)?
@@ -1075,6 +1117,9 @@ final class SessionTabBarView: NSView {
         chip.onDetachDrag = { [weak self] screenPoint in
             self?.onDetach?(tab.id, screenPoint)
         }
+        chip.onDetachPreviewChange = { [weak self] active in
+            self?.onDetachPreviewChange?(tab.id, active)
+        }
         chip.onSelect = { [weak self] in self?.onSelect?(index) }
         chip.onClose = { [weak self] in self?.onClose?(index) }
         chip.onContextMenu = { [weak self, weak chip] event in
@@ -1380,6 +1425,7 @@ final class SessionTabChip: NSView, NSDraggingSource {
     var allowOutsideDrag = false
     var onDrag: ((NSEvent) -> Void)?
     var onDetachDrag: ((NSPoint) -> Void)?
+    var onDetachPreviewChange: ((Bool) -> Void)?
     var compactDragImage: NSImage?
     var detachedDragImage: NSImage?
     private var showingDetachedPreview = false
@@ -1661,8 +1707,12 @@ final class SessionTabChip: NSView, NSDraggingSource {
               let compact = compactDragImage,
               let win = window else { return }
         let outside = !win.frame.contains(screenPoint)
+        // 拖出主窗口外松手即拆分独立窗口，关闭 AppKit 默认的失败回弹动画。
+        session.animatesToStartingPositionsOnCancelOrFail = !outside
         guard outside != showingDetachedPreview else { return }
         showingDetachedPreview = outside
+        isHidden = outside
+        onDetachPreviewChange?(outside)
         let targetImage = outside ? detached : compact
         let size = targetImage.size
         let frame = outside
@@ -1674,13 +1724,20 @@ final class SessionTabChip: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        let wasOutsidePreview = showingDetachedPreview
+        let willDetach = operation == [] && allowOutsideDrag && (window.map { !$0.frame.contains(screenPoint) } ?? false)
         mouseDownLocation = nil
         didBeginDrag = false
         showingDetachedPreview = false
         compactDragImage = nil
         detachedDragImage = nil
-        if operation == [], allowOutsideDrag, let win = window, !win.frame.contains(screenPoint) {
+        if willDetach {
             onDetachDrag?(screenPoint)
+        } else {
+            isHidden = false
+            if wasOutsidePreview {
+                onDetachPreviewChange?(false)
+            }
         }
     }
 
