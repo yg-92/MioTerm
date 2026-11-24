@@ -456,6 +456,9 @@ final class RDPController: SessionControlling {
 
     private func scheduleResize(for size: CGSize) {
         guard resolutionMode == .fitWindow else { return }
+        // 只有支持 DisplayControl 的主机（Win10/11 等）才在窗口大小变化时无感动态调整；
+        // Win7 协议本身不支持动态改分辨率，绝不因拖动/最大化窗口自动重新登录。
+        guard client?.supportsDynamicResize == true else { return }
         let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
         let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
         let sizeChanged = abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4
@@ -464,35 +467,17 @@ final class RDPController: SessionControlling {
             return
         }
         let scale = scalePercent
-        let supportsDynamic = client?.supportsDynamicResize == true
-        let delayNs: UInt64 = supportsDynamic ? 250_000_000 : 800_000_000
         resizeTask?.cancel()
         resizeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delayNs)
+            try? await Task.sleep(nanoseconds: 250_000_000)
             guard let self,
                   !Task.isCancelled,
                   self.state == .running,
                   self.resolutionMode == .fitWindow,
-                  let client = self.client else { return }
-            if client.supportsDynamicResize {
-                self.appliedRemoteScale = scale
-                client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
-            } else {
-                // Win7 跨屏拖出或最大化后尺寸发生明显变化（>=64px）且窗口已停止缩放时，
-                // 延迟 500ms 平滑重连到当前屏幕窗口的 1:1 精确分辨率，保证清晰不模糊且不触发服务正忙。
-                guard let win = self.desktopView.window,
-                      !win.inLiveResize,
-                      !self.desktopView.isHiddenOrHasHiddenAncestor,
-                      win.windowController is VNCWindowController,
-                      abs(targetWidth - self.currentRemoteSize.width) >= 64 || abs(targetHeight - self.currentRemoteSize.height) >= 64 else {
-                    return
-                }
-                if let prev = self.lastRequestedReconnectSize,
-                   prev.width == targetWidth && prev.height == targetHeight {
-                    return
-                }
-                self.reconnectForResize(to: (targetWidth, targetHeight))
-            }
+                  let client = self.client,
+                  client.supportsDynamicResize else { return }
+            self.appliedRemoteScale = scale
+            client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
         }
     }
 
