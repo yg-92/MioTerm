@@ -18,6 +18,7 @@ public final class RDPClient: @unchecked Sendable {
 
     public var onClipboardReady: (@Sendable () -> Void)?
     public var onRemoteClipboardChanged: (@Sendable (_ hasText: Bool, _ hasFiles: Bool) -> Void)?
+    public var onFrameReady: (@Sendable () -> Void)?
 
     private let stateLock = NSLock()
     private let clipboardSendQueue = DispatchQueue(label: "com.mio.term.rdp.clipboard-send", qos: .userInitiated)
@@ -26,6 +27,8 @@ public final class RDPClient: @unchecked Sendable {
     private var lastButtonMask: UInt8 = 0
     private var captureConnectError = false
     private var capturedConnectError: String?
+    private var latestFrame: (width: Int, height: Int, bgra: Data)?
+    private var frameNotificationScheduled = false
 
     public init(
         host: String,
@@ -366,7 +369,7 @@ public final class RDPClient: @unchecked Sendable {
         guard let connectedSession = activeSession else { return }
 
         while !isStopped {
-            let status = mio_rdp_poll(connectedSession, 50)
+            let status = mio_rdp_poll(connectedSession, 16)
             if status == 0 {
                 if !isStopped {
                     continuation.yield(.closed(reason: nil))
@@ -403,6 +406,15 @@ public final class RDPClient: @unchecked Sendable {
         continuation.yield(.frameUpdates([.resize(width: width, height: height)]))
     }
 
+    public func takeLatestFrame() -> (width: Int, height: Int, bgra: Data)? {
+        stateLock.lock()
+        let frame = latestFrame
+        latestFrame = nil
+        frameNotificationScheduled = false
+        stateLock.unlock()
+        return frame
+    }
+
     private func handleFrame(ptr: UnsafePointer<UInt8>, width: Int, height: Int, stride: Int) {
         guard width > 0, height > 0, stride >= width * 4 else { return }
         let rowBytes = width * 4
@@ -416,6 +428,17 @@ public final class RDPClient: @unchecked Sendable {
                     memcpy(dstBase + row * rowBytes, ptr + row * stride, rowBytes)
                 }
             }
+        }
+        if let onFrameReady {
+            stateLock.lock()
+            latestFrame = (width, height, bgra)
+            let shouldNotify = !frameNotificationScheduled
+            frameNotificationScheduled = true
+            stateLock.unlock()
+            if shouldNotify {
+                onFrameReady()
+            }
+            return
         }
         continuation.yield(.frameUpdates([.rawRect(x: 0, y: 0, width: width, height: height, bgra: bgra)]))
     }

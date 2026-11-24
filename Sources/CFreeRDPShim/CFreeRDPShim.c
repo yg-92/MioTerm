@@ -289,6 +289,7 @@ struct MioRdpSession {
     bool disp_ready;
     bool gdi_initialized;
     bool connected;
+    bool frame_dirty;
 
     void* cliprdr;
     void* clip_file;
@@ -884,16 +885,9 @@ static RdpBool cb_begin_paint(void* context) {
 
 static RdpBool cb_end_paint(void* context) {
     MioRdpSession* session = session_from_context(context);
-    if (!session || !session->callbacks.on_frame) return 1;
-    void* gdi = ptr_at(context, RDP_CONTEXT_GDI_OFFSET);
-    if (!gdi) return 1;
-    int32_t width = i32_at(gdi, RDP_GDI_WIDTH_OFFSET);
-    int32_t height = i32_at(gdi, RDP_GDI_HEIGHT_OFFSET);
-    int32_t stride = (int32_t)u32_at(gdi, RDP_GDI_STRIDE_OFFSET);
-    const uint8_t* buffer = (const uint8_t*)ptr_at(gdi, RDP_GDI_PRIMARY_BUFFER_OFFSET);
-    if (buffer && width > 0 && height > 0 && stride > 0) {
-        session->callbacks.on_frame(session->userdata, buffer, width, height, stride);
-    }
+    if (!session) return 1;
+    // 仅标记脏帧，由 mio_rdp_poll 在排空当前批次所有分块后再统一输出一帧，避免每个小分块都整屏拷贝。
+    session->frame_dirty = true;
     return 1;
 }
 
@@ -1090,6 +1084,16 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_SupportGraphicsPipeline", true);
         set_bool_setting(settings, "FreeRDP_SupportDisplayControl", true);
         set_bool_setting(settings, "FreeRDP_DynamicResolutionUpdate", true);
+        set_bool_setting(settings, "FreeRDP_FastPathOutput", true);
+        set_bool_setting(settings, "FreeRDP_FastPathInput", true);
+        set_bool_setting(settings, "FreeRDP_CompressionEnabled", true);
+        set_bool_setting(settings, "FreeRDP_RemoteFxCodec", true);
+        set_bool_setting(settings, "FreeRDP_NSCodec", true);
+        set_bool_setting(settings, "FreeRDP_FrameMarkerCommandEnabled", true);
+        set_bool_setting(settings, "FreeRDP_SurfaceFrameMarkerEnabled", true);
+        set_bool_setting(settings, "FreeRDP_NetworkAutoDetect", true);
+        set_bool_setting(settings, "FreeRDP_GfxH264", true);
+        set_bool_setting(settings, "FreeRDP_GfxAVC444", true);
 
         if (config->shared_dir && config->shared_dir[0] && g_fn.client_parse_args) {
             char drive_arg[1024];
@@ -1138,16 +1142,39 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
     }
 
     g_fn.wait_for_multiple_objects(count, (const void**)handles, 0, timeout_ms);
-    if (!g_fn.freerdp_check_event_handles(session->context)) {
+    for (int burst = 0; burst < 16; burst++) {
+        if (!g_fn.freerdp_check_event_handles(session->context)) {
+            if (g_fn.freerdp_shall_disconnect_context(session->context)) {
+                return 0;
+            }
+            uint32_t err = g_fn.freerdp_get_last_error(session->context);
+            if (err != 0 && session->callbacks.on_error) {
+                const char* msg = g_fn.freerdp_get_last_error_string(err);
+                session->callbacks.on_error(session->userdata, msg ? msg : "FreeRDP event error");
+            }
+            return -1;
+        }
         if (g_fn.freerdp_shall_disconnect_context(session->context)) {
             return 0;
         }
-        uint32_t err = g_fn.freerdp_get_last_error(session->context);
-        if (err != 0 && session->callbacks.on_error) {
-            const char* msg = g_fn.freerdp_get_last_error_string(err);
-            session->callbacks.on_error(session->userdata, msg ? msg : "FreeRDP event error");
+        count = g_fn.freerdp_get_event_handles(session->context, handles, 64);
+        if (count == 0) break;
+        RdpUInt32 ready = g_fn.wait_for_multiple_objects(count, (const void**)handles, 0, 0);
+        if (ready >= count) break;
+    }
+
+    if (session->frame_dirty && session->callbacks.on_frame) {
+        session->frame_dirty = false;
+        void* gdi = ptr_at(session->context, RDP_CONTEXT_GDI_OFFSET);
+        if (gdi) {
+            int32_t width = i32_at(gdi, RDP_GDI_WIDTH_OFFSET);
+            int32_t height = i32_at(gdi, RDP_GDI_HEIGHT_OFFSET);
+            int32_t stride = (int32_t)u32_at(gdi, RDP_GDI_STRIDE_OFFSET);
+            const uint8_t* buffer = (const uint8_t*)ptr_at(gdi, RDP_GDI_PRIMARY_BUFFER_OFFSET);
+            if (buffer && width > 0 && height > 0 && stride > 0) {
+                session->callbacks.on_frame(session->userdata, buffer, width, height, stride);
+            }
         }
-        return -1;
     }
 
     void* disp = NULL;

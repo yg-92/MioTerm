@@ -158,7 +158,8 @@ final class VNCView: NSView {
         // VNC 视图本身 isFlipped = true，而 CGContext.draw(_:in:) 在 flipped 上下文中会倒置绘制，先翻正坐标系。
         cgContext.translateBy(x: 0, y: targetRect.minY + targetRect.maxY)
         cgContext.scaleBy(x: 1, y: -1)
-        cgContext.interpolationQuality = .high
+        let exactPixelMatch = Int(targetRect.width) == fbWidth && Int(targetRect.height) == fbHeight
+        cgContext.interpolationQuality = exactPixelMatch ? .none : .medium
         cgContext.draw(image, in: targetRect)
         cgContext.restoreGState()
     }
@@ -429,6 +430,10 @@ final class VNCView: NSView {
 
     private func blitRawRect(x: Int, y: Int, width: Int, height: Int, bgra: Data) {
         guard fbWidth > 0, fbHeight > 0, width > 0, height > 0, x >= 0, y >= 0 else { return }
+        if x == 0 && y == 0 && width == fbWidth && height == fbHeight && bgra.count == framebuffer.count {
+            framebuffer = bgra
+            return
+        }
         let copyWidth = min(width, max(0, fbWidth - x))
         let copyHeight = min(height, max(0, fbHeight - y))
         guard copyWidth > 0, copyHeight > 0 else { return }

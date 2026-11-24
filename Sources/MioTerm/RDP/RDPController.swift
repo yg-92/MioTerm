@@ -167,6 +167,17 @@ final class RDPController: SessionControlling {
                 self.handleRemoteClipboardChanged(hasText: hasText, hasFiles: hasFiles, client: rdpClient)
             }
         }
+        rdpClient.onFrameReady = { [weak self, weak rdpClient] in
+            Task { @MainActor [weak self, weak rdpClient] in
+                guard let self, let rdpClient, self.client === rdpClient else { return }
+                guard let frame = rdpClient.takeLatestFrame() else { return }
+                if self.currentRemoteSize.width != frame.width || self.currentRemoteSize.height != frame.height {
+                    self.currentRemoteSize = (frame.width, frame.height)
+                    self.desktopView.configureFramebuffer(width: frame.width, height: frame.height)
+                }
+                self.desktopView.apply([.rawRect(x: 0, y: 0, width: frame.width, height: frame.height, bgra: frame.bgra)])
+            }
+        }
 
         eventTask = Task { @MainActor [weak self, weak rdpClient] in
             guard let self, let rdpClient else { return }
