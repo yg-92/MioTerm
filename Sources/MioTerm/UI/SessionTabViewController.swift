@@ -94,6 +94,7 @@ final class SessionTabViewController: NSViewController {
         tabBar.onClose = { [weak self] index in _ = self?.closeTab(at: index) }
         tabBar.onMove = { [weak self] id, destination in self?.moveSession(id: id, to: destination) }
         tabBar.onDetach = { [weak self] id, point in self?.detachDesktop(id: id, at: point) }
+        tabBar.snapshotForSession = { [weak self] id in self?.sessionSnapshot(for: id) }
         tabBar.onNew = { [weak self] in self?.newLocalTerminal() }
         tabBar.onSplit = { [weak self] in self?.showSplitChooser() }
         tabBar.onTabContextMenu = { [weak self] index, event, anchor in
@@ -255,6 +256,18 @@ final class SessionTabViewController: NSViewController {
               order[index] is VNCController || order[index] is RDPController,
               let detached = removeSession(at: index, stopAndUnregister: false) else { return }
         onDetachDesktop?(detached, screenPoint)
+    }
+
+    private func sessionSnapshot(for id: UUID) -> NSImage? {
+        guard let controller = order.first(where: { $0.sessionID == id }) else { return nil }
+        let targetView = controller.sessionView
+        let bounds = targetView.bounds
+        guard bounds.width > 10, bounds.height > 10,
+              let rep = targetView.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        targetView.cacheDisplay(in: bounds, to: rep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+        return image
     }
 
     @discardableResult
@@ -752,6 +765,7 @@ final class SessionTabBarView: NSView {
     var onClose: ((Int) -> Void)?
     var onMove: ((UUID, Int) -> Void)?
     var onDetach: ((UUID, NSPoint) -> Void)?
+    var snapshotForSession: ((UUID) -> NSImage?)?
     var onNew: (() -> Void)?
     var onSplit: (() -> Void)?
     var onTabContextMenu: ((Int, NSEvent, NSView) -> Void)?
@@ -1077,13 +1091,64 @@ final class SessionTabBarView: NSView {
         let pasteboard = NSPasteboardItem()
         pasteboard.setString(id.uuidString, forType: Self.dragType)
         let item = NSDraggingItem(pasteboardWriter: pasteboard)
-        let image = NSImage(size: chip.bounds.size)
+        let chipImage = NSImage(size: chip.bounds.size)
         if let bitmap = chip.bitmapImageRepForCachingDisplay(in: chip.bounds) {
             chip.cacheDisplay(in: chip.bounds, to: bitmap)
-            image.addRepresentation(bitmap)
+            chipImage.addRepresentation(bitmap)
         }
-        item.setDraggingFrame(chip.bounds, contents: image)
+        chip.compactDragImage = chipImage
+        if chip.allowOutsideDrag, let pageImage = snapshotForSession?(id) {
+            chip.detachedDragImage = Self.makeDetachedPreviewImage(chipImage: chipImage, pageImage: pageImage)
+        } else {
+            chip.detachedDragImage = nil
+        }
+        item.setDraggingFrame(chip.bounds, contents: chipImage)
         chip.beginDraggingSession(with: [item], event: event, source: chip)
+    }
+
+    private static func makeDetachedPreviewImage(chipImage: NSImage, pageImage: NSImage) -> NSImage {
+        let pageSize = pageImage.size
+        let aspect = (pageSize.width > 0 && pageSize.height > 0) ? (pageSize.height / pageSize.width) : 0.62
+        let previewWidth = min(480, max(340, round(pageSize.width * 0.42)))
+        let bodyHeight = min(320, max(180, round(previewWidth * aspect)))
+        let headerHeight: CGFloat = 34
+        let totalSize = NSSize(width: previewWidth, height: headerHeight + bodyHeight)
+
+        let composite = NSImage(size: totalSize)
+        composite.lockFocus()
+        defer { composite.unlockFocus() }
+
+        let fullRect = NSRect(origin: .zero, size: totalSize)
+        let clipPath = NSBezierPath(roundedRect: fullRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
+        clipPath.addClip()
+
+        // 顶部标签栏底色 + 底部页面内容快照
+        NSColor(calibratedWhite: 0.12, alpha: 0.96).setFill()
+        fullRect.fill()
+
+        let headerRect = NSRect(x: 0, y: bodyHeight, width: previewWidth, height: headerHeight)
+        NSColor(calibratedWhite: 0.16, alpha: 0.98).setFill()
+        headerRect.fill()
+
+        let chipSize = chipImage.size
+        let chipWidth = min(chipSize.width, previewWidth - 20)
+        let chipHeight = min(chipSize.height, headerHeight - 6)
+        let chipRect = NSRect(
+            x: 10,
+            y: bodyHeight + floor((headerHeight - chipHeight) / 2),
+            width: chipWidth,
+            height: chipHeight
+        )
+        chipImage.draw(in: chipRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+
+        let bodyRect = NSRect(x: 0, y: 0, width: previewWidth, height: bodyHeight)
+        pageImage.draw(in: bodyRect, from: .zero, operation: .sourceOver, fraction: 0.96)
+
+        NSColor.white.withAlphaComponent(0.18).setStroke()
+        clipPath.lineWidth = 1
+        clipPath.stroke()
+
+        return composite
     }
 
     private func dragPlacement(_ sender: NSDraggingInfo) -> (id: UUID, boundary: Int, destination: Int)? {
@@ -1315,6 +1380,9 @@ final class SessionTabChip: NSView, NSDraggingSource {
     var allowOutsideDrag = false
     var onDrag: ((NSEvent) -> Void)?
     var onDetachDrag: ((NSPoint) -> Void)?
+    var compactDragImage: NSImage?
+    var detachedDragImage: NSImage?
+    private var showingDetachedPreview = false
     private var mouseDownLocation: NSPoint?
     private var didBeginDrag = false
     var onContextMenu: ((NSEvent) -> Void)?
@@ -1587,9 +1655,30 @@ final class SessionTabChip: NSView, NSDraggingSource {
 
     func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
 
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        guard allowOutsideDrag,
+              let detached = detachedDragImage,
+              let compact = compactDragImage,
+              let win = window else { return }
+        let outside = !win.frame.contains(screenPoint)
+        guard outside != showingDetachedPreview else { return }
+        showingDetachedPreview = outside
+        let targetImage = outside ? detached : compact
+        let size = targetImage.size
+        let frame = outside
+            ? NSRect(x: screenPoint.x - size.width / 2, y: screenPoint.y - size.height + 17, width: size.width, height: size.height)
+            : NSRect(x: screenPoint.x - size.width / 2, y: screenPoint.y - size.height / 2, width: size.width, height: size.height)
+        session.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+            item.setDraggingFrame(frame, contents: targetImage)
+        }
+    }
+
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         mouseDownLocation = nil
         didBeginDrag = false
+        showingDetachedPreview = false
+        compactDragImage = nil
+        detachedDragImage = nil
         if operation == [], allowOutsideDrag, let win = window, !win.frame.contains(screenPoint) {
             onDetachDrag?(screenPoint)
         }
