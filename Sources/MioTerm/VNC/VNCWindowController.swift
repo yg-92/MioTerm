@@ -95,6 +95,17 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         if let rdp = sessionController as? RDPController {
+            let refreshButton = NSButton(
+                image: NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "按当前分辨率刷新") ?? NSImage(),
+                target: self,
+                action: #selector(displayOptionChanged(_:))
+            )
+            refreshButton.bezelStyle = .accessoryBarAction
+            refreshButton.controlSize = .small
+            refreshButton.toolTip = "按右侧所选分辨率与缩放重新加载画面"
+            refreshButton.sizeToFit()
+            stack.addArrangedSubview(refreshButton)
+
             let resPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
             resPopUp.bezelStyle = .accessoryBarAction
             resPopUp.controlSize = .small
