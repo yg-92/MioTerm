@@ -305,10 +305,8 @@ final class RDPController: SessionControlling {
     }
 
     private func displayScaleFactor() -> Int {
-        let raw = desktopView.window?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 1.0
-        return max(1, min(2, Int(round(raw))))
+        // 按 100%（1× 逻辑分辨率）请求远程桌面，避免部分 Windows 会话忽略 200% DPI 导致图标字体偏小。
+        1
     }
 
     private func scheduleResize(for size: CGSize) {
