@@ -1092,6 +1092,14 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_FrameMarkerCommandEnabled", true);
         set_bool_setting(settings, "FreeRDP_SurfaceFrameMarkerEnabled", true);
         set_bool_setting(settings, "FreeRDP_NetworkAutoDetect", true);
+        set_u32_setting(settings, "FreeRDP_ConnectionType", 6u); // CONNECTION_TYPE_LAN
+        set_bool_setting(settings, "FreeRDP_AllowDesktopComposition", true);
+        set_bool_setting(settings, "FreeRDP_AllowFontSmoothing", true);
+        set_bool_setting(settings, "FreeRDP_DisableWallpaper", false);
+        set_bool_setting(settings, "FreeRDP_DisableFullWindowDrag", false);
+        set_bool_setting(settings, "FreeRDP_DisableMenuAnims", false);
+        set_bool_setting(settings, "FreeRDP_DisableThemes", false);
+        set_u32_setting(settings, "FreeRDP_PerformanceFlags", 0x00000180u); // FONT_SMOOTHING | DESKTOP_COMPOSITION
         set_bool_setting(settings, "FreeRDP_GfxH264", true);
         set_bool_setting(settings, "FreeRDP_GfxAVC444", true);
 
@@ -1142,7 +1150,7 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
     }
 
     g_fn.wait_for_multiple_objects(count, (const void**)handles, 0, timeout_ms);
-    for (int burst = 0; burst < 16; burst++) {
+    for (int burst = 0; burst < 32; burst++) {
         if (!g_fn.freerdp_check_event_handles(session->context)) {
             if (g_fn.freerdp_shall_disconnect_context(session->context)) {
                 return 0;
@@ -1159,7 +1167,9 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
         }
         count = g_fn.freerdp_get_event_handles(session->context, handles, 64);
         if (count == 0) break;
-        RdpUInt32 ready = g_fn.wait_for_multiple_objects(count, (const void**)handles, 0, 0);
+        // 若刚收到脏帧，额外等待最多 2ms 让 Windows 7 紧随 ScrBlt 的背景重绘分块一起落入 GDI，消除拖动残影。
+        RdpUInt32 drain_wait = (session->frame_dirty && burst < 4) ? 2u : 0u;
+        RdpUInt32 ready = g_fn.wait_for_multiple_objects(count, (const void**)handles, 0, drain_wait);
         if (ready >= count) break;
     }
 

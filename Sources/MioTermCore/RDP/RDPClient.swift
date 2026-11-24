@@ -25,6 +25,7 @@ public final class RDPClient: @unchecked Sendable {
     private var session: OpaquePointer?
     private var stopped = false
     private var lastButtonMask: UInt8 = 0
+    private var lastPointerMoveTime: TimeInterval = 0
     private var captureConnectError = false
     private var capturedConnectError: String?
     private var latestFrame: (width: Int, height: Int, bgra: Data)?
@@ -80,6 +81,14 @@ public final class RDPClient: @unchecked Sendable {
         stateLock.lock()
         let activeSession = session
         let previousMask = lastButtonMask
+        let now = ProcessInfo.processInfo.systemUptime
+        // 纯移动/拖动事件按 ~100Hz 节流，避免高刷鼠标/触控板向旧版 Windows 狂发坐标导致窗口重绘堆积；按键与滚轮不节流。
+        let isPureMove = (buttonMask == previousMask) && ((buttonMask & 0x78) == 0)
+        if isPureMove && (now - lastPointerMoveTime) < 0.010 {
+            stateLock.unlock()
+            return
+        }
+        lastPointerMoveTime = now
         lastButtonMask = buttonMask
         stateLock.unlock()
         guard let activeSession else { return }
