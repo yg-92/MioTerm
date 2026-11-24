@@ -257,6 +257,8 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     /// 是否为此主机启用 SFTP 文件通道；旧配置默认保持启用。
     public var sftpEnabled: Bool
     public var supportsSFTP: Bool { protocolKind.supportsSFTP && sftpEnabled }
+    /// RDP 主机是否启用远程音频回放；默认关闭以减少音频通道线程与内存开销。
+    public var rdpAudioEnabled: Bool
     /// SSH 主机系统图标；非 SSH 协议规范化时回到 default。
     public var systemIcon: SSHSystemIcon
     public var favorite: Bool
@@ -284,6 +286,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         terminalType: String = "",
         x11Forwarding: X11Forwarding = .off,
         sftpEnabled: Bool = true,
+        rdpAudioEnabled: Bool = false,
         systemIcon: SSHSystemIcon = .default,
         favorite: Bool = false,
         notes: String = "",
@@ -309,6 +312,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         self.terminalType = terminalType
         self.x11Forwarding = x11Forwarding
         self.sftpEnabled = sftpEnabled
+        self.rdpAudioEnabled = rdpAudioEnabled
         self.systemIcon = systemIcon
         self.favorite = favorite
         self.notes = notes
@@ -342,6 +346,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         terminalType = try container.decode(String.self, forKey: .terminalType)
         x11Forwarding = try container.decodeIfPresent(X11Forwarding.self, forKey: .x11Forwarding) ?? .off
         sftpEnabled = try container.decodeIfPresent(Bool.self, forKey: .sftpEnabled) ?? true
+        rdpAudioEnabled = try container.decodeIfPresent(Bool.self, forKey: .rdpAudioEnabled) ?? false
         systemIcon = try container.decodeIfPresent(SSHSystemIcon.self, forKey: .systemIcon) ?? .default
         favorite = try container.decode(Bool.self, forKey: .favorite)
         notes = try container.decode(String.self, forKey: .notes)

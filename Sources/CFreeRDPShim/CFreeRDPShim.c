@@ -1065,7 +1065,8 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_u32_setting(settings, "FreeRDP_DesktopWidth", config->width > 0 ? config->width : 1280);
         set_u32_setting(settings, "FreeRDP_DesktopHeight", config->height > 0 ? config->height : 800);
         set_u32_setting(settings, "FreeRDP_DesktopScaleFactor", session->scale_percent);
-        set_u32_setting(settings, "FreeRDP_DeviceScaleFactor", session->scale_percent);
+        set_u32_setting(settings, "FreeRDP_DeviceScaleFactor",
+            session->scale_percent >= 175 ? 180u : (session->scale_percent >= 140 ? 140u : 100u));
         set_u32_setting(settings, "FreeRDP_ColorDepth", 32);
         set_bool_setting(settings, "FreeRDP_SoftwareGdi", true);
         set_bool_setting(settings, "FreeRDP_IgnoreCertificate", true);
@@ -1079,6 +1080,9 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_DeviceRedirection", false);
         set_bool_setting(settings, "FreeRDP_RedirectDrives", false);
         set_bool_setting(settings, "FreeRDP_RedirectHomeDrive", false);
+        set_bool_setting(settings, "FreeRDP_AudioPlayback", config->enable_audio);
+        set_bool_setting(settings, "FreeRDP_AudioCapture", false);
+        set_bool_setting(settings, "FreeRDP_RemoteConsoleAudio", false);
         set_bool_setting(settings, "FreeRDP_RedirectClipboard", true);
         set_bool_setting(settings, "FreeRDP_SupportDynamicChannels", true);
         set_bool_setting(settings, "FreeRDP_SupportGraphicsPipeline", true);
@@ -1233,11 +1237,18 @@ void mio_rdp_disconnect(MioRdpSession* session) {
     session->closing = true;
     pthread_cond_broadcast(&session->clip_cond);
     pthread_mutex_unlock(&session->clip_lock);
-    g_fn.freerdp_disconnect(session->instance);
+    if (session->connected) {
+        g_fn.freerdp_disconnect(session->instance);
+        session->connected = false;
+    }
 }
 
 void mio_rdp_destroy(MioRdpSession* session) {
     if (!session) return;
+    // 必须先执行 freerdp_disconnect 触发所有虚拟通道（drdynvc / cliprdr / rdpsnd 等）关闭并回收线程与缓存，
+    // 否则每次关闭 RDP 都会泄漏通道线程与上百 MB 堆内存。
+    mio_rdp_disconnect(session);
+
     pthread_mutex_lock(&session->clip_lock);
     session->closing = true;
     pthread_cond_broadcast(&session->clip_cond);

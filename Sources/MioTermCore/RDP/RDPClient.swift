@@ -15,6 +15,7 @@ public final class RDPClient: @unchecked Sendable {
     private let initialWidth: Int
     private let initialHeight: Int
     private let initialScalePercent: Int
+    private let enableAudio: Bool
 
     public var onClipboardReady: (@Sendable () -> Void)?
     public var onRemoteClipboardChanged: (@Sendable (_ hasText: Bool, _ hasFiles: Bool) -> Void)?
@@ -40,7 +41,8 @@ public final class RDPClient: @unchecked Sendable {
         sharedDirectory: String? = nil,
         width: Int = 1280,
         height: Int = 800,
-        scalePercent: Int = 100
+        scalePercent: Int = 100,
+        enableAudio: Bool = false
     ) {
         self.host = host
         self.port = port
@@ -53,6 +55,7 @@ public final class RDPClient: @unchecked Sendable {
         self.initialWidth = width
         self.initialHeight = height
         self.initialScalePercent = scalePercent
+        self.enableAudio = enableAudio
 
         var cont: AsyncStream<VNCEvent>.Continuation!
         self.events = AsyncStream { cont = $0 }
@@ -70,6 +73,7 @@ public final class RDPClient: @unchecked Sendable {
         stateLock.lock()
         let alreadyStopped = stopped
         stopped = true
+        latestFrame = nil
         stateLock.unlock()
 
         if !alreadyStopped {
@@ -294,7 +298,8 @@ public final class RDPClient: @unchecked Sendable {
                                     width: UInt32(max(640, initialWidth)),
                                     height: UInt32(max(480, initialHeight)),
                                     scale_percent: UInt32(max(100, initialScalePercent)),
-                                    disable_nla: disableNLA
+                                    disable_nla: disableNLA,
+                                    enable_audio: enableAudio
                                 )
                                 return mio_rdp_create(&config, callbacks, box.toOpaque())
                             }
@@ -309,8 +314,10 @@ public final class RDPClient: @unchecked Sendable {
             stateLock.lock()
             let toDestroy = activeSession
             session = nil
+            latestFrame = nil
             stateLock.unlock()
             if let toDestroy {
+                mio_rdp_disconnect(toDestroy)
                 mio_rdp_destroy(toDestroy)
             }
             box.release()

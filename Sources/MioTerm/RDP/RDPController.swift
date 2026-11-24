@@ -185,7 +185,8 @@ final class RDPController: SessionControlling {
             domain: "",
             width: initial.width,
             height: initial.height,
-            scalePercent: scalePercent
+            scalePercent: scalePercent,
+            enableAudio: host.rdpAudioEnabled
         )
         self.client = rdpClient
         rdpClient.onClipboardReady = { [weak self, weak rdpClient] in

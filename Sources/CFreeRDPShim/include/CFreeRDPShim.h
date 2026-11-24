@@ -21,6 +21,7 @@ typedef struct {
     uint32_t height;
     uint32_t scale_percent;
     bool disable_nla;
+    bool enable_audio;
 } MioRdpConfig;
 
 typedef struct {

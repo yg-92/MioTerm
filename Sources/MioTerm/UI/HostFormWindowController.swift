@@ -30,6 +30,7 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
     private let x11Popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let systemIconPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let sftpCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormSFTPCheckbox), target: nil, action: nil)
+    private let rdpAudioCheckbox = NSButton(checkboxWithTitle: "启用远程音频", target: nil, action: nil)
     private let favoriteCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormFavorite), target: nil, action: nil)
     private let notesView = NSTextView()
     private let fingerprintLabel = NSTextField(labelWithString: "")
@@ -203,6 +204,7 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
             [NSView(), x11DependencyLabel],
             [label(L10n.tr(.hostFormSystemIcon)), systemIconPopup],
             [NSView(), sftpCheckbox],
+            [NSView(), rdpAudioCheckbox],
             [NSView(), favoriteCheckbox],
             [label(L10n.tr(.hostFormNotes)), notesScroll],
             [label(L10n.tr(.hostFormFingerprint)), fingerprintLabel],
@@ -324,6 +326,8 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         notesView.string = host.notes
         sftpCheckbox.state = host.sftpEnabled ? .on : .off
         sftpCheckbox.toolTip = L10n.tr(.hostFormSFTPTooltip)
+        rdpAudioCheckbox.state = host.rdpAudioEnabled ? .on : .off
+        rdpAudioCheckbox.toolTip = "开启后将 Windows 远端声音转发到本机播放；关闭可节省内存与后台线程。"
         favoriteCheckbox.state = host.favorite ? .on : .off
         fingerprintLabel.stringValue = host.hostKeyFingerprint.isEmpty
             ? L10n.tr(.hostFormFingerprintUnconfirmed)
@@ -407,6 +411,7 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         setRowHidden(x11Popup, hidden: !isSSH)
         setRowHidden(systemIconPopup, hidden: !isSSH)
         setRowHidden(sftpCheckbox, hidden: !isSSH)
+        setRowHidden(rdpAudioCheckbox, hidden: !isRDP)
         setRowHidden(fingerprintLabel, hidden: !isSSH)
 
         let method = selectedMethod
@@ -458,6 +463,7 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         host.x11Forwarding = selectedX11Forwarding
         host.systemIcon = selectedSystemIcon
         host.sftpEnabled = sftpCheckbox.state == .on
+        host.rdpAudioEnabled = rdpAudioCheckbox.state == .on
         host.favorite = favoriteCheckbox.state == .on
         host.notes = notesView.string
         if selectedProtocol == .serial {
