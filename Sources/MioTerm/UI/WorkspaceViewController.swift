@@ -475,6 +475,9 @@ final class WorkspaceViewController: NSSplitViewController {
     }
 
     func connect(host: HostProfile, beside baseID: UUID? = nil) {
+        if host.protocolKind == .rdp, activateExistingRDPSession(forAddress: host.address) {
+            return
+        }
         guard !pendingConnects.contains(host.id) else { return }
         pendingConnects.insert(host.id)
         let controller = coordinator.prepareController(for: host)
@@ -484,6 +487,47 @@ final class WorkspaceViewController: NSSplitViewController {
             guard let self else { return }
             await self.coordinator.start(controller, in: self.view.window)
         }
+    }
+
+    /// 相同 IP 的 RDP 仅允许存在一个连接：已有会话时直接切到该标签或激活对应的独立窗口。
+    private func activateExistingRDPSession(forAddress rawAddress: String) -> Bool {
+        let target = rawAddress.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !target.isEmpty else { return false }
+
+        if let existing = sessions.controllers.first(where: { controller in
+            guard controller is RDPController,
+                  let addr = controller.host?.address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+                return false
+            }
+            return addr == target
+        }) {
+            sessions.select(controller: existing)
+            view.window?.makeKeyAndOrderFront(nil)
+            existing.focus()
+            if !existing.state.isAlive {
+                reconnect(existing)
+            }
+            return true
+        }
+
+        if let detached = detachedVNCWindows.values.first(where: { winController in
+            guard winController.sessionController is RDPController,
+                  let addr = winController.sessionController.host?.address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+                return false
+            }
+            return addr == target
+        }) {
+            if detached.window?.isMiniaturized == true {
+                detached.window?.deminiaturize(nil)
+            }
+            detached.present()
+            if !detached.sessionController.state.isAlive {
+                reconnect(detached.sessionController)
+            }
+            return true
+        }
+
+        return false
     }
 
     // MARK: - 主机配置动作
