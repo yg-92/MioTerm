@@ -21,6 +21,7 @@ final class WorkspaceViewController: NSSplitViewController {
 
     private var hostForm: HostFormWindowController?
     private var preferences: PreferencesWindowController?
+    private var credentialLibrary: CredentialLibraryWindowController?
     private var detachedVNCWindows: [UUID: VNCWindowController] = [:]
     /// 连接是异步的，同一主机连点两次会开出两个会话，用这个集合去重。
     private var pendingConnects: Set<String> = []
@@ -558,6 +559,21 @@ final class WorkspaceViewController: NSSplitViewController {
         controller.showStyles(relativeTo: view.window)
     }
 
+    @objc func showCredentialLibrary(_ sender: Any?) {
+        let controller: CredentialLibraryWindowController
+        if let existing = credentialLibrary {
+            controller = existing
+        } else {
+            let fresh = CredentialLibraryWindowController(environment: environment)
+            fresh.onDidClose = { [weak self] in
+                self?.credentialLibrary = nil
+            }
+            credentialLibrary = fresh
+            controller = fresh
+        }
+        controller.show(relativeTo: view.window)
+    }
+
     @objc func showPreferences(_ sender: Any?) {
         let controller = ensurePreferencesController()
         controller.show(relativeTo: view.window)
@@ -601,6 +617,9 @@ final class WorkspaceViewController: NSSplitViewController {
 
     private func presentHostForm(_ host: HostProfile) {
         let controller = HostFormWindowController(host: host, environment: environment)
+        controller.onManageCredentials = { [weak self] in
+            self?.showCredentialLibrary(nil)
+        }
         controller.onDidClose = { [weak self] in
             self?.hostForm = nil
         }

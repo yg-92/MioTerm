@@ -6,8 +6,10 @@ import MioTermCore
 @MainActor
 final class HostFormWindowController: NSWindowController, NSWindowDelegate {
     var onDidClose: (() -> Void)?
+    var onManageCredentials: (() -> Void)?
     private let original: HostProfile
     private let environment: AppEnvironment
+    private var credentialsObserver: NSObjectProtocol?
 
     private let nameField = NSTextField()
     /// 分组既可从已有分组里挑，也可直接输入新名字。
@@ -16,11 +18,15 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
     private let protocolPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
     private let addressField = NSTextField()
     private let portField = NSTextField()
+    private let credentialPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 250, height: 24))
+    private let credentialStack = NSStackView()
     private let usernameField = NSTextField()
     private let authPopup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
     private let identityField = NSTextField()
     private let secretField = NSSecureTextField()
     private let clearSecretCheckbox = NSButton(checkboxWithTitle: L10n.tr(.hostFormClearSecret), target: nil, action: nil)
+    private let saveToCredentialButton = NSButton()
+    private let secretActionsStack = NSStackView()
     private let timeoutField = NSTextField()
     private let keepaliveField = NSTextField()
     private let startupDirectoryField = NSTextField()
@@ -57,6 +63,10 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
     private static let formStopBits = SerialConfig.supportedStopBits
 
     private var grid = NSGridView()
+
+    private var selectedCredentialID: String? {
+        credentialPopup.selectedItem?.representedObject as? String
+    }
 
     private var selectedMethod: AuthMethod {
         AuthMethod.allCases[min(max(authPopup.indexOfSelectedItem, 0), AuthMethod.allCases.count - 1)]
@@ -96,9 +106,26 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         buildContents()
         load(from: host)
         window.center()
+        credentialsObserver = NotificationCenter.default.addObserver(
+            forName: .mioTermCredentialsDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.reloadCredentialPopup(selecting: self.selectedCredentialID)
+                self.updateRowVisibility()
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
+
+    deinit {
+        if let credentialsObserver {
+            NotificationCenter.default.removeObserver(credentialsObserver)
+        }
+    }
 
     func show(relativeTo anchorWindow: NSWindow?) {
         window?.positionCentered(relativeTo: anchorWindow)
@@ -154,6 +181,27 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         identityStack.orientation = .horizontal
         identityStack.spacing = 6
 
+        credentialPopup.target = self
+        credentialPopup.action = #selector(credentialChanged(_:))
+        let manageCredButton = NSButton(title: "管理…", target: self, action: #selector(manageCredentialsTapped(_:)))
+        manageCredButton.bezelStyle = .rounded
+        manageCredButton.controlSize = .small
+        credentialStack.addArrangedSubview(credentialPopup)
+        credentialStack.addArrangedSubview(manageCredButton)
+        credentialStack.orientation = .horizontal
+        credentialStack.spacing = 6
+
+        saveToCredentialButton.title = "存入凭据库…"
+        saveToCredentialButton.bezelStyle = .rounded
+        saveToCredentialButton.controlSize = .small
+        saveToCredentialButton.target = self
+        saveToCredentialButton.action = #selector(saveToCredentialVault(_:))
+        secretActionsStack.addArrangedSubview(clearSecretCheckbox)
+        secretActionsStack.addArrangedSubview(NSView())
+        secretActionsStack.addArrangedSubview(saveToCredentialButton)
+        secretActionsStack.orientation = .horizontal
+        secretActionsStack.spacing = 8
+
         notesView.isRichText = false
         notesView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         notesView.isVerticallyResizable = true
@@ -191,11 +239,12 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
             [NSView(), serialPanel],
             [label(L10n.tr(.hostFormAddress)), addressField],
             [label(L10n.tr(.hostFormPort)), portField],
+            [label("凭据库"), credentialStack],
             [label(L10n.tr(.hostFormUsername)), usernameField],
             [label(L10n.tr(.hostFormAuthMethod)), authPopup],
             [label(L10n.tr(.hostFormIdentityFile)), identityStack],
             [label(L10n.tr(.hostFormSecret)), secretField],
-            [NSView(), clearSecretCheckbox],
+            [NSView(), secretActionsStack],
             [label(L10n.tr(.hostFormTimeout)), timeoutField],
             [label(L10n.tr(.hostFormKeepalive)), keepaliveField],
             [label(L10n.tr(.hostFormStartupDir)), startupDirectoryField],
@@ -216,6 +265,7 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         for field in [nameField, groupField, tagsField, addressField, startupDirectoryField, terminalTypeField, secretField] {
             field.widthAnchor.constraint(equalToConstant: 330).isActive = true
         }
+        credentialPopup.widthAnchor.constraint(equalToConstant: 266).isActive = true
         identityField.widthAnchor.constraint(equalToConstant: 280).isActive = true
 
         let container = NSView()
@@ -314,6 +364,7 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         protocolPopup.selectItem(at: Self.formProtocols.firstIndex(of: host.protocolKind) ?? 0)
         addressField.stringValue = host.address
         portField.stringValue = "\(host.port)"
+        reloadCredentialPopup(selecting: host.credentialID)
         usernameField.stringValue = host.username
         authPopup.selectItem(at: AuthMethod.allCases.firstIndex(of: host.authMethod) ?? 0)
         identityField.stringValue = host.identityFile
@@ -365,6 +416,87 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func authChanged(_ sender: NSPopUpButton) { updateRowVisibility() }
 
+    private func reloadCredentialPopup(selecting credentialID: String?) {
+        credentialPopup.removeAllItems()
+        let manual = NSMenuItem(title: "手动输入（不使用凭据库）", action: nil, keyEquivalent: "")
+        manual.representedObject = nil
+        credentialPopup.menu?.addItem(manual)
+        let list = environment.credentials.credentials
+        if !list.isEmpty {
+            credentialPopup.menu?.addItem(.separator())
+            for cred in list {
+                let item = NSMenuItem(title: cred.menuTitle, action: nil, keyEquivalent: "")
+                item.representedObject = cred.id
+                credentialPopup.menu?.addItem(item)
+            }
+        }
+        if let credentialID,
+           let match = credentialPopup.itemArray.first(where: { ($0.representedObject as? String) == credentialID }) {
+            credentialPopup.select(match)
+        } else {
+            credentialPopup.selectItem(at: 0)
+        }
+    }
+
+    @objc private func credentialChanged(_ sender: NSPopUpButton) {
+        if let credID = selectedCredentialID,
+           let cred = environment.credentials.credential(id: credID) {
+            if !cred.username.isEmpty {
+                usernameField.stringValue = cred.username
+            }
+            if selectedProtocol == .ssh && selectedMethod == .automatic {
+                if let idx = AuthMethod.allCases.firstIndex(of: .password) {
+                    authPopup.selectItem(at: idx)
+                }
+            }
+        }
+        updateRowVisibility()
+    }
+
+    @objc private func manageCredentialsTapped(_ sender: Any?) {
+        onManageCredentials?()
+    }
+
+    @objc private func saveToCredentialVault(_ sender: Any?) {
+        let username = usernameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        var password = secretField.stringValue
+        if password.isEmpty, let kind = credentialKind(for: original) {
+            password = (try? environment.vault.secret(hostID: original.id, kind: kind)) ?? ""
+        }
+        guard !username.isEmpty || !password.isEmpty else {
+            AlertPresenter.notify(title: "无法存入凭据库", message: "请先填写用户名或密码。", in: window)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "保存到凭据库"
+        alert.informativeText = "为这组用户名与密码命名，保存后当前主机将自动关联该凭据："
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: L10n.tr(.commonSave))
+        alert.addButton(withTitle: L10n.tr(.commonCancel))
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        let suggestedName = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        input.stringValue = suggestedName.isEmpty ? username : suggestedName
+        input.placeholderString = "例如：生产环境 root / Windows 运维账号"
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let credName = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let profile = CredentialProfile(name: credName.isEmpty ? username : credName, username: username)
+        do {
+            let saved = try environment.credentials.save(profile)
+            if !password.isEmpty {
+                try environment.vault.setSecret(password, hostID: saved.vaultKey, kind: .password)
+            }
+            reloadCredentialPopup(selecting: saved.id)
+            secretField.stringValue = ""
+            updateRowVisibility()
+        } catch {
+            AlertPresenter.fail(title: "保存到凭据库失败", message: error.localizedDescription, in: window)
+        }
+    }
+
     @objc private func protocolChanged(_ sender: NSPopUpButton) {
         // 端口默认值跟着协议走：留着默认端口去连其他协议一定失败，用户不必自己想到。
         let entered = Int(portField.stringValue) ?? 0
@@ -404,6 +536,8 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         setRowHidden(portField, hidden: isSerial)
         setRowHidden(timeoutField, hidden: isSerial)
         setRowHidden(terminalTypeField, hidden: isSerial || isVNC || isRDP)
+        let supportsCredentialVault = isSSH || isRDP || isVNC
+        setRowHidden(credentialStack, hidden: !supportsCredentialVault)
         setRowHidden(usernameField, hidden: !isSSH && !isRDP)
         setRowHidden(authPopup, hidden: !isSSH)
         setRowHidden(keepaliveField, hidden: !isSSH)
@@ -415,13 +549,28 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         setRowHidden(fingerprintLabel, hidden: !isSSH)
 
         let method = selectedMethod
+        let boundCredential = supportsCredentialVault ? selectedCredentialID.flatMap { environment.credentials.credential(id: $0) } : nil
         setRowHidden(identityStack, hidden: !isSSH || method == .password)
         let showsSecret = (isSSH && method != .automatic) || isVNC || isRDP
         setRowHidden(secretField, hidden: !showsSecret)
-        setRowHidden(clearSecretCheckbox, hidden: !showsSecret)
-        clearSecretCheckbox.isEnabled = showsSecret
-        if !showsSecret { clearSecretCheckbox.state = .off }
-        secretField.isEnabled = clearSecretCheckbox.state != .on
+        setRowHidden(secretActionsStack, hidden: !showsSecret || boundCredential != nil)
+        if let boundCredential {
+            if !boundCredential.username.isEmpty {
+                usernameField.stringValue = boundCredential.username
+            }
+            usernameField.isEnabled = false
+            clearSecretCheckbox.state = .off
+            clearSecretCheckbox.isEnabled = false
+            secretField.isEnabled = false
+            secretField.stringValue = ""
+            secretField.placeholderString = "使用凭据库「\(boundCredential.displayName)」中的密码（自动同步）"
+        } else {
+            usernameField.isEnabled = true
+            clearSecretCheckbox.isEnabled = showsSecret
+            if !showsSecret { clearSecretCheckbox.state = .off }
+            secretField.isEnabled = clearSecretCheckbox.state != .on
+            secretField.placeholderString = secretExists(original) ? L10n.tr(.hostFormSecretSaved) : ""
+        }
         portField.placeholderString = selectedProtocol.defaultPort.map(String.init) ?? "22"
     }
 
@@ -452,7 +601,13 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
         host.protocolKind = selectedProtocol
         host.address = addressField.stringValue
         host.port = Int(portField.stringValue) ?? (selectedProtocol.defaultPort ?? 22)
-        host.username = usernameField.stringValue
+        let supportsCredVault = selectedProtocol == .ssh || selectedProtocol == .rdp || selectedProtocol == .vnc
+        host.credentialID = supportsCredVault ? selectedCredentialID : nil
+        if let credID = host.credentialID, let cred = environment.credentials.credential(id: credID), !cred.username.isEmpty {
+            host.username = cred.username
+        } else {
+            host.username = usernameField.stringValue
+        }
         host.authMethod = selectedMethod
         host.identityFile = identityField.stringValue
         host.connectTimeout = Int(timeoutField.stringValue) ?? environment.settings.settings.defaultConnectTimeout
@@ -494,6 +649,8 @@ final class HostFormWindowController: NSWindowController, NSWindowDelegate {
     /// 口令写入 Keychain 的时机在配置落盘之后：新建主机的 ID 是那时才定型的，
     /// 先写会留下无人认领的条目。
     private func storeSecrets(for host: HostProfile) throws {
+        // 已绑定凭据库时密码统一由凭据库管理，不覆盖主机本地 Keychain 字段。
+        guard host.credentialID == nil else { return }
         guard let kind = credentialKind(for: host) else { return }
         if clearSecretCheckbox.state == .on {
             try environment.vault.setSecret(nil, hostID: host.id, kind: kind)

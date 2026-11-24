@@ -8,6 +8,7 @@ final class AppEnvironment {
     static let shared = AppEnvironment()
 
     let hosts: HostRepository
+    let credentials: CredentialRepository
     let settings: SettingsStore
     let vault: KeychainVault
     let hostKeyGuard: HostKeyGuard
@@ -28,12 +29,14 @@ final class AppEnvironment {
         }
         logger = .shared
         hosts = HostRepository()
+        credentials = CredentialRepository()
         settings = SettingsStore()
         L10n.configure(preference: settings.settings.language)
         vault = KeychainVault()
         hostKeyGuard = HostKeyGuard()
         commands = CommandLibraryStore()
         hosts.load()
+        credentials.load()
         commands.load()
         applyAppearance()
         settings.onChange = { [weak self] next in
@@ -74,9 +77,23 @@ final class AppEnvironment {
     func sftpSession(for controller: TerminalController) -> SFTPSession? {
         guard let host = controller.host, host.supportsSFTP else { return nil }
         if let existing = sftpSessions[controller.sessionID] { return existing }
-        let session = SFTPSession(host: host, environment: self)
+        let session = SFTPSession(host: resolvedHost(host), environment: self)
         sftpSessions[controller.sessionID] = session
         return session
+    }
+
+    /// 合并凭据库引用与默认终端类型，确保 SSH / SFTP / RDP / VNC 拿到的用户名和终端类型始终与最新配置同步。
+    func resolvedHost(_ host: HostProfile) -> HostProfile {
+        var copy = host
+        if let credID = host.credentialID,
+           let cred = credentials.credential(id: credID),
+           !cred.username.isEmpty {
+            copy.username = cred.username
+        }
+        if copy.terminalType.isEmpty {
+            copy.terminalType = settings.settings.terminalType
+        }
+        return copy
     }
 
     func closeSFTPSession(for controller: TerminalController) {
@@ -103,22 +120,22 @@ final class AppEnvironment {
         }
     }
 
-    /// 读取主机凭据。Keychain 访问被拒时返回 nil，让 ssh 在终端里照常提示输入，
-    /// 而不是直接掐断连接。
+    /// 读取主机凭据。若主机绑定了凭据库条目，优先从凭据库对应的 Keychain 条目读取密码，
+    /// 凭据库改密码后所有关联主机自动生效。
     func secrets(for host: HostProfile) -> TerminalSecrets? {
         var secrets = TerminalSecrets()
         do {
             if host.protocolKind == .vnc || host.protocolKind == .rdp {
-                secrets.password = try vault.secret(hostID: host.id, kind: .password)
+                secrets.password = try passwordSecret(for: host)
                 return secrets.hasContent ? secrets : nil
             }
             switch host.authMethod {
             case .password:
-                secrets.password = try vault.secret(hostID: host.id, kind: .password)
+                secrets.password = try passwordSecret(for: host)
             case .privateKey:
                 secrets.passphrase = try vault.secret(hostID: host.id, kind: .passphrase)
             case .automatic:
-                secrets.password = try vault.secret(hostID: host.id, kind: .password)
+                secrets.password = try passwordSecret(for: host)
                 secrets.passphrase = try vault.secret(hostID: host.id, kind: .passphrase)
             }
         } catch {
@@ -126,6 +143,15 @@ final class AppEnvironment {
             return nil
         }
         return secrets.hasContent ? secrets : nil
+    }
+
+    private func passwordSecret(for host: HostProfile) throws -> String? {
+        if let credID = host.credentialID,
+           credentials.credential(id: credID) != nil,
+           let shared = try vault.secret(hostID: CredentialProfile.vaultKey(for: credID), kind: .password) {
+            return shared
+        }
+        return try vault.secret(hostID: host.id, kind: .password)
     }
 
     func terminateAllSessions() {

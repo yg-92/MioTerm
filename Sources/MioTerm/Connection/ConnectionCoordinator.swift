@@ -112,13 +112,10 @@ final class ConnectionCoordinator {
         return controller
     }
 
-    /// 主机表单里留空表示“跟随设置里的默认终端类型”，连接前一次性补上，
-    /// 这样启动计划、Telnet 协商和终端模拟器看到的是同一个值。
+    /// 连接前合并凭据库引用（用户名）与默认终端类型，
+    /// 这样启动计划、RDP/VNC、Telnet 协商和终端模拟器看到的是同一份最新配置。
     private func resolved(_ host: HostProfile) -> HostProfile {
-        guard host.terminalType.isEmpty else { return host }
-        var copy = host
-        copy.terminalType = environment.settings.settings.terminalType
-        return copy
+        environment.resolvedHost(host)
     }
 
     /// 本机没有 X 服务时，ssh 不会失败也不报错，只是远端窗口永远连不上——

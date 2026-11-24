@@ -300,6 +300,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             action: #selector(WorkspaceViewController.showCommandLibrary(_:)),
             target: workspace
         )
+        let credentials = glassButton(
+            symbol: "key.fill",
+            label: "凭据库",
+            action: #selector(WorkspaceViewController.showCredentialLibrary(_:)),
+            target: workspace
+        )
         let preferences = glassButton(
             symbol: "gearshape",
             label: L10n.tr(.toolbarSettings),
@@ -307,7 +313,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             target: workspace
         )
         workspace.attachCommandAnchor(commands)
-        let row = NSStackView(views: [newHost, newTab, commands, preferences, brandView()])
+        let row = NSStackView(views: [newHost, newTab, commands, credentials, preferences, brandView()])
         row.orientation = .horizontal
         row.spacing = 3
         row.setCustomSpacing(7, after: preferences)

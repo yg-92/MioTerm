@@ -94,6 +94,9 @@ enum MenuBuilder {
         menu.addItem(withTitle: L10n.tr(.menuDuplicateHost), action: Selector(("duplicateSelectedHost:")), keyEquivalent: "")
         menu.addItem(withTitle: L10n.tr(.menuDeleteHost), action: Selector(("deleteSelectedHost:")), keyEquivalent: "")
         menu.addItem(.separator())
+        let credItem = menu.addItem(withTitle: "凭据库…", action: Selector(("showCredentialLibrary:")), keyEquivalent: "k")
+        credItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(.separator())
         menu.addItem(withTitle: L10n.tr(.menuTestHost), action: Selector(("testSelectedHost:")), keyEquivalent: "")
         menu.addItem(withTitle: L10n.tr(.menuRefreshFingerprint), action: Selector(("refreshFingerprintSelectedHost:")), keyEquivalent: "")
         item.submenu = menu

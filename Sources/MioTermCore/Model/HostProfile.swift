@@ -244,6 +244,8 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
     public var address: String
     public var port: Int
     public var username: String
+    /// 关联的凭据库条目 ID：非空时连接会自动引用该凭据的用户名与密码，凭据更新后所有关联主机同步生效。
+    public var credentialID: String?
     public var authMethod: AuthMethod
     /// 私钥文件路径，保存原文内容会绕开 ssh-agent 与 Keychain，也与 OpenSSH 权限模型不符。
     public var identityFile: String
@@ -278,6 +280,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         address: String = "",
         port: Int = 22,
         username: String = "",
+        credentialID: String? = nil,
         authMethod: AuthMethod = .automatic,
         identityFile: String = "",
         connectTimeout: Int = 10,
@@ -304,6 +307,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         self.address = address
         self.port = port
         self.username = username
+        self.credentialID = credentialID
         self.authMethod = authMethod
         self.identityFile = identityFile
         self.connectTimeout = connectTimeout
@@ -338,6 +342,7 @@ public struct HostProfile: Codable, Equatable, Identifiable, Sendable {
         address = try container.decode(String.self, forKey: .address)
         port = try container.decode(Int.self, forKey: .port)
         username = try container.decode(String.self, forKey: .username)
+        credentialID = try container.decodeIfPresent(String.self, forKey: .credentialID)
         authMethod = try container.decode(AuthMethod.self, forKey: .authMethod)
         identityFile = try container.decode(String.self, forKey: .identityFile)
         connectTimeout = try container.decode(Int.self, forKey: .connectTimeout)
