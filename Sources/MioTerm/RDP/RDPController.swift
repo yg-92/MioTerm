@@ -134,10 +134,13 @@ final class RDPController: SessionControlling {
         }
 
         state = .starting
-        desktopView.window?.contentView?.layoutSubtreeIfNeeded()
         let scale = displayScaleFactor()
-        let width = max(800, min(8192, (Int(desktopView.bounds.width * CGFloat(scale)) + 1) & ~1))
-        let height = max(600, min(8192, (Int(desktopView.bounds.height * CGFloat(scale)) + 1) & ~1))
+        // 参照 Microsoft Windows App：建连时按当前显示器完整逻辑分辨率请求（如 1920×1080）。
+        // 支持 DisplayControl 的新版 Windows（Win10/11）连上后会自动随窗口动态调整；
+        // 不支持动态改分辨率的旧版 Windows（Win7/Server 2008）也能直接拥有完整宽屏分辨率，最大化时 1:1 铺满不拉伸。
+        let initialSize = (desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size
+        let width = max(800, min(8192, (Int(initialSize.width * CGFloat(scale)) + 1) & ~1))
+        let height = max(600, min(8192, (Int(initialSize.height * CGFloat(scale)) + 1) & ~1))
         let rdpClient = RDPClient(
             host: host.address,
             port: host.port,
