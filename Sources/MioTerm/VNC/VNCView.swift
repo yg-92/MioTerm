@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import IOSurface
 import MioTermCore
 import QuartzCore
 
@@ -42,6 +43,13 @@ final class VNCView: NSView {
     private var lastReportedSize: CGSize = .zero
 
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
+    private let surfaceLayer: CALayer = {
+        let layer = CALayer()
+        layer.isOpaque = true
+        layer.contentsGravity = .resize
+        layer.isHidden = true
+        return layer
+    }()
     private let waitingLabel: NSTextField = {
         let label = NSTextField(labelWithString: "MioTerm")
         label.font = .systemFont(ofSize: 34, weight: .semibold)
@@ -60,6 +68,7 @@ final class VNCView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
+        layer?.addSublayer(surfaceLayer)
         menu = buildContextMenu()
         setupWaitingOverlay()
     }
@@ -117,6 +126,11 @@ final class VNCView: NSView {
     func clearFramebuffer() {
         hasRenderedFrame = false
         startWaitingAnimation()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        surfaceLayer.contents = nil
+        surfaceLayer.isHidden = true
+        CATransaction.commit()
         guard fbWidth != 0 || fbHeight != 0 || !framebuffer.isEmpty else { return }
         fbWidth = 0
         fbHeight = 0
@@ -124,19 +138,30 @@ final class VNCView: NSView {
         needsDisplay = true
     }
 
-    /// 整帧交换缓冲并返回旧缓冲供 RDPClient 乒乓复用，消除每帧分配/释放数 MB 大内存引起的抖动。
-    func swapFramebuffer(width: Int, height: Int, bgra: Data) -> Data {
-        guard width > 0, height > 0, bgra.count == width * height * 4 else { return Data() }
-        let previous = framebuffer
+    /// 直接把共享 IOSurface 交给 CoreAnimation 合成，单份显存缓冲零 Swift 拷贝、零大页抖动。
+    func presentSurface(_ surface: IOSurfaceRef, width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
         fbWidth = width
         fbHeight = height
-        framebuffer = bgra
+        if !framebuffer.isEmpty {
+            framebuffer = Data()
+        }
         if !hasRenderedFrame {
             hasRenderedFrame = true
             stopWaitingAnimation()
         }
-        needsDisplay = true
-        return previous
+        let targetRect = contentRect()
+        let exactPixelMatch = Int(targetRect.width) == width && Int(targetRect.height) == height
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        surfaceLayer.isHidden = false
+        surfaceLayer.frame = targetRect
+        surfaceLayer.magnificationFilter = exactPixelMatch ? .nearest : .trilinear
+        surfaceLayer.minificationFilter = .trilinear
+        // 先置 nil 再赋回同一 IOSurface，通知 WindowServer 重新采样最新写入的像素。
+        surfaceLayer.contents = nil
+        surfaceLayer.contents = surface
+        CATransaction.commit()
     }
 
     func apply(_ updates: [VNCFrameUpdate]) {
@@ -165,6 +190,7 @@ final class VNCView: NSView {
         cgContext.setFillColor(NSColor.black.cgColor)
         cgContext.fill(bounds)
 
+        guard surfaceLayer.isHidden else { return }
         guard fbWidth > 0, fbHeight > 0,
               framebuffer.count == fbWidth * fbHeight * 4,
               let image = makeCGImage() else { return }
@@ -182,6 +208,16 @@ final class VNCView: NSView {
 
     override func layout() {
         super.layout()
+        if !surfaceLayer.isHidden {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            let targetRect = contentRect()
+            surfaceLayer.frame = targetRect
+            let exactPixelMatch = Int(targetRect.width) == fbWidth && Int(targetRect.height) == fbHeight
+            surfaceLayer.magnificationFilter = exactPixelMatch ? .nearest : .trilinear
+            surfaceLayer.minificationFilter = .trilinear
+            CATransaction.commit()
+        }
         let size = bounds.size
         guard size.width >= 200, size.height >= 200 else { return }
         if abs(size.width - lastReportedSize.width) >= 4 || abs(size.height - lastReportedSize.height) >= 4 {

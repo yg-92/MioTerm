@@ -207,12 +207,9 @@ final class RDPController: SessionControlling {
         rdpClient.onFrameReady = { [weak self, weak rdpClient] in
             Task { @MainActor [weak self, weak rdpClient] in
                 guard let self, let rdpClient, self.client === rdpClient else { return }
-                guard let frame = rdpClient.takeLatestFrame() else { return }
+                guard let frame = rdpClient.takeLatestSurface() else { return }
                 self.currentRemoteSize = (frame.width, frame.height)
-                let previous = self.desktopView.swapFramebuffer(width: frame.width, height: frame.height, bgra: frame.bgra)
-                if !previous.isEmpty {
-                    rdpClient.recycleFrameBuffer(previous)
-                }
+                self.desktopView.presentSurface(frame.surface, width: frame.width, height: frame.height)
             }
         }
 

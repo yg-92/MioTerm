@@ -1099,6 +1099,8 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_RemoteFxCodec", true);
         set_bool_setting(settings, "FreeRDP_NSCodec", true);
         set_u32_setting(settings, "FreeRDP_OffscreenSupportLevel", 0u);
+        set_u32_setting(settings, "FreeRDP_OffscreenCacheSize", 0u);
+        set_u32_setting(settings, "FreeRDP_OffscreenCacheEntries", 0u);
         set_bool_setting(settings, "FreeRDP_FrameMarkerCommandEnabled", true);
         set_bool_setting(settings, "FreeRDP_SurfaceFrameMarkerEnabled", true);
         set_bool_setting(settings, "FreeRDP_NetworkAutoDetect", true);
@@ -1110,8 +1112,9 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
         set_bool_setting(settings, "FreeRDP_DisableMenuAnims", false);
         set_bool_setting(settings, "FreeRDP_DisableThemes", false);
         set_u32_setting(settings, "FreeRDP_PerformanceFlags", 0x00000180u); // FONT_SMOOTHING | DESKTOP_COMPOSITION
-        set_bool_setting(settings, "FreeRDP_GfxH264", true);
-        // 关闭双路 YUV444 解码器（AVC444），保留 GfxH264 / RemoteFX / NSCodec，可为每个会话节省约 40-50 MB 内存。
+        // 局域网走 RemoteFX / NSCodec + GfxSmallCache，画质更锐利且免去 H.264 多帧参考缓冲（每会话可省约 60-90 MB）。
+        set_bool_setting(settings, "FreeRDP_GfxSmallCache", true);
+        set_bool_setting(settings, "FreeRDP_GfxH264", false);
         set_bool_setting(settings, "FreeRDP_GfxAVC444", false);
         set_bool_setting(settings, "FreeRDP_GfxAVC444v2", false);
     }

@@ -1,5 +1,6 @@
 import CFreeRDPShim
 import Foundation
+import IOSurface
 
 /// 基于动态加载的 FreeRDP 3.x 客户端，复用桌面帧缓冲与事件模型供图形视图渲染。
 public final class RDPClient: @unchecked Sendable {
@@ -29,8 +30,8 @@ public final class RDPClient: @unchecked Sendable {
     private var lastPointerMoveTime: TimeInterval = 0
     private var captureConnectError = false
     private var capturedConnectError: String?
-    private var latestFrame: (width: Int, height: Int, bgra: Data)?
-    private var recycledFrameBuffer: Data?
+    private var latestSurface: IOSurfaceRef?
+    private var latestSurfaceSize: (width: Int, height: Int) = (0, 0)
     private var frameNotificationScheduled = false
 
     public init(
@@ -74,8 +75,8 @@ public final class RDPClient: @unchecked Sendable {
         stateLock.lock()
         let alreadyStopped = stopped
         stopped = true
-        latestFrame = nil
-        recycledFrameBuffer = nil
+        latestSurface = nil
+        latestSurfaceSize = (0, 0)
         stateLock.unlock()
 
         if !alreadyStopped {
@@ -316,8 +317,8 @@ public final class RDPClient: @unchecked Sendable {
             stateLock.lock()
             let toDestroy = activeSession
             session = nil
-            latestFrame = nil
-            recycledFrameBuffer = nil
+            latestSurface = nil
+            latestSurfaceSize = (0, 0)
             stateLock.unlock()
             if let toDestroy {
                 mio_rdp_disconnect(toDestroy)
@@ -433,58 +434,60 @@ public final class RDPClient: @unchecked Sendable {
         continuation.yield(.frameUpdates([.resize(width: width, height: height)]))
     }
 
-    public func takeLatestFrame() -> (width: Int, height: Int, bgra: Data)? {
+    public func takeLatestSurface() -> (surface: IOSurfaceRef, width: Int, height: Int)? {
         stateLock.lock()
-        let frame = latestFrame
-        latestFrame = nil
+        defer { stateLock.unlock() }
         frameNotificationScheduled = false
-        stateLock.unlock()
-        return frame
-    }
-
-    public func recycleFrameBuffer(_ buffer: Data) {
-        guard !buffer.isEmpty else { return }
-        stateLock.lock()
-        if !stopped {
-            recycledFrameBuffer = buffer
+        guard let surface = latestSurface, latestSurfaceSize.width > 0, latestSurfaceSize.height > 0 else {
+            return nil
         }
-        stateLock.unlock()
+        return (surface, latestSurfaceSize.width, latestSurfaceSize.height)
     }
 
     private func handleFrame(ptr: UnsafePointer<UInt8>, width: Int, height: Int, stride: Int) {
         guard width > 0, height > 0, stride >= width * 4 else { return }
         let rowBytes = width * 4
-        let neededBytes = rowBytes * height
 
-        var bgra: Data
-        stateLock.lock()
-        if let recycled = recycledFrameBuffer, recycled.count == neededBytes {
-            bgra = recycled
-            recycledFrameBuffer = nil
-        } else if let pending = latestFrame, pending.bgra.count == neededBytes {
-            bgra = pending.bgra
-            latestFrame = nil
-        } else {
-            bgra = Data(count: neededBytes)
-        }
-        stateLock.unlock()
-
-        bgra.withUnsafeMutableBytes { dstRaw in
-            guard let dstBase = dstRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            if stride == rowBytes {
-                memcpy(dstBase, ptr, neededBytes)
-            } else {
-                for row in 0..<height {
-                    memcpy(dstBase + row * rowBytes, ptr + row * stride, rowBytes)
-                }
-            }
-        }
         if let onFrameReady {
             stateLock.lock()
-            if let old = latestFrame?.bgra, old.count == neededBytes, recycledFrameBuffer == nil {
-                recycledFrameBuffer = old
+            guard !stopped else {
+                stateLock.unlock()
+                return
             }
-            latestFrame = (width, height, bgra)
+            let surface: IOSurfaceRef
+            if let existing = latestSurface, latestSurfaceSize.width == width, latestSurfaceSize.height == height {
+                surface = existing
+            } else {
+                let bytesPerRow = (rowBytes + 15) & ~15
+                let props: [CFString: Any] = [
+                    kIOSurfaceWidth: width,
+                    kIOSurfaceHeight: height,
+                    kIOSurfaceBytesPerElement: 4,
+                    kIOSurfaceBytesPerRow: bytesPerRow,
+                    kIOSurfaceAllocSize: bytesPerRow * height,
+                    kIOSurfacePixelFormat: UInt32(0x42475241), // 'BGRA'
+                ]
+                guard let created = IOSurfaceCreate(props as CFDictionary) else {
+                    stateLock.unlock()
+                    return
+                }
+                latestSurface = created
+                latestSurfaceSize = (width, height)
+                surface = created
+            }
+
+            IOSurfaceLock(surface, [], nil)
+            let dstBase = IOSurfaceGetBaseAddress(surface).assumingMemoryBound(to: UInt8.self)
+            let dstStride = IOSurfaceGetBytesPerRow(surface)
+            if stride == dstStride {
+                memcpy(dstBase, ptr, dstStride * height)
+            } else {
+                for row in 0..<height {
+                    memcpy(dstBase + row * dstStride, ptr + row * stride, rowBytes)
+                }
+            }
+            IOSurfaceUnlock(surface, [], nil)
+
             let shouldNotify = !frameNotificationScheduled
             frameNotificationScheduled = true
             stateLock.unlock()
@@ -492,6 +495,18 @@ public final class RDPClient: @unchecked Sendable {
                 onFrameReady()
             }
             return
+        }
+
+        var bgra = Data(count: rowBytes * height)
+        bgra.withUnsafeMutableBytes { dstRaw in
+            guard let dstBase = dstRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            if stride == rowBytes {
+                memcpy(dstBase, ptr, rowBytes * height)
+            } else {
+                for row in 0..<height {
+                    memcpy(dstBase + row * rowBytes, ptr + row * stride, rowBytes)
+                }
+            }
         }
         continuation.yield(.frameUpdates([.rawRect(x: 0, y: 0, width: width, height: height, bgra: bgra)]))
     }
