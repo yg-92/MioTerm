@@ -134,6 +134,7 @@ final class RDPController: SessionControlling {
         }
 
         state = .starting
+        desktopView.window?.contentView?.layoutSubtreeIfNeeded()
         let scale = displayScaleFactor()
         let width = max(800, min(8192, (Int(desktopView.bounds.width * CGFloat(scale)) + 1) & ~1))
         let height = max(600, min(8192, (Int(desktopView.bounds.height * CGFloat(scale)) + 1) & ~1))

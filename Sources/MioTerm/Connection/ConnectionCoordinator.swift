@@ -42,6 +42,11 @@ final class ConnectionCoordinator {
         }
         if let rdp = controller as? RDPController {
             let password = environment.secrets(for: host)?.password
+            // 等待侧栏自动收起动画（0.22s）与布局稳定，让不支持 DisplayControl 动态分辨率的旧版 Windows
+            // 在建连握手阶段就能拿到完整的宽屏视口尺寸，避免两侧出现黑边。
+            window?.contentView?.layoutSubtreeIfNeeded()
+            try? await Task.sleep(nanoseconds: 260_000_000)
+            window?.contentView?.layoutSubtreeIfNeeded()
             rdp.start(password: password)
             return
         }
