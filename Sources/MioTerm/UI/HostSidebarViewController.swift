@@ -53,6 +53,8 @@ final class HostSidebarViewController: NSViewController {
     private let countLabel = NSTextField(labelWithString: "")
     private let footerDivider = NSView()
     private let emptyLabel = NSTextField(labelWithString: "")
+    private static let collapsedGroupsDefault = "MioTerm.collapsedHostGroups"
+
     private var rows: [Row] = []
     private var collapsedGroups: Set<String> = []
     /// 搜索时分组默认全部展开，收起动作单独记一份，退出搜索后恢复原状态。
@@ -67,7 +69,12 @@ final class HostSidebarViewController: NSViewController {
 
     init(repository: HostRepository) {
         self.repository = repository
+        self.collapsedGroups = Set(UserDefaults.standard.stringArray(forKey: Self.collapsedGroupsDefault) ?? [])
         super.init(nibName: nil, bundle: nil)
+    }
+
+    private func saveCollapsedGroups() {
+        UserDefaults.standard.set(Array(collapsedGroups).sorted(), forKey: Self.collapsedGroupsDefault)
     }
 
     required init?(coder: NSCoder) { fatalError("不使用 xib") }
@@ -243,8 +250,10 @@ final class HostSidebarViewController: NSViewController {
             }
         } else if collapsedGroups.contains(name) {
             collapsedGroups.remove(name)
+            saveCollapsedGroups()
         } else {
             collapsedGroups.insert(name)
+            saveCollapsedGroups()
         }
         rebuildRows()
         restoreSelection(id: selectedID)
@@ -390,6 +399,7 @@ final class HostSidebarViewController: NSViewController {
                 if count > 0 {
                     if self.collapsedGroups.remove(oldName) != nil {
                         self.collapsedGroups.insert(targetDisplay)
+                        self.saveCollapsedGroups()
                     }
                     if self.searchCollapsedGroups.remove(oldName) != nil {
                         self.searchCollapsedGroups.insert(targetDisplay)
