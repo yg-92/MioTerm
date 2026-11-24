@@ -53,7 +53,6 @@ final class RDPController: SessionControlling {
     private var lastSyncedPasteboardChangeCount: Int = -1
     private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
-    private var lastRequestedReconnectSize: (width: Int, height: Int)?
     private(set) var resolutionMode: RDPResolutionMode = .fitWindow
     private(set) var scalePercent: Int = 100
     private var lastPassword: String?
@@ -138,7 +137,6 @@ final class RDPController: SessionControlling {
     }
 
     func start(password: String?) {
-        lastRequestedReconnectSize = nil
         start(password: password, explicitSize: nil, preserveFramebuffer: false)
     }
 
@@ -338,16 +336,8 @@ final class RDPController: SessionControlling {
         }
     }
 
-    private func maximizedWindowContentSize() -> CGSize {
-        guard let screen = desktopView.window?.screen ?? NSScreen.main else {
-            return desktopView.bounds.size
-        }
-        if desktopView.window?.styleMask.contains(.fullScreen) == true {
-            return screen.frame.size
-        }
-        let visible = screen.visibleFrame.size
-        let titlebarHeight: CGFloat = 28
-        return CGSize(width: visible.width, height: max(600, visible.height - titlebarHeight))
+    private func screenLogicalSize() -> CGSize {
+        (desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size
     }
 
     private func resolvedTargetSize(forConnect: Bool) -> (width: Int, height: Int) {
@@ -358,21 +348,21 @@ final class RDPController: SessionControlling {
                 max(200, min(8192, (h + 1) & ~1))
             )
         case .matchScreen:
-            let screenSize = maximizedWindowContentSize()
+            let screenSize = screenLogicalSize()
             return (
                 max(800, min(8192, (Int(screenSize.width) + 1) & ~1)),
                 max(600, min(8192, (Int(screenSize.height) + 1) & ~1))
             )
         case .fitWindow:
-            // 直接按当前实际视图尺寸请求，保证主窗口、拖出窗口、最大化或全屏下都是 1:1 铺满无黑边；
-            // 若建连时视图尚未完成布局，再回退到最大化窗口可用内容区。
-            let viewSize = desktopView.bounds.size
-            let base = (viewSize.width >= 400 && viewSize.height >= 300)
-                ? viewSize
-                : maximizedWindowContentSize()
+            // 建连时按当前显示器完整逻辑分辨率请求（如 1920×1080）：
+            // Win10/11 连上后走 DisplayControl 无感动态调分辨率；
+            // Win7 不自动重连，由 VNCView 在最大化/全屏下直接铺满无黑边。
+            let base = forConnect ? screenLogicalSize() : desktopView.bounds.size
+            let minW = forConnect ? 800 : 200
+            let minH = forConnect ? 600 : 200
             return (
-                max(200, min(8192, (Int(base.width) + 1) & ~1)),
-                max(200, min(8192, (Int(base.height) + 1) & ~1))
+                max(minW, min(8192, (Int(base.width) + 1) & ~1)),
+                max(minH, min(8192, (Int(base.height) + 1) & ~1))
             )
         }
     }
@@ -381,7 +371,6 @@ final class RDPController: SessionControlling {
         let clampedScale = max(100, min(200, scalePercent))
         self.resolutionMode = resolution
         self.scalePercent = clampedScale
-        self.lastRequestedReconnectSize = nil
         resizeTask?.cancel()
         resizeTask = nil
         guard state == .running, let client else { return }
@@ -389,46 +378,40 @@ final class RDPController: SessionControlling {
         if client.supportsDynamicResize {
             client.requestResize(width: target.width, height: target.height, scalePercent: clampedScale)
         } else {
-            // 不支持 DisplayControl 的旧版 Windows（如 Win7）保留当前画面无缝重连到精确目标尺寸。
-            lastRequestedReconnectSize = target
-            start(password: lastPassword, explicitSize: target, preserveFramebuffer: true)
+            // Win7 不支持动态改分辨率，仅在用户主动切换下拉选时重连；
+            // 先断开并等待 500ms 让 Windows 远程桌面服务释放旧会话，避免触发“远程桌面服务当前正忙”。
+            let password = lastPassword
+            stop(clearFramebuffer: false)
+            state = .starting
+            resizeTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.start(password: password, explicitSize: target, preserveFramebuffer: true)
+            }
         }
     }
 
     private func scheduleResize(for size: CGSize) {
         guard resolutionMode == .fitWindow else { return }
+        // 只有支持 DisplayControl 的主机（Win10/11 等）才在窗口大小变化时动态调整，
+        // Win7 绝不因拖出或缩放窗口自动重连登录。
+        guard client?.supportsDynamicResize == true else { return }
         let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
         let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
-        let dw = abs(targetWidth - currentRemoteSize.width)
-        let dh = abs(targetHeight - currentRemoteSize.height)
-        guard dw >= 4 || dh >= 4 else { return }
+        guard abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4 else {
+            return
+        }
         let scale = scalePercent
-        let supportsDynamic = client?.supportsDynamicResize == true
-        let delayNs: UInt64 = supportsDynamic ? 250_000_000 : 550_000_000
         resizeTask?.cancel()
         resizeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delayNs)
+            try? await Task.sleep(nanoseconds: 250_000_000)
             guard let self,
                   !Task.isCancelled,
                   self.state == .running,
                   self.resolutionMode == .fitWindow,
-                  let client = self.client else { return }
-            if client.supportsDynamicResize {
-                client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
-            } else {
-                // Win7 等不支持 DisplayControl 的主机：窗口尺寸稳定变化超过 16px 后，保留画面无缝重连匹配精确像素，彻底消除黑边。
-                guard self.desktopView.window != nil,
-                      !self.desktopView.isHiddenOrHasHiddenAncestor,
-                      abs(targetWidth - self.currentRemoteSize.width) >= 16 || abs(targetHeight - self.currentRemoteSize.height) >= 16 else {
-                    return
-                }
-                if let prev = self.lastRequestedReconnectSize,
-                   prev.width == targetWidth && prev.height == targetHeight {
-                    return
-                }
-                self.lastRequestedReconnectSize = (targetWidth, targetHeight)
-                self.start(password: self.lastPassword, explicitSize: (targetWidth, targetHeight), preserveFramebuffer: true)
-            }
+                  let client = self.client,
+                  client.supportsDynamicResize else { return }
+            client.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
         }
     }
 

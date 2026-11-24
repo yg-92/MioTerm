@@ -309,6 +309,14 @@ final class VNCView: NSView {
         guard fbWidth > 0, fbHeight > 0, bounds.width > 0, bounds.height > 0 else {
             return bounds
         }
+        let fbAspect = CGFloat(fbWidth) / CGFloat(fbHeight)
+        let viewAspect = bounds.width / bounds.height
+        let ratio = max(fbAspect / viewAspect, viewAspect / fbAspect)
+        // 宽高比差异在 15% 以内（如 1920×1080 放入带标题栏/菜单栏/Dock 的最大化窗口）直接铺满，
+        // 既彻底消除细窄黑边，又不需要在 Win7 上频繁重连。
+        if ratio <= 1.15 {
+            return bounds
+        }
         let scale = min(bounds.width / CGFloat(fbWidth), bounds.height / CGFloat(fbHeight))
         let drawWidth = floor(CGFloat(fbWidth) * scale)
         let drawHeight = floor(CGFloat(fbHeight) * scale)
