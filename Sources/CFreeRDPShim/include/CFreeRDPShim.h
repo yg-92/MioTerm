@@ -47,6 +47,7 @@ void mio_rdp_send_mouse(MioRdpSession* session, uint16_t flags, uint16_t x, uint
 void mio_rdp_send_key(MioRdpSession* session, bool down, uint32_t rdp_scancode);
 void mio_rdp_send_unicode(MioRdpSession* session, bool down, uint16_t code);
 void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height, uint32_t scale_percent);
+bool mio_rdp_supports_dynamic_resize(MioRdpSession* session);
 
 bool mio_rdp_clipboard_send_text(MioRdpSession* session, const char* utf8_text);
 bool mio_rdp_clipboard_send_files(MioRdpSession* session, const char* uri_list);

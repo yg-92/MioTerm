@@ -11,6 +11,21 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
     var onDidClose: ((UUID) -> Void)?
     private var stateToken: UUID?
     private var isReattaching = false
+    private var resolutionPopUp: NSPopUpButton?
+    private var scalePopUp: NSPopUpButton?
+
+    private static let resolutionPresets: [(title: String, mode: RDPResolutionMode)] = [
+        ("自适应窗口", .fitWindow),
+        ("适应屏幕", .matchScreen),
+        ("1280×720", .fixed(width: 1280, height: 720)),
+        ("1366×768", .fixed(width: 1366, height: 768)),
+        ("1440×900", .fixed(width: 1440, height: 900)),
+        ("1600×900", .fixed(width: 1600, height: 900)),
+        ("1920×1080", .fixed(width: 1920, height: 1080)),
+        ("2560×1440", .fixed(width: 2560, height: 1440)),
+        ("3840×2160", .fixed(width: 3840, height: 2160)),
+    ]
+    private static let scalePresets: [Int] = [100, 125, 150, 175, 200]
 
     init(controller: any SessionControlling, screenPoint: NSPoint?, anchorWindow: NSWindow?) {
         self.sessionController = controller
@@ -28,7 +43,7 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         window.contentViewController = tabController
         super.init(window: window)
         window.delegate = self
-        installReattachTitlebarButton(in: window)
+        installTitlebarControls(in: window)
 
         tabController.setPanePresentation(split: false, active: true)
         tabController.onReconnect = { [weak self] session in
@@ -69,9 +84,61 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         tabController.setReconnecting(busy)
     }
 
-    private func installReattachTitlebarButton(in window: NSWindow) {
+    private func installTitlebarControls(in window: NSWindow) {
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .right
+
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        if let rdp = sessionController as? RDPController {
+            let resPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+            resPopUp.bezelStyle = .accessoryBarAction
+            resPopUp.controlSize = .small
+            resPopUp.font = .systemFont(ofSize: 11, weight: .medium)
+            resPopUp.toolTip = "调整远程桌面分辨率"
+            for (idx, preset) in Self.resolutionPresets.enumerated() {
+                if idx == 2 {
+                    resPopUp.menu?.addItem(.separator())
+                }
+                let item = NSMenuItem(title: preset.title, action: nil, keyEquivalent: "")
+                item.tag = idx
+                resPopUp.menu?.addItem(item)
+            }
+            if let currentIdx = Self.resolutionPresets.firstIndex(where: { $0.mode == rdp.resolutionMode }) {
+                resPopUp.selectItem(withTag: currentIdx)
+            } else {
+                resPopUp.selectItem(withTag: 0)
+            }
+            resPopUp.target = self
+            resPopUp.action = #selector(displayOptionChanged(_:))
+            resPopUp.sizeToFit()
+            self.resolutionPopUp = resPopUp
+            stack.addArrangedSubview(resPopUp)
+
+            let scalePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+            scalePopUp.bezelStyle = .accessoryBarAction
+            scalePopUp.controlSize = .small
+            scalePopUp.font = .systemFont(ofSize: 11, weight: .medium)
+            scalePopUp.toolTip = "调整远程桌面缩放比例"
+            for percent in Self.scalePresets {
+                let item = NSMenuItem(title: "\(percent)%", action: nil, keyEquivalent: "")
+                item.tag = percent
+                scalePopUp.menu?.addItem(item)
+            }
+            scalePopUp.selectItem(withTag: rdp.scalePercent)
+            if scalePopUp.selectedItem == nil {
+                scalePopUp.selectItem(withTag: 100)
+            }
+            scalePopUp.target = self
+            scalePopUp.action = #selector(displayOptionChanged(_:))
+            scalePopUp.sizeToFit()
+            self.scalePopUp = scalePopUp
+            stack.addArrangedSubview(scalePopUp)
+        }
 
         let button = NSButton(
             title: L10n.tr(.tabReattachToMainWindow),
@@ -85,12 +152,29 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         button.font = .systemFont(ofSize: 11, weight: .medium)
         button.toolTip = L10n.tr(.tabReattachToMainWindow)
         button.sizeToFit()
+        stack.addArrangedSubview(button)
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: button.frame.width + 12, height: 28))
-        button.frame.origin = NSPoint(x: 4, y: floor((container.bounds.height - button.frame.height) / 2))
-        container.addSubview(button)
+        let fitting = stack.fittingSize
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: ceil(fitting.width) + 12, height: 28))
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
         accessory.view = container
         window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    @objc private func displayOptionChanged(_ sender: Any?) {
+        guard let rdp = sessionController as? RDPController else { return }
+        let resTag = resolutionPopUp?.selectedTag() ?? 0
+        let mode = Self.resolutionPresets.indices.contains(resTag)
+            ? Self.resolutionPresets[resTag].mode
+            : .fitWindow
+        let scale = scalePopUp?.selectedTag() ?? 100
+        rdp.applyDisplaySettings(resolution: mode, scalePercent: scale > 0 ? scale : 100)
+        sessionController.focus()
     }
 
     @objc func reattachToMainWindow() {

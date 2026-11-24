@@ -2,6 +2,12 @@ import AppKit
 import Carbon.HIToolbox
 import MioTermCore
 
+enum RDPResolutionMode: Equatable {
+    case fitWindow
+    case matchScreen
+    case fixed(width: Int, height: Int)
+}
+
 /// RDP 远程桌面会话控制器：通过动态加载的 FreeRDP 3.x 连接，
 /// 复用 `VNCView` 渲染 BGRA 帧缓冲并转发鼠标与键盘事件，实现 `SessionControlling`。
 @MainActor
@@ -47,6 +53,9 @@ final class RDPController: SessionControlling {
     private var lastSyncedPasteboardChangeCount: Int = -1
     private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
+    private(set) var resolutionMode: RDPResolutionMode = .fitWindow
+    private(set) var scalePercent: Int = 100
+    private var lastPassword: String?
     private var activeModifierFlags: NSEvent.ModifierFlags = []
     private var keyMapping = AppEnvironment.shared.settings.settings.remoteKeyMapping
 
@@ -137,22 +146,17 @@ final class RDPController: SessionControlling {
         }
 
         state = .starting
-        let scale = displayScaleFactor()
-        // 参照 Microsoft Windows App：建连时按当前显示器完整逻辑分辨率请求（如 1920×1080）。
-        // 支持 DisplayControl 的新版 Windows（Win10/11）连上后会自动随窗口动态调整；
-        // 不支持动态改分辨率的旧版 Windows（Win7/Server 2008）也能直接拥有完整宽屏分辨率，最大化时 1:1 铺满不拉伸。
-        let initialSize = (desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size
-        let width = max(800, min(8192, (Int(initialSize.width * CGFloat(scale)) + 1) & ~1))
-        let height = max(600, min(8192, (Int(initialSize.height * CGFloat(scale)) + 1) & ~1))
+        lastPassword = password
+        let initial = resolvedTargetSize(forConnect: true)
         let rdpClient = RDPClient(
             host: host.address,
             port: host.port,
             username: host.username,
             password: password ?? "",
             domain: "",
-            width: width,
-            height: height,
-            scalePercent: scale * 100
+            width: initial.width,
+            height: initial.height,
+            scalePercent: scalePercent
         )
         self.client = rdpClient
         rdpClient.onClipboardReady = { [weak self, weak rdpClient] in
@@ -322,23 +326,63 @@ final class RDPController: SessionControlling {
         }
     }
 
-    private func displayScaleFactor() -> Int {
-        // 按 100%（1× 逻辑分辨率）请求远程桌面，避免部分 Windows 会话忽略 200% DPI 导致图标字体偏小。
-        1
+    private func resolvedTargetSize(forConnect: Bool) -> (width: Int, height: Int) {
+        switch resolutionMode {
+        case .fixed(let w, let h):
+            return (
+                max(200, min(8192, (w + 1) & ~1)),
+                max(200, min(8192, (h + 1) & ~1))
+            )
+        case .matchScreen:
+            let screenSize = (desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size
+            return (
+                max(800, min(8192, (Int(screenSize.width) + 1) & ~1)),
+                max(600, min(8192, (Int(screenSize.height) + 1) & ~1))
+            )
+        case .fitWindow:
+            // 建连时按当前显示器完整逻辑分辨率请求，确保不支持 DisplayControl 的 Win7 也能获得完整宽屏；
+            // 连上后支持动态调整的新版 Windows 会由 scheduleResize 实时跟随窗口尺寸。
+            let base = forConnect
+                ? ((desktopView.window?.screen ?? NSScreen.main)?.frame.size ?? desktopView.bounds.size)
+                : desktopView.bounds.size
+            let minW = forConnect ? 800 : 200
+            let minH = forConnect ? 600 : 200
+            return (
+                max(minW, min(8192, (Int(base.width) + 1) & ~1)),
+                max(minH, min(8192, (Int(base.height) + 1) & ~1))
+            )
+        }
+    }
+
+    func applyDisplaySettings(resolution: RDPResolutionMode, scalePercent: Int) {
+        let clampedScale = max(100, min(200, scalePercent))
+        self.resolutionMode = resolution
+        self.scalePercent = clampedScale
+        resizeTask?.cancel()
+        resizeTask = nil
+        guard state == .running, let client else { return }
+        let target = resolvedTargetSize(forConnect: false)
+        if client.supportsDynamicResize {
+            client.requestResize(width: target.width, height: target.height, scalePercent: clampedScale)
+        } else {
+            // 不支持 DisplayControl 的旧版 Windows（如 Win7）通过无缝重连生效新分辨率与缩放。
+            start(password: lastPassword)
+        }
     }
 
     private func scheduleResize(for size: CGSize) {
-        let scale = displayScaleFactor()
-        let targetWidth = max(200, min(8192, (Int(size.width * CGFloat(scale)) + 1) & ~1))
-        let targetHeight = max(200, min(8192, (Int(size.height * CGFloat(scale)) + 1) & ~1))
+        guard resolutionMode == .fitWindow else { return }
+        let targetWidth = max(200, min(8192, (Int(size.width) + 1) & ~1))
+        let targetHeight = max(200, min(8192, (Int(size.height) + 1) & ~1))
         guard abs(targetWidth - currentRemoteSize.width) >= 4 || abs(targetHeight - currentRemoteSize.height) >= 4 else {
             return
         }
+        let scale = scalePercent
         resizeTask?.cancel()
         resizeTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
-            guard let self, !Task.isCancelled, self.state == .running else { return }
-            self.client?.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale * 100)
+            guard let self, !Task.isCancelled, self.state == .running, self.resolutionMode == .fitWindow else { return }
+            self.client?.requestResize(width: targetWidth, height: targetHeight, scalePercent: scale)
         }
     }
 

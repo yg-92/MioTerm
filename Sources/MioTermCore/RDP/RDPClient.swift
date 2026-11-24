@@ -141,6 +141,14 @@ public final class RDPClient: @unchecked Sendable {
         mio_rdp_send_unicode(activeSession, down, code)
     }
 
+    public var supportsDynamicResize: Bool {
+        stateLock.lock()
+        let activeSession = session
+        stateLock.unlock()
+        guard let activeSession else { return false }
+        return mio_rdp_supports_dynamic_resize(activeSession)
+    }
+
     public func requestResize(width: Int, height: Int, scalePercent: Int = 100) {
         stateLock.lock()
         let activeSession = session

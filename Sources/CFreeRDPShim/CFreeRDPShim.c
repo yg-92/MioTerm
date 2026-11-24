@@ -1211,7 +1211,8 @@ int mio_rdp_poll(MioRdpSession* session, uint32_t timeout_ms) {
             layout.PhysicalWidth = phys_w < 10 ? 10 : (phys_w > 10000 ? 10000 : phys_w);
             layout.PhysicalHeight = phys_h < 10 ? 10 : (phys_h > 10000 ? 10000 : phys_h);
             layout.DesktopScaleFactor = req_scale;
-            layout.DeviceScaleFactor = req_scale;
+            // [MS-RDPEDISP] 2.2.2.2.1 要求 DeviceScaleFactor 仅取 100 / 140 / 180。
+            layout.DeviceScaleFactor = req_scale >= 175 ? 180 : (req_scale >= 140 ? 140 : 100);
             RdpUInt32 rc = send_layout(disp, 1, &layout);
             char buf[128];
             snprintf(buf, sizeof(buf), "send_layout(%ux%u scale=%u ready=%d) -> rc=%u", req_w, req_h, req_scale, disp_ready ? 1 : 0, rc);
@@ -1293,6 +1294,14 @@ void mio_rdp_resize(MioRdpSession* session, uint32_t width, uint32_t height, uin
     session->pending_scale_percent = scale;
     session->resize_pending = true;
     pthread_mutex_unlock(&session->lock);
+}
+
+bool mio_rdp_supports_dynamic_resize(MioRdpSession* session) {
+    if (!session || !session->connected) return false;
+    pthread_mutex_lock(&session->lock);
+    bool supported = (session->disp != NULL && session->disp_ready);
+    pthread_mutex_unlock(&session->lock);
+    return supported;
 }
 
 void mio_rdp_send_mouse(MioRdpSession* session, uint16_t flags, uint16_t x, uint16_t y) {
