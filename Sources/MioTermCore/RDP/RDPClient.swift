@@ -24,6 +24,8 @@ public final class RDPClient: @unchecked Sendable {
     private var session: OpaquePointer?
     private var stopped = false
     private var lastButtonMask: UInt8 = 0
+    private var captureConnectError = false
+    private var capturedConnectError: String?
 
     public init(
         host: String,
@@ -256,31 +258,45 @@ public final class RDPClient: @unchecked Sendable {
             box.owner?.onRemoteClipboardChanged?(hasText, hasFiles)
         }
 
-        let created: OpaquePointer? = host.withCString { hostC in
-            username.withCString { userC in
-                password.withCString { passC in
-                    domain.withCString { domainC in
-                        sharedDirectory.withCString { sharedC in
-                            var config = MioRdpConfig(
-                                host: hostC,
-                                port: UInt16(clamping: port),
-                                username: userC,
-                                password: passC,
-                                domain: domainC,
-                                shared_dir: sharedC,
-                                width: UInt32(max(640, initialWidth)),
-                                height: UInt32(max(480, initialHeight)),
-                                scale_percent: UInt32(max(100, initialScalePercent))
-                            )
-                            return mio_rdp_create(&config, callbacks, box.toOpaque())
+        func createSession(disableNLA: Bool) -> OpaquePointer? {
+            host.withCString { hostC in
+                username.withCString { userC in
+                    password.withCString { passC in
+                        domain.withCString { domainC in
+                            sharedDirectory.withCString { sharedC in
+                                var config = MioRdpConfig(
+                                    host: hostC,
+                                    port: UInt16(clamping: port),
+                                    username: userC,
+                                    password: passC,
+                                    domain: domainC,
+                                    shared_dir: sharedC,
+                                    width: UInt32(max(640, initialWidth)),
+                                    height: UInt32(max(480, initialHeight)),
+                                    scale_percent: UInt32(max(100, initialScalePercent)),
+                                    disable_nla: disableNLA
+                                )
+                                return mio_rdp_create(&config, callbacks, box.toOpaque())
+                            }
                         }
                     }
                 }
             }
         }
 
-        guard let created else {
+        var activeSession: OpaquePointer?
+        defer {
+            stateLock.lock()
+            let toDestroy = activeSession
+            session = nil
+            stateLock.unlock()
+            if let toDestroy {
+                mio_rdp_destroy(toDestroy)
+            }
             box.release()
+        }
+
+        guard let first = createSession(disableNLA: false) else {
             yieldFailed(L10n.tr(.rdpConnectFailed))
             return
         }
@@ -288,27 +304,69 @@ public final class RDPClient: @unchecked Sendable {
         stateLock.lock()
         if stopped {
             stateLock.unlock()
-            mio_rdp_destroy(created)
-            box.release()
+            mio_rdp_destroy(first)
             return
         }
-        session = created
+        activeSession = first
+        session = first
+        captureConnectError = true
+        capturedConnectError = nil
         stateLock.unlock()
 
-        defer {
+        if !mio_rdp_connect(first) {
             stateLock.lock()
+            let firstError = capturedConnectError
+            let wasStopped = stopped
+            captureConnectError = false
+            capturedConnectError = nil
             session = nil
+            activeSession = nil
             stateLock.unlock()
-            mio_rdp_destroy(created)
-            box.release()
+            mio_rdp_destroy(first)
+
+            guard !wasStopped else { return }
+
+            // 部分旧版 Windows 或密码已过期主机在 NLA(CredSSP) 阶段会直接报错，
+            // 自动关闭 NLA 回退至 TLS/RDP 协商重试一次（与 Windows App 行为一致）。
+            let shouldFallbackNoNLA: Bool = {
+                guard let err = firstError?.lowercased() else { return true }
+                if err.contains("unable to connect") || err.contains("dns") || err.contains("refused") {
+                    return false
+                }
+                return true
+            }()
+
+            guard shouldFallbackNoNLA, let fallback = createSession(disableNLA: true) else {
+                yieldFailed(firstError ?? L10n.tr(.rdpConnectFailed))
+                return
+            }
+
+            FileLogger.shared.info("RDP (\(host):\(port)): NLA 连接失败（\(firstError ?? "unknown")），自动回退 TLS/RDP 重试")
+
+            stateLock.lock()
+            if stopped {
+                stateLock.unlock()
+                mio_rdp_destroy(fallback)
+                return
+            }
+            activeSession = fallback
+            session = fallback
+            stateLock.unlock()
+
+            guard mio_rdp_connect(fallback) else {
+                return
+            }
+        } else {
+            stateLock.lock()
+            captureConnectError = false
+            capturedConnectError = nil
+            stateLock.unlock()
         }
 
-        guard mio_rdp_connect(created) else {
-            return
-        }
+        guard let connectedSession = activeSession else { return }
 
         while !isStopped {
-            let status = mio_rdp_poll(created, 50)
+            let status = mio_rdp_poll(connectedSession, 50)
             if status == 0 {
                 if !isStopped {
                     continuation.yield(.closed(reason: nil))
@@ -363,6 +421,13 @@ public final class RDPClient: @unchecked Sendable {
     }
 
     private func handleError(_ message: String) {
+        stateLock.lock()
+        if captureConnectError {
+            capturedConnectError = message
+            stateLock.unlock()
+            return
+        }
+        stateLock.unlock()
         yieldFailed(message)
     }
 
