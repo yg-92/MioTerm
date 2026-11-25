@@ -77,6 +77,8 @@ final class RDPController: SessionControlling {
     private var clipboardObserver: NSObjectProtocol?
     private var resignActiveObserver: NSObjectProtocol?
     private var becomeActiveObserver: NSObjectProtocol?
+    private var globalPasteKeyMonitor: Any?
+    private var pendingGlobalPasteLargeFile: RDPClient.RemoteClipboardFileSummary?
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
@@ -128,7 +130,9 @@ final class RDPController: SessionControlling {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, !self.isDownloadingClipboardFiles else { return }
+                guard let self else { return }
+                self.removeGlobalPasteKeyMonitor()
+                guard !self.isDownloadingClipboardFiles else { return }
                 // 切回 MioTerm 时自动收起尚未点击的大文件下载提示，不打扰在 Windows 内的继续操作。
                 RDPClipboardTransferHUD.shared.dismiss()
             }
@@ -144,6 +148,9 @@ final class RDPController: SessionControlling {
         }
         if let becomeActiveObserver {
             NotificationCenter.default.removeObserver(becomeActiveObserver)
+        }
+        if let globalPasteKeyMonitor {
+            NSEvent.removeMonitor(globalPasteKeyMonitor)
         }
     }
 
@@ -326,6 +333,7 @@ final class RDPController: SessionControlling {
         clipboardFetchTask?.cancel()
         clipboardFetchTask = nil
         pendingRemoteFileSummary = nil
+        removeGlobalPasteKeyMonitor()
         activeLazyPasteboardProvider = nil
         if Self.latestRemoteClipboardSource?.controller === self {
             Self.latestRemoteClipboardSource = nil
@@ -442,9 +450,45 @@ final class RDPController: SessionControlling {
             lastSyncedPasteboardChangeCount = pasteboard.changeCount
             return
         }
-        // 无论文件大小，切出 MioTerm 时都不弹任何浮窗、不下载任何字节；
-        // 统一只挂 .fileURL 延迟项，必须等用户在访达真正按下 ⌘V 时才触发拉取或弹出下载浮窗。
+        // 无论文件大小，切出 MioTerm 时都不弹任何浮窗、不下载任何字节。
+        // 对于 > 50 MB 的大文件：
+        // - 若已授予辅助功能权限（AXIsProcessTrusted），不写 .fileURL 到访达剪贴板，
+        //   仅挂一个临时全局 ⌘V 监听，按下 ⌘V 直接流式下载，彻底消除访达“不能粘贴”报错弹窗；
+        // - 未授权时自动回退到 .fileURL 延迟项以保证按 ⌘V 依然可用。
+        if Self.isLargeRemoteTransfer(summary), AXIsProcessTrusted() {
+            installGlobalPasteMonitorForLargeFile(summary: summary, client: client)
+            return
+        }
         installLazyFilePasteboard(summary: summary, client: client)
+    }
+
+    private func installGlobalPasteMonitorForLargeFile(
+        summary: RDPClient.RemoteClipboardFileSummary,
+        client: RDPClient
+    ) {
+        removeGlobalPasteKeyMonitor()
+        pendingGlobalPasteLargeFile = summary
+        globalPasteKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self, weak client] event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard Int(event.keyCode) == kVK_ANSI_V, flags == .command else { return }
+            Task { @MainActor [weak self, weak client] in
+                guard let self, let client, self.client === client,
+                      !NSApp.isActive,
+                      let pending = self.pendingGlobalPasteLargeFile else { return }
+                let frontBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+                guard frontBundle == "com.apple.finder" else { return }
+                self.removeGlobalPasteKeyMonitor()
+                self.startDirectLargeFileDownload(client: client, summary: pending)
+            }
+        }
+    }
+
+    private func removeGlobalPasteKeyMonitor() {
+        pendingGlobalPasteLargeFile = nil
+        if let monitor = globalPasteKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalPasteKeyMonitor = nil
+        }
     }
 
     private func chooseDirectoryAndDownloadLargeFiles(
