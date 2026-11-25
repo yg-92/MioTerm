@@ -295,6 +295,7 @@ struct MioRdpSession {
     void* clip_file;
     void* clipboard;
     pthread_mutex_t clip_lock;
+    pthread_mutex_t clip_download_lock;
     pthread_cond_t clip_cond;
     bool closing;
     bool clip_ready;
@@ -1044,6 +1045,7 @@ MioRdpSession* mio_rdp_create(const MioRdpConfig* config, MioRdpCallbacks callba
     session->pending_scale_percent = session->scale_percent;
     pthread_mutex_init(&session->lock, NULL);
     pthread_mutex_init(&session->clip_lock, NULL);
+    pthread_mutex_init(&session->clip_download_lock, NULL);
     pthread_cond_init(&session->clip_cond, NULL);
     set_ptr_at(context, RDP_CONTEXT_SIZE, session);
 
@@ -1298,6 +1300,7 @@ void mio_rdp_destroy(MioRdpSession* session) {
         session->context = NULL;
     }
     pthread_cond_destroy(&session->clip_cond);
+    pthread_mutex_destroy(&session->clip_download_lock);
     pthread_mutex_destroy(&session->clip_lock);
     pthread_mutex_destroy(&session->lock);
     free(session);
@@ -1760,6 +1763,8 @@ static uint8_t* request_remote_file_contents(
 
 char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char* dest_dir, uint64_t max_total_bytes) {
     if (!session || !dest_dir || !dest_dir[0] || !g_fn.cliprdr_parse_file_list) return NULL;
+    // 串行化同会话的文件下载，避免 Windows 短时间连续发两次 ServerFormatList 导致两个下载互相抢占 streamId。
+    pthread_mutex_lock(&session->clip_download_lock);
 
     pthread_mutex_lock(&session->clip_lock);
     bool has_files = session->server_has_files;
@@ -1777,7 +1782,10 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
         have_lock = true;
     }
     pthread_mutex_unlock(&session->clip_lock);
-    if (!has_files || fgd_fmt == 0) return NULL;
+    if (!has_files || fgd_fmt == 0) {
+        pthread_mutex_unlock(&session->clip_download_lock);
+        return NULL;
+    }
 
     if (have_lock) {
         MioCliprdrLockClipboardData lock_req = {0};
@@ -1805,6 +1813,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             unlock_req.clipDataId = lock_id;
             cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
         }
+        pthread_mutex_unlock(&session->clip_download_lock);
         return NULL;
     }
 
@@ -1825,6 +1834,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             unlock_req.clipDataId = lock_id;
             cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
         }
+        pthread_mutex_unlock(&session->clip_download_lock);
         return NULL;
     }
 
@@ -1848,6 +1858,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
                         unlock_req.clipDataId = lock_id;
                         cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
                     }
+                    pthread_mutex_unlock(&session->clip_download_lock);
                     return NULL;
                 }
                 declared_total += sz;
@@ -1864,6 +1875,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             unlock_req.clipDataId = lock_id;
             cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
         }
+        pthread_mutex_unlock(&session->clip_download_lock);
         return NULL;
     }
 
@@ -1879,6 +1891,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             unlock_req.clipDataId = lock_id;
             cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
         }
+        pthread_mutex_unlock(&session->clip_download_lock);
         return NULL;
     }
     top_paths[0] = '\0';
@@ -2004,7 +2017,8 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
         }
 
         uint64_t offset = 0;
-        const uint32_t chunk_size = 65536u;
+        // 1 MB 分片（原 64 KB 会导致 100 MB 文件产生 1600+ 次串行往返耗时约 30 秒，提至 1 MB 可提速约 10 倍）。
+        const uint32_t chunk_size = 1048576u;
         while (offset < file_size) {
             uint64_t remaining = file_size - offset;
             uint32_t to_read = remaining > chunk_size ? chunk_size : (uint32_t)remaining;
@@ -2046,6 +2060,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     snprintf(log_buf, sizeof(log_buf), "clipboard_download_remote_files(count=%u bytes=%llu lock=%u step=%s) -> %s",
              count, (unsigned long long)downloaded_total, lock_id, fail_step, all_ok ? "ok" : "fail");
     shim_log(session, log_buf);
+    pthread_mutex_unlock(&session->clip_download_lock);
 
     if (!all_ok || out_len == 0) {
         free(top_paths);

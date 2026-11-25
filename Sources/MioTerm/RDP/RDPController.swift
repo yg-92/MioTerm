@@ -324,18 +324,29 @@ final class RDPController: SessionControlling {
     private func handleRemoteClipboardChanged(hasText: Bool, hasFiles: Bool, client: RDPClient) {
         clipboardFetchTask?.cancel()
         if hasFiles {
+            let baseTitle = title
+            onTitleChange?("\(baseTitle) · 正在同步剪贴板文件…")
             clipboardFetchTask = Task.detached(priority: .userInitiated) { [weak self, weak client] in
-                guard let client else { return }
+                // 合并 Windows Explorer 短时间内连发两次 ServerFormatList 的抖动。
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled, let client else {
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.onTitleChange?(self.title)
+                    }
+                    return
+                }
                 let stagingDir = FileManager.default.temporaryDirectory
                     .appendingPathComponent("MioTermRDPClipboard", isDirectory: true)
                     .appendingPathComponent(UUID().uuidString, isDirectory: true)
                 let urls = client.downloadRemoteClipboardFiles(to: stagingDir)
-                guard !urls.isEmpty else {
-                    try? FileManager.default.removeItem(at: stagingDir)
-                    return
-                }
                 await MainActor.run { [weak self, weak client] in
-                    guard let self, let client, self.client === client, !Task.isCancelled else {
+                    guard let self else {
+                        try? FileManager.default.removeItem(at: stagingDir)
+                        return
+                    }
+                    self.onTitleChange?(self.title)
+                    guard let client, self.client === client, !Task.isCancelled, !urls.isEmpty else {
                         try? FileManager.default.removeItem(at: stagingDir)
                         return
                     }
