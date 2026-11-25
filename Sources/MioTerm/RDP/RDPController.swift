@@ -455,9 +455,13 @@ final class RDPController: SessionControlling {
         // - 若已授予辅助功能权限（AXIsProcessTrusted），不写 .fileURL 到访达剪贴板，
         //   仅挂一个临时全局 ⌘V 监听，按下 ⌘V 直接流式下载，彻底消除访达“不能粘贴”报错弹窗；
         // - 未授权时自动回退到 .fileURL 延迟项以保证按 ⌘V 依然可用。
-        if Self.isLargeRemoteTransfer(summary), AXIsProcessTrusted() {
-            installGlobalPasteMonitorForLargeFile(summary: summary, client: client)
-            return
+        if Self.isLargeRemoteTransfer(summary) {
+            let axTrusted = AXIsProcessTrusted()
+            FileLogger.shared.info("RDP 大文件切出准备: bytes=\(summary.totalBytes) axTrusted=\(axTrusted)")
+            if axTrusted {
+                installGlobalPasteMonitorForLargeFile(summary: summary, client: client)
+                return
+            }
         }
         installLazyFilePasteboard(summary: summary, client: client)
     }
@@ -467,6 +471,12 @@ final class RDPController: SessionControlling {
         client: RDPClient
     ) {
         removeGlobalPasteKeyMonitor()
+        // 清空可能残留的旧 .fileURL，避免在访达按 ⌘V 时把上一次的文件误贴出来或弹报错框。
+        let pasteboard = NSPasteboard.general
+        pasteboard.prepareForNewContents(with: .currentHostOnly)
+        lastSyncedPasteboardChangeCount = pasteboard.changeCount
+        Self.lazyPasteboardChangeCount = pasteboard.changeCount
+
         pendingGlobalPasteLargeFile = summary
         globalPasteKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self, weak client] event in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -477,6 +487,7 @@ final class RDPController: SessionControlling {
                       let pending = self.pendingGlobalPasteLargeFile else { return }
                 let frontBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
                 guard frontBundle == "com.apple.finder" else { return }
+                FileLogger.shared.info("RDP 全局 ⌘V 触发大文件流式下载: files=\(pending.names.count) bytes=\(pending.totalBytes)")
                 self.removeGlobalPasteKeyMonitor()
                 self.startDirectLargeFileDownload(client: client, summary: pending)
             }
