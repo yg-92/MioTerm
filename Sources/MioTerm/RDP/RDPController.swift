@@ -66,7 +66,6 @@ final class RDPController: SessionControlling {
 
     private static let rdpClipboardDidUpdateNotification = Notification.Name("MioTermRDPClipboardDidUpdate")
     private static let displayPreferencesKey = "MioTerm.rdpDisplayPreferences"
-    private static let largeFileDirectStreamThresholdBytes: UInt64 = 200 * 1024 * 1024
     private static var recentClipboardStagingDirs: [URL] = []
     private static var lazyPasteboardChangeCount: Int = -1
 
@@ -405,22 +404,13 @@ final class RDPController: SessionControlling {
 
     private func installLazyFilePasteboard(summary: RDPClient.RemoteClipboardFileSummary, client: RDPClient) {
         let provider = LazyRDPFilePasteboardProvider(controller: self, client: client, summary: summary)
-        let promisedURLType = NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")
-        let promisedContentType = NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type")
-        let promisedNameType = NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-name")
         let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
-        let items: [NSPasteboardItem] = summary.names.map { name in
+        // 访达的 ⌘V 粘贴仅识别 public.file-url (.fileURL)；配合 NSPasteboardItemDataProvider，
+        // 在 Windows 按 Ctrl+C 时零下载，仅在用户切到访达并按下 ⌘V 时才按需流式拉取并返回真实本地文件 URL。
+        let items: [NSPasteboardItem] = summary.names.map { _ in
             let item = NSPasteboardItem()
-            let ext = (name as NSString).pathExtension
-            let contentUTI = (!ext.isEmpty ? UTType(filenameExtension: ext)?.identifier : nil) ?? UTType.data.identifier
-            // 按 Apple Pasteboard.h 规范与 Windows App 做法：
-            // 1) 写入 promised-file-content-type 与 promised-file-name（仅元信息，零下载）；
-            // 2) 仅延迟提供 promised-file-url；当用户在访达按 ⌘V 时，访达先写入目标目录
-            //    (PasteboardSetPasteLocation)，再回调我们直接流式写入该目标目录。
-            item.setString(contentUTI, forType: promisedContentType)
-            item.setString(name, forType: promisedNameType)
-            item.setDataProvider(provider, forTypes: [promisedURLType])
+            item.setDataProvider(provider, forTypes: [.fileURL])
             item.setData(Data(), forType: transientType)
             return item
         }
@@ -435,33 +425,15 @@ final class RDPController: SessionControlling {
         Self.lazyPasteboardChangeCount = pasteboard.changeCount
     }
 
-    fileprivate static func currentFinderPasteLocation() -> URL? {
-        var pbRef: Pasteboard?
-        guard PasteboardCreate(kPasteboardClipboard as CFString, &pbRef) == noErr,
-              let pbRef else { return nil }
-        var locRef: CFURL?
-        guard PasteboardCopyPasteLocation(pbRef, &locRef) == noErr,
-              let locRef else { return nil }
-        return locRef as URL
-    }
-
     fileprivate func fulfillLazyFilePasteSynchronously(
         client: RDPClient,
-        summary: RDPClient.RemoteClipboardFileSummary,
-        destinationDirectory: URL?
+        summary: RDPClient.RemoteClipboardFileSummary
     ) -> [URL] {
         guard self.client === client else { return [] }
-        let isStaging = destinationDirectory == nil
-        let targetDir: URL
-        if let destinationDirectory {
-            targetDir = Self.resolveNonCollidingDownloadDirectory(root: destinationDirectory, topLevelNames: summary.names)
-        } else {
-            targetDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("MioTermRDPClipboard", isDirectory: true)
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        }
+        let targetDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MioTermRDPClipboard", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let fileSummary = Self.formatFileSummary(summary.names)
-        let destLabel = destinationDirectory?.lastPathComponent ?? "剪贴板粘贴"
 
         isDownloadingClipboardFiles = true
         onTitleChange?("\(title) · 正在同步剪贴板文件…")
@@ -473,7 +445,7 @@ final class RDPController: SessionControlling {
             RDPClipboardTransferHUD.shared.show(
                 hostName: title,
                 fileSummary: fileSummary,
-                destinationText: destLabel,
+                destinationText: "访达粘贴",
                 totalBytes: summary.totalBytes,
                 onCancel: { client.cancelRemoteClipboardDownload() }
             )
@@ -492,7 +464,7 @@ final class RDPController: SessionControlling {
                 RDPClipboardTransferHUD.shared.show(
                     hostName: title,
                     fileSummary: fileSummary,
-                    destinationText: destLabel,
+                    destinationText: "访达粘贴",
                     totalBytes: summary.totalBytes,
                     onCancel: { client.cancelRemoteClipboardDownload() }
                 )
@@ -508,96 +480,16 @@ final class RDPController: SessionControlling {
 
         let urls = box.urls
         if urls.isEmpty {
-            if isStaging || targetDir != destinationDirectory {
-                try? FileManager.default.removeItem(at: targetDir)
-            }
+            try? FileManager.default.removeItem(at: targetDir)
             return []
         }
-        if isStaging {
-            Self.registerClipboardStagingDir(targetDir)
-        }
+        Self.registerClipboardStagingDir(targetDir)
         return urls
-    }
-
-    fileprivate func startStreamingLargeFilePaste(
-        client: RDPClient,
-        summary: RDPClient.RemoteClipboardFileSummary,
-        destinationDirectory: URL?
-    ) -> [URL] {
-        guard self.client === client else { return [] }
-        let rootDir = destinationDirectory
-            ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
-        let targetDir = Self.resolveNonCollidingDownloadDirectory(root: rootDir, topLevelNames: summary.names)
-        try? FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
-
-        // 先在访达目标目录创建占位文件，立刻把真实 URL 返回给访达完成 promised-file-url 握手
-        //（访达不会再弹出“不能粘贴”错误框，也不会阻塞超时），后台紧接着直接流式覆盖写入。
-        let placeholderURLs: [URL] = summary.names.map { name in
-            let url = targetDir.appendingPathComponent(name)
-            if !FileManager.default.fileExists(atPath: url.path) {
-                FileManager.default.createFile(atPath: url.path, contents: nil)
-            }
-            return url
-        }
-
-        let fileSummary = Self.formatFileSummary(summary.names)
-        let destinationLabel = rootDir.lastPathComponent
-
-        isDownloadingClipboardFiles = true
-        onTitleChange?("\(title) · 正在接收大文件…")
-        RDPClipboardTransferHUD.shared.show(
-            hostName: title,
-            fileSummary: fileSummary,
-            destinationText: destinationLabel,
-            totalBytes: summary.totalBytes,
-            onCancel: { client.cancelRemoteClipboardDownload() }
-        )
-
-        Task.detached(priority: .userInitiated) { [weak self, weak client] in
-            guard let client else { return }
-            let urls = client.downloadRemoteClipboardFiles(to: targetDir)
-            await MainActor.run { [weak self, weak client] in
-                guard let self else { return }
-                self.isDownloadingClipboardFiles = false
-                self.onTitleChange?(self.title)
-                guard let client, self.client === client, !urls.isEmpty else {
-                    RDPClipboardTransferHUD.shared.dismiss()
-                    for url in placeholderURLs {
-                        try? FileManager.default.removeItem(at: url)
-                    }
-                    if targetDir != rootDir {
-                        try? FileManager.default.removeItem(at: targetDir)
-                    }
-                    return
-                }
-                RDPClipboardTransferHUD.shared.markCompleted(
-                    savedURLs: urls,
-                    message: "已保存至「\(destinationLabel)」"
-                )
-            }
-        }
-        return placeholderURLs
-    }
-
-    private static func resolveNonCollidingDownloadDirectory(root: URL, topLevelNames: [String]) -> URL {
-        let fm = FileManager.default
-        let hasCollision = topLevelNames.contains { name in
-            fm.fileExists(atPath: root.appendingPathComponent(name).path)
-        }
-        guard hasCollision else { return root }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return root.appendingPathComponent("MioTerm-\(formatter.string(from: Date()))", isDirectory: true)
     }
 
     private static func formatFileSummary(_ names: [String]) -> String {
         guard let first = names.first else { return "远端文件" }
         return names.count == 1 ? first : "\(first) 等 \(names.count) 项"
-    }
-
-    fileprivate static func isLargeRemoteTransfer(_ summary: RDPClient.RemoteClipboardFileSummary) -> Bool {
-        summary.totalBytes > largeFileDirectStreamThresholdBytes
     }
 
     private func updateClipboardDownloadProgress(downloadedBytes: UInt64, totalBytes: UInt64) {
@@ -1006,45 +898,26 @@ private final class LazyRDPFilePasteboardProvider: NSObject, NSPasteboardItemDat
         item: NSPasteboardItem,
         provideDataForType type: NSPasteboard.PasteboardType
     ) {
-        let promisedURLType = NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")
-        guard type == promisedURLType || type == .fileURL else { return }
+        guard type == .fileURL else { return }
         MainActor.assumeIsolated {
             guard let controller, let client else { return }
             // 如果 MioTerm 仍是前台活跃应用，说明不是用户在访达等外部应用按 ⌘V 粘贴，直接忽略。
             guard !NSApp.isActive else { return }
-            let pasteDir = RDPController.currentFinderPasteLocation()
             let frontApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
-            FileLogger.shared.info("RDP 剪贴板按需触发粘贴: frontApp=\(frontApp) dest=\(pasteDir?.path ?? "staging") files=\(summary.names.count) bytes=\(summary.totalBytes)")
+            FileLogger.shared.info("RDP 剪贴板按需触发粘贴: frontApp=\(frontApp) files=\(summary.names.count) bytes=\(summary.totalBytes)")
             let itemIndex = items.firstIndex(where: { $0 === item }) ?? 0
 
             if let cachedURLs {
                 if itemIndex < cachedURLs.count {
-                    item.setString(cachedURLs[itemIndex].absoluteString, forType: type)
+                    item.setString(cachedURLs[itemIndex].absoluteString, forType: .fileURL)
                 }
                 return
             }
 
-            if RDPController.isLargeRemoteTransfer(summary) {
-                let urls = controller.startStreamingLargeFilePaste(
-                    client: client,
-                    summary: summary,
-                    destinationDirectory: pasteDir
-                )
-                cachedURLs = urls
-                if itemIndex < urls.count {
-                    item.setString(urls[itemIndex].absoluteString, forType: type)
-                }
-                return
-            }
-
-            let urls = controller.fulfillLazyFilePasteSynchronously(
-                client: client,
-                summary: summary,
-                destinationDirectory: pasteDir
-            )
+            let urls = controller.fulfillLazyFilePasteSynchronously(client: client, summary: summary)
             cachedURLs = urls
             if itemIndex < urls.count {
-                item.setString(urls[itemIndex].absoluteString, forType: type)
+                item.setString(urls[itemIndex].absoluteString, forType: .fileURL)
             }
         }
     }
