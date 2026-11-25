@@ -1,7 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
 import MioTermCore
-import UniformTypeIdentifiers
 
 enum RDPResolutionMode: Equatable {
     case fitWindow
@@ -66,28 +65,16 @@ final class RDPController: SessionControlling {
 
     private static let rdpClipboardDidUpdateNotification = Notification.Name("MioTermRDPClipboardDidUpdate")
     private static let displayPreferencesKey = "MioTerm.rdpDisplayPreferences"
-    /// 超过 50 MB 的文件不走访达同步剪贴板回调（避免阻塞访达转圈卡死与 60 秒 IPC 超时），
-    /// 改在切出 MioTerm 时弹出右上角轻量浮窗，由用户一键流式保存到「下载」或任意自选目录。
-    private static let largeFilePromptThresholdBytes: UInt64 = 50 * 1024 * 1024
-    private static var recentClipboardStagingDirs: [URL] = []
-    private static var lazyPasteboardChangeCount: Int = -1
-    private static var latestRemoteClipboardSource: RemoteClipboardFileSource?
+    private static let activeControllers = NSHashTable<RDPController>.weakObjects()
 
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
     private var clipboardObserver: NSObjectProtocol?
-    private var resignActiveObserver: NSObjectProtocol?
-    private var becomeActiveObserver: NSObjectProtocol?
-    private var globalPasteKeyMonitor: Any?
-    private var pendingGlobalPasteLargeFile: RDPClient.RemoteClipboardFileSummary?
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
     private var clipboardPollTask: Task<Void, Never>?
     private var clipboardFetchTask: Task<Void, Never>?
-    private var pendingRemoteFileSummary: RDPClient.RemoteClipboardFileSummary?
-    private var activeLazyPasteboardProvider: LazyRDPFilePasteboardProvider?
     private var isDownloadingClipboardFiles = false
-    private var swallowingRelayPasteKeyUp = false
     private var lastSyncedPasteboardChangeCount: Int = -1
     private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
@@ -103,6 +90,7 @@ final class RDPController: SessionControlling {
     init(host: HostProfile) {
         self.host = host
         self.title = host.displayName
+        Self.activeControllers.add(self)
         loadSavedDisplaySettings()
         wireView()
         clipboardObserver = NotificationCenter.default.addObserver(
@@ -115,42 +103,11 @@ final class RDPController: SessionControlling {
                 self.syncLocalPasteboardToRemote()
             }
         }
-        resignActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.publishPendingRemoteFilesIfNeeded()
-            }
-        }
-        becomeActiveObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.removeGlobalPasteKeyMonitor()
-                guard !self.isDownloadingClipboardFiles else { return }
-                // 切回 MioTerm 时自动收起尚未点击的大文件下载提示，不打扰在 Windows 内的继续操作。
-                RDPClipboardTransferHUD.shared.dismiss()
-            }
-        }
     }
 
     deinit {
         if let clipboardObserver {
             NotificationCenter.default.removeObserver(clipboardObserver)
-        }
-        if let resignActiveObserver {
-            NotificationCenter.default.removeObserver(resignActiveObserver)
-        }
-        if let becomeActiveObserver {
-            NotificationCenter.default.removeObserver(becomeActiveObserver)
-        }
-        if let globalPasteKeyMonitor {
-            NSEvent.removeMonitor(globalPasteKeyMonitor)
         }
     }
 
@@ -332,12 +289,6 @@ final class RDPController: SessionControlling {
         clipboardPollTask = nil
         clipboardFetchTask?.cancel()
         clipboardFetchTask = nil
-        pendingRemoteFileSummary = nil
-        removeGlobalPasteKeyMonitor()
-        activeLazyPasteboardProvider = nil
-        if Self.latestRemoteClipboardSource?.controller === self {
-            Self.latestRemoteClipboardSource = nil
-        }
         if isDownloadingClipboardFiles {
             isDownloadingClipboardFiles = false
             client?.cancelRemoteClipboardDownload()
@@ -370,18 +321,11 @@ final class RDPController: SessionControlling {
         guard clipboardReady, let client else { return }
         let pasteboard = NSPasteboard.general
         let changeCount = pasteboard.changeCount
-        guard changeCount != lastSyncedPasteboardChangeCount,
-              changeCount != Self.lazyPasteboardChangeCount else { return }
+        guard changeCount != lastSyncedPasteboardChangeCount else { return }
         lastSyncedPasteboardChangeCount = changeCount
 
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
-           !urls.isEmpty {
-            Self.latestRemoteClipboardSource = nil
-            client.sendClipboardFilesAsync(urls)
-            return
-        }
+        // 剪贴板仅同步纯文本（Mac ↔ RDP、RDP ↔ RDP），文件一律走右上角「文件传输」菜单。
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
-            Self.latestRemoteClipboardSource = nil
             client.sendClipboardTextAsync(text)
         }
     }
@@ -389,42 +333,9 @@ final class RDPController: SessionControlling {
     private func handleRemoteClipboardChanged(hasText: Bool, hasFiles: Bool, client: RDPClient) {
         clipboardFetchTask?.cancel()
         clipboardFetchTask = nil
-        if hasFiles {
-            clipboardFetchTask = Task.detached(priority: .userInitiated) { [weak self, weak client] in
-                // 合并 Windows Explorer 短时间内连发两次 ServerFormatList 的抖动。
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                guard !Task.isCancelled, let client else { return }
-                // 按需流式粘贴：复制时仅拉取极小的 FileGroupDescriptorW 文件列表（约几百字节，瞬间完成），
-                // 不主动下载文件内容；只有真正在 Mac 访达按 ⌘V 时才开始流式拉取。
-                guard let summary = client.listRemoteClipboardFiles() else { return }
-                await MainActor.run { [weak self, weak client] in
-                    guard let self, let client, self.client === client, !Task.isCancelled else { return }
-                    self.clipboardFetchTask = nil
-                    self.pendingRemoteFileSummary = summary
-                    Self.latestRemoteClipboardSource = RemoteClipboardFileSource(
-                        controller: self,
-                        client: client,
-                        hostName: self.title,
-                        summary: summary
-                    )
-                    // 如果用户当前就在 MioTerm 窗口内操作（比如在 Windows 里复制/移动文件，或在两个 RDP 之间导文件），
-                    // 绝不立刻写入 Mac 剪贴板，避免触发系统 Universal Clipboard 或剪贴板监听工具提前拉取；
-                    // 仅当用户切到访达等其他 Mac 应用（didResignActive）时，才把延迟项挂到 Mac 剪贴板。
-                    if !NSApp.isActive {
-                        self.publishPendingRemoteFilesIfNeeded()
-                    }
-                }
-            }
-            return
-        }
-        pendingRemoteFileSummary = nil
-        if Self.latestRemoteClipboardSource?.controller === self {
-            Self.latestRemoteClipboardSource = nil
-        }
-        if !isDownloadingClipboardFiles {
-            onTitleChange?(title)
-        }
-        guard hasText else { return }
+        // 文件不自动写入 Mac 剪贴板，避免干扰 Windows 内部移动/复制文件或触发访达阻塞弹窗；
+        // 用户可通过右上角「文件传输」随时下载已复制的文件或直传给其他 RDP 主机。
+        guard hasText, !hasFiles else { return }
         clipboardFetchTask = Task.detached(priority: .userInitiated) { [weak self, weak client] in
             guard let client, let text = client.fetchRemoteClipboardText(), !text.isEmpty else { return }
             await MainActor.run { [weak self, weak client] in
@@ -438,75 +349,105 @@ final class RDPController: SessionControlling {
         }
     }
 
-    private func publishPendingRemoteFilesIfNeeded() {
-        guard let summary = pendingRemoteFileSummary, let client else { return }
-        pendingRemoteFileSummary = nil
-        if let source = Self.latestRemoteClipboardSource,
-           source.controller === self,
-           let cached = source.cachedStagedURLs, !cached.isEmpty {
-            let pasteboard = NSPasteboard.general
-            pasteboard.prepareForNewContents(with: .currentHostOnly)
-            pasteboard.writeObjects(cached as [NSURL])
-            lastSyncedPasteboardChangeCount = pasteboard.changeCount
-            return
-        }
-        // 无论文件大小，切出 MioTerm 时都不弹任何浮窗、不下载任何字节。
-        // 对于 > 50 MB 的大文件：
-        // - 若已授予辅助功能权限（AXIsProcessTrusted），不写 .fileURL 到访达剪贴板，
-        //   仅挂一个临时全局 ⌘V 监听，按下 ⌘V 直接流式下载，彻底消除访达“不能粘贴”报错弹窗；
-        // - 未授权时自动回退到 .fileURL 延迟项以保证按 ⌘V 依然可用。
-        if Self.isLargeRemoteTransfer(summary) {
-            let axTrusted = AXIsProcessTrusted()
-            FileLogger.shared.info("RDP 大文件切出准备: bytes=\(summary.totalBytes) axTrusted=\(axTrusted)")
-            if axTrusted {
-                installGlobalPasteMonitorForLargeFile(summary: summary, client: client)
-                return
-            }
-        }
-        installLazyFilePasteboard(summary: summary, client: client)
+    // MARK: - 文件传输（右上角「文件传输」菜单入口）
+
+    func otherConnectedRDPControllers() -> [RDPController] {
+        Self.activeControllers.allObjects
+            .filter { $0 !== self && $0.state == .running && $0.clipboardReady && $0.client != nil }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
-    private func installGlobalPasteMonitorForLargeFile(
-        summary: RDPClient.RemoteClipboardFileSummary,
-        client: RDPClient
-    ) {
-        removeGlobalPasteKeyMonitor()
-        // 清空可能残留的旧 .fileURL，避免在访达按 ⌘V 时把上一次的文件误贴出来或弹报错框。
-        let pasteboard = NSPasteboard.general
-        pasteboard.prepareForNewContents(with: .currentHostOnly)
-        lastSyncedPasteboardChangeCount = pasteboard.changeCount
-        Self.lazyPasteboardChangeCount = pasteboard.changeCount
+    /// Mac → 当前 RDP：选择本地文件/文件夹推送到远程 Windows 并粘贴到当前焦点窗口。
+    func uploadFilesFromMac() {
+        guard clipboardReady, client != nil else { return }
+        let openPanel = NSOpenPanel()
+        openPanel.title = "选择要上传到 \(title) 的文件或文件夹"
+        openPanel.prompt = "上传"
+        openPanel.canChooseFiles = true
+        openPanel.canChooseDirectories = true
+        openPanel.allowsMultipleSelection = true
+        if openPanel.runModal() == .OK, !openPanel.urls.isEmpty {
+            sendFiles(openPanel.urls)
+        }
+    }
 
-        pendingGlobalPasteLargeFile = summary
-        globalPasteKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self, weak client] event in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard Int(event.keyCode) == kVK_ANSI_V, flags == .command else { return }
-            Task { @MainActor [weak self, weak client] in
-                guard let self, let client, self.client === client,
-                      !NSApp.isActive,
-                      let pending = self.pendingGlobalPasteLargeFile else { return }
-                let frontBundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-                guard frontBundle == "com.apple.finder" else { return }
-                FileLogger.shared.info("RDP 全局 ⌘V 触发大文件流式下载: files=\(pending.names.count) bytes=\(pending.totalBytes)")
-                self.removeGlobalPasteKeyMonitor()
-                self.startDirectLargeFileDownload(client: client, summary: pending)
+    /// 当前 RDP → Mac：流式下载远端已按 Ctrl+C 复制的文件到本地「下载」目录或自选目录。
+    func downloadCopiedRemoteFiles(chooseDirectory: Bool) {
+        guard clipboardReady, let client else { return }
+        guard !isDownloadingClipboardFiles else { return }
+
+        Task.detached(priority: .userInitiated) { [weak self, weak client] in
+            guard let client else { return }
+            let summary = client.listRemoteClipboardFiles()
+            await MainActor.run { [weak self, weak client] in
+                guard let self, let client, self.client === client else { return }
+                guard let summary else {
+                    let alert = NSAlert()
+                    alert.messageText = "未检测到可下载的文件"
+                    alert.informativeText = "请先在 \(self.title) 中选中文件或文件夹并按 Ctrl+C 复制，再点击下载。"
+                    alert.addButton(withTitle: "好")
+                    alert.runModal()
+                    return
+                }
+                if chooseDirectory {
+                    self.chooseDirectoryAndDownload(client: client, summary: summary)
+                } else {
+                    self.startDirectDownload(client: client, summary: summary, customDirectory: nil)
+                }
             }
         }
     }
 
-    private func removeGlobalPasteKeyMonitor() {
-        pendingGlobalPasteLargeFile = nil
-        if let monitor = globalPasteKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            globalPasteKeyMonitor = nil
+    /// 当前 RDP A → 目标 RDP B：零落盘直通流式转发（一边从 A 拉片一边传给 B）。
+    func relayCopiedFiles(to target: RDPController) {
+        guard clipboardReady, let sourceClient = client,
+              target.clipboardReady, let targetClient = target.client else { return }
+
+        Task.detached(priority: .userInitiated) { [weak self, weak sourceClient, weak target, weak targetClient] in
+            guard let sourceClient, let targetClient else { return }
+            let summary = sourceClient.listRemoteClipboardFiles()
+            await MainActor.run { [weak self, weak sourceClient, weak target, weak targetClient] in
+                guard let self, let sourceClient, let target, let targetClient,
+                      self.client === sourceClient, target.client === targetClient else { return }
+                guard summary != nil else {
+                    let alert = NSAlert()
+                    alert.messageText = "未检测到可传输的文件"
+                    alert.informativeText = "请先在 \(self.title) 中选中文件或文件夹并按 Ctrl+C 复制，再发送到 \(target.title)。"
+                    alert.addButton(withTitle: "好")
+                    alert.runModal()
+                    return
+                }
+                target.desktopView.window?.makeKeyAndOrderFront(nil)
+                target.focus()
+                target.syncModifiers([])
+                targetClient.relayClipboardFilesAsync(from: sourceClient) { [weak target, weak targetClient] ok in
+                    guard ok else { return }
+                    Task { @MainActor [weak target, weak targetClient] in
+                        try? await Task.sleep(nanoseconds: 150_000_000)
+                        guard let target, let targetClient,
+                              target.client === targetClient, target.state == .running else { return }
+                        targetClient.sendScancode(0x1D, down: true)
+                        targetClient.sendScancode(0x2F, down: true)
+                        targetClient.sendScancode(0x2F, down: false)
+                        targetClient.sendScancode(0x1D, down: false)
+                    }
+                }
+            }
         }
     }
 
-    private func chooseDirectoryAndDownloadLargeFiles(
+    /// 打开本地共享目录（在 Windows 资源管理器中已映射为 \\tsclient\Downloads）。
+    func openLocalSharedFolder() {
+        let dirPath = client?.sharedDirectory
+            ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path
+            ?? NSHomeDirectory()
+        NSWorkspace.shared.open(URL(fileURLWithPath: dirPath, isDirectory: true))
+    }
+
+    private func chooseDirectoryAndDownload(
         client: RDPClient,
         summary: RDPClient.RemoteClipboardFileSummary
     ) {
-        NSApp.activate(ignoringOtherApps: true)
         let openPanel = NSOpenPanel()
         openPanel.title = "选择保存目录"
         openPanel.prompt = "保存到此目录"
@@ -516,16 +457,14 @@ final class RDPController: SessionControlling {
         openPanel.allowsMultipleSelection = false
         openPanel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         if openPanel.runModal() == .OK, let dir = openPanel.url {
-            startDirectLargeFileDownload(client: client, summary: summary, customDirectory: dir)
-        } else {
-            RDPClipboardTransferHUD.shared.dismiss()
+            startDirectDownload(client: client, summary: summary, customDirectory: dir)
         }
     }
 
-    fileprivate func startDirectLargeFileDownload(
+    private func startDirectDownload(
         client: RDPClient,
         summary: RDPClient.RemoteClipboardFileSummary,
-        customDirectory: URL? = nil
+        customDirectory: URL?
     ) {
         guard self.client === client else { return }
         let rootDir = customDirectory
@@ -536,7 +475,7 @@ final class RDPController: SessionControlling {
         let destinationLabel = customDirectory?.lastPathComponent ?? "下载目录"
 
         isDownloadingClipboardFiles = true
-        onTitleChange?("\(title) · 正在接收大文件…")
+        onTitleChange?("\(title) · 正在接收文件…")
         RDPClipboardTransferHUD.shared.show(
             hostName: title,
             fileSummary: fileSummary,
@@ -559,13 +498,9 @@ final class RDPController: SessionControlling {
                     }
                     return
                 }
-                let pasteboard = NSPasteboard.general
-                pasteboard.prepareForNewContents(with: .currentHostOnly)
-                pasteboard.writeObjects(urls as [NSURL])
-                self.lastSyncedPasteboardChangeCount = pasteboard.changeCount
                 RDPClipboardTransferHUD.shared.markCompleted(
                     savedURLs: urls,
-                    message: "已保存至「\(destinationLabel)」，可直接打开或再次 ⌘V 粘贴"
+                    message: "已保存至「\(destinationLabel)」"
                 )
             }
         }
@@ -582,103 +517,6 @@ final class RDPController: SessionControlling {
         return root.appendingPathComponent("MioTerm-\(formatter.string(from: Date()))", isDirectory: true)
     }
 
-    private func installLazyFilePasteboard(summary: RDPClient.RemoteClipboardFileSummary, client: RDPClient) {
-        let provider = LazyRDPFilePasteboardProvider(controller: self, client: client, summary: summary)
-        let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
-
-        // 访达的 ⌘V 粘贴仅识别 public.file-url (.fileURL)；配合 NSPasteboardItemDataProvider，
-        // 在 Windows 按 Ctrl+C 时零下载，仅在用户切到访达并按下 ⌘V 时才按需流式拉取并返回真实本地文件 URL。
-        let items: [NSPasteboardItem] = summary.names.map { _ in
-            let item = NSPasteboardItem()
-            item.setDataProvider(provider, forTypes: [.fileURL])
-            item.setData(Data(), forType: transientType)
-            return item
-        }
-        provider.items = items
-        activeLazyPasteboardProvider = provider
-
-        let pasteboard = NSPasteboard.general
-        // 必须指定 .currentHostOnly，禁止 macOS 通用剪贴板（useractivityd / Handoff）在后台偷读触发下载。
-        pasteboard.prepareForNewContents(with: .currentHostOnly)
-        pasteboard.writeObjects(items)
-        lastSyncedPasteboardChangeCount = pasteboard.changeCount
-        Self.lazyPasteboardChangeCount = pasteboard.changeCount
-    }
-
-    fileprivate func fulfillLazyFilePasteSynchronously(
-        client: RDPClient,
-        summary: RDPClient.RemoteClipboardFileSummary
-    ) -> [URL] {
-        guard self.client === client else { return [] }
-        let targetDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MioTermRDPClipboard", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let fileSummary = Self.formatFileSummary(summary.names)
-
-        isDownloadingClipboardFiles = true
-        onTitleChange?("\(title) · 正在同步剪贴板文件…")
-
-        let showHUDImmediately = summary.totalBytes >= 5 * 1024 * 1024
-        var hudShown = false
-        if showHUDImmediately {
-            hudShown = true
-            RDPClipboardTransferHUD.shared.show(
-                hostName: title,
-                fileSummary: fileSummary,
-                destinationText: "访达粘贴",
-                totalBytes: summary.totalBytes,
-                onCancel: { client.cancelRemoteClipboardDownload() }
-            )
-        }
-
-        let box = SyncDownloadResultBox()
-        let startDate = Date()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let urls = client.downloadRemoteClipboardFiles(to: targetDir)
-            box.finish(urls: urls)
-        }
-
-        while !box.isDone {
-            let elapsed = Date().timeIntervalSince(startDate)
-            if elapsed >= 25.0 {
-                // 防止同步剪贴板回调长时间阻塞导致访达或 MioTerm 卡死。
-                client.cancelRemoteClipboardDownload()
-                break
-            }
-            if !hudShown && elapsed >= 0.35 {
-                hudShown = true
-                RDPClipboardTransferHUD.shared.show(
-                    hostName: title,
-                    fileSummary: fileSummary,
-                    destinationText: "访达粘贴",
-                    totalBytes: summary.totalBytes,
-                    onCancel: { client.cancelRemoteClipboardDownload() }
-                )
-            }
-            if let event = NSApp.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.03), inMode: .default, dequeue: true) {
-                NSApp.sendEvent(event)
-            }
-        }
-
-        isDownloadingClipboardFiles = false
-        onTitleChange?(title)
-        if hudShown {
-            RDPClipboardTransferHUD.shared.dismiss()
-        }
-
-        let urls = box.urls
-        if urls.isEmpty {
-            try? FileManager.default.removeItem(at: targetDir)
-            return []
-        }
-        Self.registerClipboardStagingDir(targetDir)
-        return urls
-    }
-
-    fileprivate static func isLargeRemoteTransfer(_ summary: RDPClient.RemoteClipboardFileSummary) -> Bool {
-        summary.totalBytes > largeFilePromptThresholdBytes
-    }
-
     private static func formatFileSummary(_ names: [String]) -> String {
         guard let first = names.first else { return "远端文件" }
         return names.count == 1 ? first : "\(first) 等 \(names.count) 项"
@@ -693,43 +531,10 @@ final class RDPController: SessionControlling {
         if totalBytes > 0 {
             let pct = min(100, Int((Double(downloadedBytes) / Double(totalBytes)) * 100.0))
             let totalStr = formatter.string(fromByteCount: Int64(min(totalBytes, UInt64(Int64.max))))
-            onTitleChange?("\(title) · 正在同步剪贴板文件 \(pct)% (\(doneStr) / \(totalStr))…")
+            onTitleChange?("\(title) · 正在接收文件 \(pct)% (\(doneStr) / \(totalStr))…")
         } else {
-            onTitleChange?("\(title) · 正在同步剪贴板文件 (\(doneStr))…")
+            onTitleChange?("\(title) · 正在接收文件 (\(doneStr))…")
         }
-    }
-
-    private static func registerClipboardStagingDir(_ dir: URL) {
-        recentClipboardStagingDirs.append(dir)
-        // 保留最近 8 个中转目录，同时在超过 1 GB 时自动清理更早的中转目录（始终保留最新一次），
-        // 避免连续复制数 GB 大文件占满临时磁盘空间。
-        let maxTotalStagingBytes: UInt64 = 1024 * 1024 * 1024
-        while recentClipboardStagingDirs.count > 8 {
-            let obsolete = recentClipboardStagingDirs.removeFirst()
-            try? FileManager.default.removeItem(at: obsolete)
-        }
-        while recentClipboardStagingDirs.count > 1 && totalStagingBytes() > maxTotalStagingBytes {
-            let obsolete = recentClipboardStagingDirs.removeFirst()
-            try? FileManager.default.removeItem(at: obsolete)
-        }
-    }
-
-    private static func totalStagingBytes() -> UInt64 {
-        let fm = FileManager.default
-        var total: UInt64 = 0
-        for dir in recentClipboardStagingDirs {
-            guard let enumerator = fm.enumerator(
-                at: dir,
-                includingPropertiesForKeys: [.fileSizeKey],
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-            for case let fileURL as URL in enumerator {
-                if let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0 {
-                    total += UInt64(size)
-                }
-            }
-        }
-        return total
     }
 
     private func screenLogicalSize() -> CGSize {
@@ -858,27 +663,11 @@ final class RDPController: SessionControlling {
 
     private func handleKeyEvent(_ event: NSEvent, down: Bool) {
         guard let client else { return }
-        if !down && swallowingRelayPasteKeyUp && Int(event.keyCode) == kVK_ANSI_V {
-            swallowingRelayPasteKeyUp = false
-            return
-        }
         if down {
             syncModifiers(event.modifierFlags)
             if Int(event.keyCode) == kVK_ANSI_V,
                event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
                 syncLocalPasteboardToRemote()
-                if let source = Self.latestRemoteClipboardSource,
-                   source.controller !== self,
-                   let sourceController = source.controller,
-                   let sourceClient = source.client {
-                    swallowingRelayPasteKeyUp = true
-                    relayRemoteFilesFromAnotherRDP(
-                        source: source,
-                        sourceController: sourceController,
-                        sourceClient: sourceClient
-                    )
-                    return
-                }
             }
         }
         if let scancode = Self.rdpScancode(for: Int(event.keyCode)) {
@@ -889,34 +678,6 @@ final class RDPController: SessionControlling {
         for scalar in chars.unicodeScalars {
             if scalar.value <= 0xFFFF {
                 client.sendUnicode(UInt16(scalar.value), down: down)
-            }
-        }
-    }
-
-    /// 零落盘直通中间人模式：在 RDP A 复制文件后切到 RDP B 按 Ctrl+V / ⌘V 时，
-    /// 立刻把 A 的文件列表通告给 B 并触发粘贴；B 的资源管理器随即一边向 MioTerm 拉片、
-    /// MioTerm 一边从 A 拉片直接回传给 B，全程零落盘、零等待、B 端直接显示原生复制进度条。
-    private func relayRemoteFilesFromAnotherRDP(
-        source: RemoteClipboardFileSource,
-        sourceController: RDPController,
-        sourceClient: RDPClient
-    ) {
-        if let cached = source.cachedStagedURLs, !cached.isEmpty {
-            sendFiles(cached)
-            return
-        }
-        guard clipboardReady, let targetClient = client else { return }
-        focus()
-        syncModifiers([])
-        targetClient.relayClipboardFilesAsync(from: sourceClient) { [weak self, weak targetClient] ok in
-            guard ok else { return }
-            Task { @MainActor [weak self, weak targetClient] in
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                guard let self, let targetClient, self.client === targetClient, self.state == .running else { return }
-                targetClient.sendScancode(0x1D, down: true)
-                targetClient.sendScancode(0x2F, down: true)
-                targetClient.sendScancode(0x2F, down: false)
-                targetClient.sendScancode(0x1D, down: false)
             }
         }
     }
@@ -1083,115 +844,4 @@ final class RDPController: SessionControlling {
     }
 
     func removeContextObserver(_ token: UUID?) {}
-}
-
-@MainActor
-private final class RemoteClipboardFileSource {
-    weak var controller: RDPController?
-    weak var client: RDPClient?
-    let hostName: String
-    let summary: RDPClient.RemoteClipboardFileSummary
-    var cachedStagedURLs: [URL]?
-
-    init(
-        controller: RDPController,
-        client: RDPClient,
-        hostName: String,
-        summary: RDPClient.RemoteClipboardFileSummary
-    ) {
-        self.controller = controller
-        self.client = client
-        self.hostName = hostName
-        self.summary = summary
-    }
-}
-
-private final class SyncDownloadResultBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var done = false
-    private var result: [URL] = []
-
-    var isDone: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return done
-    }
-
-    var urls: [URL] {
-        lock.lock()
-        defer { lock.unlock() }
-        return result
-    }
-
-    func finish(urls: [URL]) {
-        lock.lock()
-        result = urls
-        done = true
-        lock.unlock()
-    }
-}
-
-/// 延迟提供 RDP 剪贴板文件 URL：Windows 按 Ctrl+C 时不下载任何内容，
-/// 直到 Mac 端真正执行 ⌘V 粘贴时才触发流式拉取。
-@MainActor
-private final class LazyRDPFilePasteboardProvider: NSObject, NSPasteboardItemDataProvider {
-    private weak var controller: RDPController?
-    private weak var client: RDPClient?
-    private let summary: RDPClient.RemoteClipboardFileSummary
-    var items: [NSPasteboardItem] = []
-
-    private var cachedURLs: [URL]?
-    private var didStartLargeDownload = false
-
-    init(controller: RDPController, client: RDPClient, summary: RDPClient.RemoteClipboardFileSummary) {
-        self.controller = controller
-        self.client = client
-        self.summary = summary
-        super.init()
-    }
-
-    nonisolated func pasteboard(
-        _ pasteboard: NSPasteboard?,
-        item: NSPasteboardItem,
-        provideDataForType type: NSPasteboard.PasteboardType
-    ) {
-        guard type == .fileURL else { return }
-        MainActor.assumeIsolated {
-            guard let controller, let client else { return }
-            // 如果 MioTerm 仍是前台活跃应用，说明不是用户在访达等外部应用按 ⌘V 粘贴，直接忽略。
-            guard !NSApp.isActive else { return }
-            let frontApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
-            FileLogger.shared.info("RDP 剪贴板按需触发粘贴: frontApp=\(frontApp) files=\(summary.names.count) bytes=\(summary.totalBytes)")
-            let itemIndex = items.firstIndex(where: { $0 === item }) ?? 0
-
-            if let cachedURLs {
-                if itemIndex < cachedURLs.count {
-                    item.setString(cachedURLs[itemIndex].absoluteString, forType: .fileURL)
-                }
-                return
-            }
-
-            if RDPController.isLargeRemoteTransfer(summary) {
-                guard !didStartLargeDownload else { return }
-                didStartLargeDownload = true
-                // 超过 50 MB 的大文件在用户按下 ⌘V 后立刻弹出浮窗并在后台流式保存到「下载」目录，
-                // 不阻塞访达同步剪贴板导致卡死转圈。
-                controller.startDirectLargeFileDownload(client: client, summary: summary)
-                return
-            }
-
-            let urls = controller.fulfillLazyFilePasteSynchronously(client: client, summary: summary)
-            cachedURLs = urls
-            if itemIndex < urls.count {
-                item.setString(urls[itemIndex].absoluteString, forType: .fileURL)
-            }
-        }
-    }
-
-    nonisolated func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {
-        MainActor.assumeIsolated {
-            cachedURLs = nil
-            items = []
-        }
-    }
 }

@@ -95,6 +95,20 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         if let rdp = sessionController as? RDPController {
+            let transferButton = NSButton(
+                title: "文件传输",
+                image: NSImage(systemSymbolName: "arrow.up.arrow.down.circle", accessibilityDescription: "文件传输") ?? NSImage(),
+                target: self,
+                action: #selector(showFileTransferMenu(_:))
+            )
+            transferButton.imagePosition = .imageLeading
+            transferButton.bezelStyle = .accessoryBarAction
+            transferButton.controlSize = .small
+            transferButton.font = .systemFont(ofSize: 11, weight: .medium)
+            transferButton.toolTip = "在 Mac 与远程 Windows（或另一台 RDP 主机）之间传输文件"
+            transferButton.sizeToFit()
+            stack.addArrangedSubview(transferButton)
+
             let refreshButton = NSButton(
                 image: NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "按当前分辨率刷新") ?? NSImage(),
                 target: self,
@@ -175,6 +189,100 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         ])
         accessory.view = container
         window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    @objc private func showFileTransferMenu(_ sender: NSButton) {
+        guard let rdp = sessionController as? RDPController else { return }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let uploadItem = NSMenuItem(
+            title: "上传文件到 \(rdp.title)…",
+            action: #selector(handleUploadFiles),
+            keyEquivalent: ""
+        )
+        uploadItem.target = self
+        uploadItem.image = NSImage(systemSymbolName: "arrow.up.doc", accessibilityDescription: nil)
+        menu.addItem(uploadItem)
+
+        menu.addItem(.separator())
+
+        let downloadDefaultItem = NSMenuItem(
+            title: "下载已复制的文件（到「下载」目录）",
+            action: #selector(handleDownloadCopiedFilesToDefault),
+            keyEquivalent: ""
+        )
+        downloadDefaultItem.target = self
+        downloadDefaultItem.image = NSImage(systemSymbolName: "arrow.down.doc", accessibilityDescription: nil)
+        menu.addItem(downloadDefaultItem)
+
+        let downloadAsItem = NSMenuItem(
+            title: "下载已复制的文件（另存为…）",
+            action: #selector(handleDownloadCopiedFilesAs),
+            keyEquivalent: ""
+        )
+        downloadAsItem.target = self
+        downloadAsItem.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: nil)
+        menu.addItem(downloadAsItem)
+
+        let relayMenuItem = NSMenuItem(title: "发送已复制的文件到其他 RDP 主机", action: nil, keyEquivalent: "")
+        relayMenuItem.image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: nil)
+        let relaySubmenu = NSMenu()
+        let others = rdp.otherConnectedRDPControllers()
+        if others.isEmpty {
+            let empty = NSMenuItem(title: "暂无其他已连接的 RDP 主机", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            relaySubmenu.addItem(empty)
+        } else {
+            for target in others {
+                let item = NSMenuItem(
+                    title: target.title,
+                    action: #selector(handleRelayToOtherRDP(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = target
+                relaySubmenu.addItem(item)
+            }
+        }
+        relayMenuItem.submenu = relaySubmenu
+        menu.addItem(relayMenuItem)
+
+        menu.addItem(.separator())
+
+        let openSharedItem = NSMenuItem(
+            title: "打开本地共享目录（\\\\tsclient\\Downloads）",
+            action: #selector(handleOpenSharedFolder),
+            keyEquivalent: ""
+        )
+        openSharedItem.target = self
+        openSharedItem.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
+        menu.addItem(openSharedItem)
+
+        let point = NSPoint(x: 0, y: sender.bounds.height + 4)
+        menu.popUp(positioning: nil, at: point, in: sender)
+    }
+
+    @objc private func handleUploadFiles() {
+        (sessionController as? RDPController)?.uploadFilesFromMac()
+    }
+
+    @objc private func handleDownloadCopiedFilesToDefault() {
+        (sessionController as? RDPController)?.downloadCopiedRemoteFiles(chooseDirectory: false)
+    }
+
+    @objc private func handleDownloadCopiedFilesAs() {
+        (sessionController as? RDPController)?.downloadCopiedRemoteFiles(chooseDirectory: true)
+    }
+
+    @objc private func handleRelayToOtherRDP(_ sender: NSMenuItem) {
+        guard let rdp = sessionController as? RDPController,
+              let target = sender.representedObject as? RDPController else { return }
+        rdp.relayCopiedFiles(to: target)
+    }
+
+    @objc private func handleOpenSharedFolder() {
+        (sessionController as? RDPController)?.openLocalSharedFolder()
     }
 
     @objc private func displayOptionChanged(_ sender: Any?) {
