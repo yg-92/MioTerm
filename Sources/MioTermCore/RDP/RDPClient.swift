@@ -103,13 +103,26 @@ public final class RDPClient: @unchecked Sendable {
         let clampedX = UInt16(clamping: max(0, x))
         let clampedY = UInt16(clamping: max(0, y))
 
-        // 鼠标滚轮脉冲（VNC buttonMask bit 3=up, 4=down）
+        // 鼠标滚轮脉冲（VNC buttonMask bit 3=上, 4=下, 5=左, 6=右）
+        // [MS-RDPBCGR] 2.2.8.1.1.3.1.1.3：WheelRotationMask(0x01FF) 为 9 位补码，+120 = 0x0078，-120 = 0x0188。
         if (buttonMask & (1 << 3)) != 0 && (previousMask & (1 << 3)) == 0 {
-            mio_rdp_send_mouse(activeSession, 0x0200 | 0x0078, clampedX, clampedY) // PTR_FLAGS_WHEEL + 120
+            mio_rdp_send_mouse(activeSession, 0x0200 | 0x0078, clampedX, clampedY) // PTR_FLAGS_WHEEL (+120)
             return
         }
         if (buttonMask & (1 << 4)) != 0 && (previousMask & (1 << 4)) == 0 {
-            mio_rdp_send_mouse(activeSession, 0x0200 | 0x0100 | 0x0078, clampedX, clampedY) // PTR_FLAGS_WHEEL | NEGATIVE
+            mio_rdp_send_mouse(activeSession, 0x0200 | 0x0188, clampedX, clampedY) // PTR_FLAGS_WHEEL (-120)
+            return
+        }
+        if (buttonMask & (1 << 5)) != 0 && (previousMask & (1 << 5)) == 0 {
+            mio_rdp_send_mouse(activeSession, 0x0400 | 0x0188, clampedX, clampedY) // PTR_FLAGS_HWHEEL (-120, 左滚)
+            return
+        }
+        if (buttonMask & (1 << 6)) != 0 && (previousMask & (1 << 6)) == 0 {
+            mio_rdp_send_mouse(activeSession, 0x0400 | 0x0078, clampedX, clampedY) // PTR_FLAGS_HWHEEL (+120, 右滚)
+            return
+        }
+        // 滚轮脉冲的复位事件不需要再补发一次鼠标移动。
+        if (previousMask & 0x78) != 0 && (buttonMask & 0x78) == 0 && (buttonMask & 0x07) == (previousMask & 0x07) {
             return
         }
 
