@@ -442,22 +442,8 @@ final class RDPController: SessionControlling {
             lastSyncedPasteboardChangeCount = pasteboard.changeCount
             return
         }
-        if summary.totalBytes > Self.largeFilePromptThresholdBytes {
-            RDPClipboardTransferHUD.shared.showLargeFilePrompt(
-                hostName: title,
-                fileSummary: Self.formatFileSummary(summary.names),
-                totalBytes: summary.totalBytes,
-                onDownloadToDownloads: { [weak self, weak client] in
-                    guard let self, let client else { return }
-                    self.startDirectLargeFileDownload(client: client, summary: summary, customDirectory: nil)
-                },
-                onChooseDirectory: { [weak self, weak client] in
-                    guard let self, let client else { return }
-                    self.chooseDirectoryAndDownloadLargeFiles(client: client, summary: summary)
-                }
-            )
-            return
-        }
+        // 无论文件大小，切出 MioTerm 时都不弹任何浮窗、不下载任何字节；
+        // 统一只挂 .fileURL 延迟项，必须等用户在访达真正按下 ⌘V 时才触发拉取或弹出下载浮窗。
         installLazyFilePasteboard(summary: summary, client: client)
     }
 
@@ -481,10 +467,10 @@ final class RDPController: SessionControlling {
         }
     }
 
-    private func startDirectLargeFileDownload(
+    fileprivate func startDirectLargeFileDownload(
         client: RDPClient,
         summary: RDPClient.RemoteClipboardFileSummary,
-        customDirectory: URL?
+        customDirectory: URL? = nil
     ) {
         guard self.client === client else { return }
         let rootDir = customDirectory
@@ -632,6 +618,10 @@ final class RDPController: SessionControlling {
         }
         Self.registerClipboardStagingDir(targetDir)
         return urls
+    }
+
+    fileprivate static func isLargeRemoteTransfer(_ summary: RDPClient.RemoteClipboardFileSummary) -> Bool {
+        summary.totalBytes > largeFilePromptThresholdBytes
     }
 
     private static func formatFileSummary(_ names: [String]) -> String {
@@ -1144,6 +1134,15 @@ private final class LazyRDPFilePasteboardProvider: NSObject, NSPasteboardItemDat
                 if itemIndex < cachedURLs.count {
                     item.setString(cachedURLs[itemIndex].absoluteString, forType: .fileURL)
                 }
+                return
+            }
+
+            if RDPController.isLargeRemoteTransfer(summary) {
+                guard !didStartLargeDownload else { return }
+                didStartLargeDownload = true
+                // 超过 50 MB 的大文件在用户按下 ⌘V 后立刻弹出浮窗并在后台流式保存到「下载」目录，
+                // 不阻塞访达同步剪贴板导致卡死转圈。
+                controller.startDirectLargeFileDownload(client: client, summary: summary)
                 return
             }
 
