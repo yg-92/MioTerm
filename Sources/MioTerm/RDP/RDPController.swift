@@ -66,6 +66,7 @@ final class RDPController: SessionControlling {
     private static let rdpClipboardDidUpdateNotification = Notification.Name("MioTermRDPClipboardDidUpdate")
     private static let displayPreferencesKey = "MioTerm.rdpDisplayPreferences"
     private static let activeControllers = NSHashTable<RDPController>.weakObjects()
+    private static weak var latestRemoteFileSourceController: RDPController?
 
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
     private var clipboardObserver: NSObjectProtocol?
@@ -75,6 +76,7 @@ final class RDPController: SessionControlling {
     private var clipboardPollTask: Task<Void, Never>?
     private var clipboardFetchTask: Task<Void, Never>?
     private var isDownloadingClipboardFiles = false
+    private var swallowingRelayPasteKeyUp = false
     private var lastSyncedPasteboardChangeCount: Int = -1
     private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
@@ -289,6 +291,9 @@ final class RDPController: SessionControlling {
         clipboardPollTask = nil
         clipboardFetchTask?.cancel()
         clipboardFetchTask = nil
+        if Self.latestRemoteFileSourceController === self {
+            Self.latestRemoteFileSourceController = nil
+        }
         if isDownloadingClipboardFiles {
             isDownloadingClipboardFiles = false
             client?.cancelRemoteClipboardDownload()
@@ -324,8 +329,9 @@ final class RDPController: SessionControlling {
         guard changeCount != lastSyncedPasteboardChangeCount else { return }
         lastSyncedPasteboardChangeCount = changeCount
 
-        // 剪贴板仅同步纯文本（Mac ↔ RDP、RDP ↔ RDP），文件一律走右上角「文件传输」菜单。
+        // 剪贴板仅同步纯文本（Mac ↔ RDP、RDP ↔ RDP），文件一律走右上角「文件传输」或双 RDP 之间的直通流式转发。
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            Self.latestRemoteFileSourceController = nil
             client.sendClipboardTextAsync(text)
         }
     }
@@ -333,9 +339,18 @@ final class RDPController: SessionControlling {
     private func handleRemoteClipboardChanged(hasText: Bool, hasFiles: Bool, client: RDPClient) {
         clipboardFetchTask?.cancel()
         clipboardFetchTask = nil
-        // 文件不自动写入 Mac 剪贴板，避免干扰 Windows 内部移动/复制文件或触发访达阻塞弹窗；
-        // 用户可通过右上角「文件传输」随时下载已复制的文件或直传给其他 RDP 主机。
-        guard hasText, !hasFiles else { return }
+        if hasFiles {
+            // 仅记录“哪台 RDP 刚刚复制了文件”（零流量、不碰 Mac 剪贴板）：
+            // - 在本机 Windows 内部 Ctrl+V 时完全不介入；
+            // - 切到另一台 RDP 选好目录后直接按 Ctrl+V / ⌘V 时，自动零落盘直通流式转发；
+            // - 需要传到 Mac 时，点右上角「文件传输 → 下载已复制的文件」即可。
+            Self.latestRemoteFileSourceController = self
+            return
+        }
+        if Self.latestRemoteFileSourceController === self {
+            Self.latestRemoteFileSourceController = nil
+        }
+        guard hasText else { return }
         clipboardFetchTask = Task.detached(priority: .userInitiated) { [weak self, weak client] in
             guard let client, let text = client.fetchRemoteClipboardText(), !text.isEmpty else { return }
             await MainActor.run { [weak self, weak client] in
@@ -661,13 +676,54 @@ final class RDPController: SessionControlling {
         client.sendScancode(0x1D, down: false)
     }
 
+    /// 若另一台已连接的 RDP 刚刚复制了文件，返回该来源会话（用于在当前窗口直接粘贴）。
+    func pendingFileSourceFromOtherRDP() -> RDPController? {
+        guard let source = Self.latestRemoteFileSourceController,
+              source !== self,
+              source.state == .running,
+              source.clipboardReady,
+              source.client != nil else {
+            return nil
+        }
+        return source
+    }
+
+    /// 在当前 RDP 窗口直接接收并粘贴来自另一台 RDP 已复制的文件（零落盘一边拉一边传）。
+    func pasteCopiedFilesFromOtherRDP(_ source: RDPController) {
+        guard clipboardReady, let targetClient = client,
+              source.clipboardReady, let sourceClient = source.client else { return }
+        focus()
+        syncModifiers([])
+        targetClient.relayClipboardFilesAsync(from: sourceClient) { [weak self, weak targetClient] ok in
+            guard ok else { return }
+            Task { @MainActor [weak self, weak targetClient] in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard let self, let targetClient,
+                      self.client === targetClient, self.state == .running else { return }
+                targetClient.sendScancode(0x1D, down: true)
+                targetClient.sendScancode(0x2F, down: true)
+                targetClient.sendScancode(0x2F, down: false)
+                targetClient.sendScancode(0x1D, down: false)
+            }
+        }
+    }
+
     private func handleKeyEvent(_ event: NSEvent, down: Bool) {
         guard let client else { return }
+        if !down && swallowingRelayPasteKeyUp && Int(event.keyCode) == kVK_ANSI_V {
+            swallowingRelayPasteKeyUp = false
+            return
+        }
         if down {
             syncModifiers(event.modifierFlags)
             if Int(event.keyCode) == kVK_ANSI_V,
                event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
                 syncLocalPasteboardToRemote()
+                if let source = pendingFileSourceFromOtherRDP() {
+                    swallowingRelayPasteKeyUp = true
+                    pasteCopiedFilesFromOtherRDP(source)
+                    return
+                }
             }
         }
         if let scancode = Self.rdpScancode(for: Int(event.keyCode)) {

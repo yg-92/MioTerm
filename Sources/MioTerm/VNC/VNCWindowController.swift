@@ -225,28 +225,17 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         downloadAsItem.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: nil)
         menu.addItem(downloadAsItem)
 
-        let relayMenuItem = NSMenuItem(title: "发送已复制的文件到其他 RDP 主机", action: nil, keyEquivalent: "")
-        relayMenuItem.image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: nil)
-        let relaySubmenu = NSMenu()
-        let others = rdp.otherConnectedRDPControllers()
-        if others.isEmpty {
-            let empty = NSMenuItem(title: "暂无其他已连接的 RDP 主机", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            relaySubmenu.addItem(empty)
-        } else {
-            for target in others {
-                let item = NSMenuItem(
-                    title: target.title,
-                    action: #selector(handleRelayToOtherRDP(_:)),
-                    keyEquivalent: ""
-                )
-                item.target = self
-                item.representedObject = target
-                relaySubmenu.addItem(item)
-            }
+        if let source = rdp.pendingFileSourceFromOtherRDP() {
+            let pasteFromOtherItem = NSMenuItem(
+                title: "粘贴来自 \(source.title) 的已复制文件（直通流式）",
+                action: #selector(handlePasteFromOtherRDP(_:)),
+                keyEquivalent: ""
+            )
+            pasteFromOtherItem.target = self
+            pasteFromOtherItem.representedObject = source
+            pasteFromOtherItem.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
+            menu.addItem(pasteFromOtherItem)
         }
-        relayMenuItem.submenu = relaySubmenu
-        menu.addItem(relayMenuItem)
 
         menu.addItem(.separator())
 
@@ -275,10 +264,10 @@ final class VNCWindowController: NSWindowController, NSWindowDelegate {
         (sessionController as? RDPController)?.downloadCopiedRemoteFiles(chooseDirectory: true)
     }
 
-    @objc private func handleRelayToOtherRDP(_ sender: NSMenuItem) {
+    @objc private func handlePasteFromOtherRDP(_ sender: NSMenuItem) {
         guard let rdp = sessionController as? RDPController,
-              let target = sender.representedObject as? RDPController else { return }
-        rdp.relayCopiedFiles(to: target)
+              let source = sender.representedObject as? RDPController else { return }
+        rdp.pasteCopiedFilesFromOtherRDP(source)
     }
 
     @objc private func handleOpenSharedFolder() {
