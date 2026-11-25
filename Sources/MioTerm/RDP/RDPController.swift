@@ -71,11 +71,13 @@ final class RDPController: SessionControlling {
 
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
     private var clipboardObserver: NSObjectProtocol?
+    private var resignActiveObserver: NSObjectProtocol?
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
     private var clipboardPollTask: Task<Void, Never>?
     private var clipboardFetchTask: Task<Void, Never>?
+    private var pendingRemoteFileSummary: RDPClient.RemoteClipboardFileSummary?
     private var activeLazyPasteboardProvider: LazyRDPFilePasteboardProvider?
     private var isDownloadingClipboardFiles = false
     private var lastSyncedPasteboardChangeCount: Int = -1
@@ -105,11 +107,23 @@ final class RDPController: SessionControlling {
                 self.syncLocalPasteboardToRemote()
             }
         }
+        resignActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.publishPendingRemoteFilesIfNeeded()
+            }
+        }
     }
 
     deinit {
         if let clipboardObserver {
             NotificationCenter.default.removeObserver(clipboardObserver)
+        }
+        if let resignActiveObserver {
+            NotificationCenter.default.removeObserver(resignActiveObserver)
         }
     }
 
@@ -291,6 +305,7 @@ final class RDPController: SessionControlling {
         clipboardPollTask = nil
         clipboardFetchTask?.cancel()
         clipboardFetchTask = nil
+        pendingRemoteFileSummary = nil
         activeLazyPasteboardProvider = nil
         if isDownloadingClipboardFiles {
             isDownloadingClipboardFiles = false
@@ -352,11 +367,18 @@ final class RDPController: SessionControlling {
                 await MainActor.run { [weak self, weak client] in
                     guard let self, let client, self.client === client, !Task.isCancelled else { return }
                     self.clipboardFetchTask = nil
-                    self.installLazyFilePasteboard(summary: summary, client: client)
+                    self.pendingRemoteFileSummary = summary
+                    // 如果用户当前就在 MioTerm 窗口内操作（比如在 Windows 里复制/移动文件），
+                    // 绝不立刻写入 Mac 剪贴板，避免触发系统 Universal Clipboard 或剪贴板监听工具提前拉取；
+                    // 仅当用户切到访达等其他 Mac 应用（didResignActive）时，才把延迟项挂到 Mac 剪贴板。
+                    if !NSApp.isActive {
+                        self.publishPendingRemoteFilesIfNeeded()
+                    }
                 }
             }
             return
         }
+        pendingRemoteFileSummary = nil
         if !isDownloadingClipboardFiles {
             onTitleChange?(title)
         }
@@ -374,6 +396,12 @@ final class RDPController: SessionControlling {
         }
     }
 
+    private func publishPendingRemoteFilesIfNeeded() {
+        guard let summary = pendingRemoteFileSummary, let client else { return }
+        pendingRemoteFileSummary = nil
+        installLazyFilePasteboard(summary: summary, client: client)
+    }
+
     private func installLazyFilePasteboard(summary: RDPClient.RemoteClipboardFileSummary, client: RDPClient) {
         let provider = LazyRDPFilePasteboardProvider(controller: self, client: client, summary: summary)
         let items: [NSPasteboardItem] = summary.names.map { _ in
@@ -387,7 +415,8 @@ final class RDPController: SessionControlling {
         activeLazyPasteboardProvider = provider
 
         let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
+        // 必须指定 .currentHostOnly，禁止 macOS 通用剪贴板（useractivityd / Handoff）在后台读取 .fileURL 提前触发下载。
+        pasteboard.prepareForNewContents(with: .currentHostOnly)
         pasteboard.writeObjects(items)
         lastSyncedPasteboardChangeCount = pasteboard.changeCount
         Self.lazyPasteboardChangeCount = pasteboard.changeCount
@@ -931,6 +960,10 @@ private final class LazyRDPFilePasteboardProvider: NSObject, NSPasteboardItemDat
         guard type == .fileURL else { return }
         MainActor.assumeIsolated {
             guard let controller, let client else { return }
+            // 如果 MioTerm 仍是前台活跃应用，说明不是用户在访达等外部应用按 ⌘V 粘贴，直接忽略。
+            guard !NSApp.isActive else { return }
+            let frontApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+            FileLogger.shared.info("RDP 剪贴板按需触发下载: frontApp=\(frontApp) files=\(summary.names.count) bytes=\(summary.totalBytes)")
             let itemIndex = items.firstIndex(where: { $0 === item }) ?? 0
 
             if let cachedURLs {
