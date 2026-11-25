@@ -210,6 +210,12 @@ final class RDPController: SessionControlling {
                 self.handleRemoteClipboardChanged(hasText: hasText, hasFiles: hasFiles, client: rdpClient)
             }
         }
+        rdpClient.onClipboardDownloadProgress = { [weak self, weak rdpClient] downloadedBytes, totalBytes in
+            Task { @MainActor [weak self, weak rdpClient] in
+                guard let self, let rdpClient, self.client === rdpClient, self.clipboardFetchTask != nil else { return }
+                self.updateClipboardDownloadProgress(downloadedBytes: downloadedBytes, totalBytes: totalBytes)
+            }
+        }
         rdpClient.onFrameReady = { [weak self, weak rdpClient] in
             Task { @MainActor [weak self, weak rdpClient] in
                 guard let self, let rdpClient, self.client === rdpClient else { return }
@@ -323,6 +329,7 @@ final class RDPController: SessionControlling {
 
     private func handleRemoteClipboardChanged(hasText: Bool, hasFiles: Bool, client: RDPClient) {
         clipboardFetchTask?.cancel()
+        clipboardFetchTask = nil
         if hasFiles {
             let baseTitle = title
             onTitleChange?("\(baseTitle) · 正在同步剪贴板文件…")
@@ -331,7 +338,8 @@ final class RDPController: SessionControlling {
                 try? await Task.sleep(nanoseconds: 120_000_000)
                 guard !Task.isCancelled, let client else {
                     await MainActor.run { [weak self] in
-                        guard let self else { return }
+                        guard let self, !Task.isCancelled else { return }
+                        self.clipboardFetchTask = nil
                         self.onTitleChange?(self.title)
                     }
                     return
@@ -345,7 +353,10 @@ final class RDPController: SessionControlling {
                         try? FileManager.default.removeItem(at: stagingDir)
                         return
                     }
-                    self.onTitleChange?(self.title)
+                    if !Task.isCancelled {
+                        self.clipboardFetchTask = nil
+                        self.onTitleChange?(self.title)
+                    }
                     guard let client, self.client === client, !Task.isCancelled, !urls.isEmpty else {
                         try? FileManager.default.removeItem(at: stagingDir)
                         return
@@ -360,6 +371,7 @@ final class RDPController: SessionControlling {
             }
             return
         }
+        onTitleChange?(title)
         guard hasText else { return }
         clipboardFetchTask = Task.detached(priority: .userInitiated) { [weak self, weak client] in
             guard let client, let text = client.fetchRemoteClipboardText(), !text.isEmpty else { return }
@@ -374,13 +386,51 @@ final class RDPController: SessionControlling {
         }
     }
 
+    private func updateClipboardDownloadProgress(downloadedBytes: UInt64, totalBytes: UInt64) {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        let doneStr = formatter.string(fromByteCount: Int64(min(downloadedBytes, UInt64(Int64.max))))
+        if totalBytes > 0 {
+            let pct = min(100, Int((Double(downloadedBytes) / Double(totalBytes)) * 100.0))
+            let totalStr = formatter.string(fromByteCount: Int64(min(totalBytes, UInt64(Int64.max))))
+            onTitleChange?("\(title) · 正在同步剪贴板文件 \(pct)% (\(doneStr) / \(totalStr))…")
+        } else {
+            onTitleChange?("\(title) · 正在同步剪贴板文件 (\(doneStr))…")
+        }
+    }
+
     private static func registerClipboardStagingDir(_ dir: URL) {
         recentClipboardStagingDirs.append(dir)
-        // 保留最近 8 个中转目录，避免并发传输或连续复制多次时正在读取的文件被提前清理。
+        // 保留最近 8 个中转目录，同时在超过 1 GB 时自动清理更早的中转目录（始终保留最新一次），
+        // 避免连续复制数 GB 大文件占满临时磁盘空间。
+        let maxTotalStagingBytes: UInt64 = 1024 * 1024 * 1024
         while recentClipboardStagingDirs.count > 8 {
             let obsolete = recentClipboardStagingDirs.removeFirst()
             try? FileManager.default.removeItem(at: obsolete)
         }
+        while recentClipboardStagingDirs.count > 1 && totalStagingBytes() > maxTotalStagingBytes {
+            let obsolete = recentClipboardStagingDirs.removeFirst()
+            try? FileManager.default.removeItem(at: obsolete)
+        }
+    }
+
+    private static func totalStagingBytes() -> UInt64 {
+        let fm = FileManager.default
+        var total: UInt64 = 0
+        for dir in recentClipboardStagingDirs {
+            guard let enumerator = fm.enumerator(
+                at: dir,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            for case let fileURL as URL in enumerator {
+                if let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0 {
+                    total += UInt64(size)
+                }
+            }
+        }
+        return total
     }
 
     private func screenLogicalSize() -> CGSize {

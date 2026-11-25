@@ -1725,7 +1725,7 @@ static uint8_t* request_remote_file_contents(
 
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 10;
+    ts.tv_sec += 30;
 
     bool timed_out = false;
     pthread_mutex_lock(&session->clip_lock);
@@ -1839,28 +1839,28 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     }
 
     const MioFileDescriptorW* descs = (const MioFileDescriptorW*)descs_raw;
-    if (max_total_bytes > 0) {
-        uint64_t declared_total = 0;
-        for (RdpUInt32 i = 0; i < count; i++) {
-            if ((descs[i].dwFileAttributes & MIO_FILE_ATTRIBUTE_DIRECTORY) == 0 &&
-                (descs[i].dwFlags & MIO_FD_FILESIZE) != 0) {
-                uint64_t sz = ((uint64_t)descs[i].nFileSizeHigh << 32) | (uint64_t)descs[i].nFileSizeLow;
-                if (sz > max_total_bytes || declared_total > max_total_bytes - sz) {
-                    char buf[160];
-                    snprintf(buf, sizeof(buf), "clipboard_download_remote_files skipped: exceeds max_total_bytes=%llu",
-                             (unsigned long long)max_total_bytes);
-                    shim_log(session, buf);
-                    free(descs_raw);
-                    if (have_lock) {
-                        MioCliprdrLockClipboardData unlock_req = {0};
-                        unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
-                        unlock_req.common.dataLen = 4;
-                        unlock_req.clipDataId = lock_id;
-                        cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
-                    }
-                    pthread_mutex_unlock(&session->clip_download_lock);
-                    return NULL;
+    uint64_t declared_total = 0;
+    for (RdpUInt32 i = 0; i < count; i++) {
+        if ((descs[i].dwFileAttributes & MIO_FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+            (descs[i].dwFlags & MIO_FD_FILESIZE) != 0) {
+            uint64_t sz = ((uint64_t)descs[i].nFileSizeHigh << 32) | (uint64_t)descs[i].nFileSizeLow;
+            if (max_total_bytes > 0 && (sz > max_total_bytes || declared_total > max_total_bytes - sz)) {
+                char buf[160];
+                snprintf(buf, sizeof(buf), "clipboard_download_remote_files skipped: exceeds max_total_bytes=%llu",
+                         (unsigned long long)max_total_bytes);
+                shim_log(session, buf);
+                free(descs_raw);
+                if (have_lock) {
+                    MioCliprdrLockClipboardData unlock_req = {0};
+                    unlock_req.common.msgType = MIO_CB_UNLOCK_CLIPDATA;
+                    unlock_req.common.dataLen = 4;
+                    unlock_req.clipDataId = lock_id;
+                    cliprdr->ClientUnlockClipboardData(cliprdr, &unlock_req);
                 }
+                pthread_mutex_unlock(&session->clip_download_lock);
+                return NULL;
+            }
+            if (UINT64_MAX - declared_total >= sz) {
                 declared_total += sz;
             }
         }
@@ -1899,6 +1899,11 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
     uint64_t downloaded_total = 0;
     bool all_ok = true;
     const char* fail_step = "none";
+    struct timespec last_progress_ts = {0, 0};
+    if (session->callbacks.on_clipboard_download_progress && declared_total > 0) {
+        clock_gettime(CLOCK_MONOTONIC, &last_progress_ts);
+        session->callbacks.on_clipboard_download_progress(session->userdata, 0, declared_total);
+    }
 
     for (RdpUInt32 i = 0; i < count; i++) {
         pthread_mutex_lock(&session->clip_lock);
@@ -2042,6 +2047,16 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             }
             offset += got;
             downloaded_total += got;
+            if (session->callbacks.on_clipboard_download_progress) {
+                struct timespec now_ts;
+                clock_gettime(CLOCK_MONOTONIC, &now_ts);
+                int64_t elapsed_ms = (int64_t)(now_ts.tv_sec - last_progress_ts.tv_sec) * 1000 +
+                                     (int64_t)(now_ts.tv_nsec - last_progress_ts.tv_nsec) / 1000000;
+                if (elapsed_ms >= 250 || (declared_total > 0 && downloaded_total >= declared_total)) {
+                    last_progress_ts = now_ts;
+                    session->callbacks.on_clipboard_download_progress(session->userdata, downloaded_total, declared_total);
+                }
+            }
         }
         fclose(fp);
         if (!all_ok) break;

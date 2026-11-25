@@ -32,6 +32,7 @@ typedef struct {
     void (*on_disconnected)(void* userdata);
     void (*on_clipboard_ready)(void* userdata);
     void (*on_clipboard_formats)(void* userdata, bool has_text, bool has_files);
+    void (*on_clipboard_download_progress)(void* userdata, uint64_t downloaded_bytes, uint64_t total_bytes);
 } MioRdpCallbacks;
 
 bool mio_freerdp_is_available(void);

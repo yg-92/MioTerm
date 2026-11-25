@@ -20,6 +20,7 @@ public final class RDPClient: @unchecked Sendable {
 
     public var onClipboardReady: (@Sendable () -> Void)?
     public var onRemoteClipboardChanged: (@Sendable (_ hasText: Bool, _ hasFiles: Bool) -> Void)?
+    public var onClipboardDownloadProgress: (@Sendable (_ downloadedBytes: UInt64, _ totalBytes: UInt64) -> Void)?
     public var onFrameReady: (@Sendable () -> Void)?
 
     private let stateLock = NSLock()
@@ -239,7 +240,7 @@ public final class RDPClient: @unchecked Sendable {
 
     public func downloadRemoteClipboardFiles(
         to directory: URL,
-        maxTotalBytes: UInt64 = 512 * 1024 * 1024
+        maxTotalBytes: UInt64 = 0
     ) -> [URL] {
         stateLock.lock()
         let activeSession = session
@@ -296,6 +297,11 @@ public final class RDPClient: @unchecked Sendable {
             guard let userdata else { return }
             let box = Unmanaged<CallbackBox>.fromOpaque(userdata).takeUnretainedValue()
             box.owner?.onRemoteClipboardChanged?(hasText, hasFiles)
+        }
+        callbacks.on_clipboard_download_progress = { userdata, downloadedBytes, totalBytes in
+            guard let userdata else { return }
+            let box = Unmanaged<CallbackBox>.fromOpaque(userdata).takeUnretainedValue()
+            box.owner?.onClipboardDownloadProgress?(downloadedBytes, totalBytes)
         }
 
         func createSession(disableNLA: Bool) -> OpaquePointer? {
