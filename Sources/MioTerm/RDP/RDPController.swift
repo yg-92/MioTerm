@@ -66,12 +66,16 @@ final class RDPController: SessionControlling {
 
     private static let rdpClipboardDidUpdateNotification = Notification.Name("MioTermRDPClipboardDidUpdate")
     private static let displayPreferencesKey = "MioTerm.rdpDisplayPreferences"
+    /// 超过 50 MB 的文件不走访达同步剪贴板回调（避免阻塞访达转圈卡死与 60 秒 IPC 超时），
+    /// 改在切出 MioTerm 时弹出右上角轻量浮窗，由用户一键流式保存到「下载」或任意自选目录。
+    private static let largeFilePromptThresholdBytes: UInt64 = 50 * 1024 * 1024
     private static var recentClipboardStagingDirs: [URL] = []
     private static var lazyPasteboardChangeCount: Int = -1
 
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
     private var clipboardObserver: NSObjectProtocol?
     private var resignActiveObserver: NSObjectProtocol?
+    private var becomeActiveObserver: NSObjectProtocol?
     private var client: RDPClient?
     private var eventTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
@@ -116,6 +120,17 @@ final class RDPController: SessionControlling {
                 self?.publishPendingRemoteFilesIfNeeded()
             }
         }
+        becomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isDownloadingClipboardFiles else { return }
+                // 切回 MioTerm 时自动收起尚未点击的大文件下载提示，不打扰在 Windows 内的继续操作。
+                RDPClipboardTransferHUD.shared.dismiss()
+            }
+        }
     }
 
     deinit {
@@ -124,6 +139,9 @@ final class RDPController: SessionControlling {
         }
         if let resignActiveObserver {
             NotificationCenter.default.removeObserver(resignActiveObserver)
+        }
+        if let becomeActiveObserver {
+            NotificationCenter.default.removeObserver(becomeActiveObserver)
         }
     }
 
@@ -399,7 +417,103 @@ final class RDPController: SessionControlling {
     private func publishPendingRemoteFilesIfNeeded() {
         guard let summary = pendingRemoteFileSummary, let client else { return }
         pendingRemoteFileSummary = nil
+        if summary.totalBytes > Self.largeFilePromptThresholdBytes {
+            RDPClipboardTransferHUD.shared.showLargeFilePrompt(
+                hostName: title,
+                fileSummary: Self.formatFileSummary(summary.names),
+                totalBytes: summary.totalBytes,
+                onDownloadToDownloads: { [weak self, weak client] in
+                    guard let self, let client else { return }
+                    self.startDirectLargeFileDownload(client: client, summary: summary, customDirectory: nil)
+                },
+                onChooseDirectory: { [weak self, weak client] in
+                    guard let self, let client else { return }
+                    self.chooseDirectoryAndDownloadLargeFiles(client: client, summary: summary)
+                }
+            )
+            return
+        }
         installLazyFilePasteboard(summary: summary, client: client)
+    }
+
+    private func chooseDirectoryAndDownloadLargeFiles(
+        client: RDPClient,
+        summary: RDPClient.RemoteClipboardFileSummary
+    ) {
+        NSApp.activate(ignoringOtherApps: true)
+        let openPanel = NSOpenPanel()
+        openPanel.title = "选择保存目录"
+        openPanel.prompt = "保存到此目录"
+        openPanel.canChooseFiles = false
+        openPanel.canChooseDirectories = true
+        openPanel.canCreateDirectories = true
+        openPanel.allowsMultipleSelection = false
+        openPanel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        if openPanel.runModal() == .OK, let dir = openPanel.url {
+            startDirectLargeFileDownload(client: client, summary: summary, customDirectory: dir)
+        } else {
+            RDPClipboardTransferHUD.shared.dismiss()
+        }
+    }
+
+    private func startDirectLargeFileDownload(
+        client: RDPClient,
+        summary: RDPClient.RemoteClipboardFileSummary,
+        customDirectory: URL?
+    ) {
+        guard self.client === client else { return }
+        let rootDir = customDirectory
+            ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
+        let targetDir = Self.resolveNonCollidingDownloadDirectory(root: rootDir, topLevelNames: summary.names)
+        let fileSummary = Self.formatFileSummary(summary.names)
+        let destinationLabel = customDirectory?.lastPathComponent ?? "下载目录"
+
+        isDownloadingClipboardFiles = true
+        onTitleChange?("\(title) · 正在接收大文件…")
+        RDPClipboardTransferHUD.shared.show(
+            hostName: title,
+            fileSummary: fileSummary,
+            destinationText: destinationLabel,
+            totalBytes: summary.totalBytes,
+            onCancel: { client.cancelRemoteClipboardDownload() }
+        )
+
+        Task.detached(priority: .userInitiated) { [weak self, weak client] in
+            guard let client else { return }
+            let urls = client.downloadRemoteClipboardFiles(to: targetDir)
+            await MainActor.run { [weak self, weak client] in
+                guard let self else { return }
+                self.isDownloadingClipboardFiles = false
+                self.onTitleChange?(self.title)
+                guard let client, self.client === client, !urls.isEmpty else {
+                    RDPClipboardTransferHUD.shared.dismiss()
+                    if targetDir != rootDir {
+                        try? FileManager.default.removeItem(at: targetDir)
+                    }
+                    return
+                }
+                let pasteboard = NSPasteboard.general
+                pasteboard.prepareForNewContents(with: .currentHostOnly)
+                pasteboard.writeObjects(urls as [NSURL])
+                self.lastSyncedPasteboardChangeCount = pasteboard.changeCount
+                RDPClipboardTransferHUD.shared.markCompleted(
+                    savedURLs: urls,
+                    message: "已保存至「\(destinationLabel)」，可直接打开或再次 ⌘V 粘贴"
+                )
+            }
+        }
+    }
+
+    private static func resolveNonCollidingDownloadDirectory(root: URL, topLevelNames: [String]) -> URL {
+        let fm = FileManager.default
+        let hasCollision = topLevelNames.contains { name in
+            fm.fileExists(atPath: root.appendingPathComponent(name).path)
+        }
+        guard hasCollision else { return root }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return root.appendingPathComponent("MioTerm-\(formatter.string(from: Date()))", isDirectory: true)
     }
 
     private func installLazyFilePasteboard(summary: RDPClient.RemoteClipboardFileSummary, client: RDPClient) {
@@ -459,7 +573,13 @@ final class RDPController: SessionControlling {
         }
 
         while !box.isDone {
-            if !hudShown && Date().timeIntervalSince(startDate) >= 0.35 {
+            let elapsed = Date().timeIntervalSince(startDate)
+            if elapsed >= 25.0 {
+                // 防止同步剪贴板回调长时间阻塞导致访达或 MioTerm 卡死。
+                client.cancelRemoteClipboardDownload()
+                break
+            }
+            if !hudShown && elapsed >= 0.35 {
                 hudShown = true
                 RDPClipboardTransferHUD.shared.show(
                     hostName: title,
@@ -469,7 +589,9 @@ final class RDPController: SessionControlling {
                     onCancel: { client.cancelRemoteClipboardDownload() }
                 )
             }
-            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.03))
+            if let event = NSApp.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.03), inMode: .default, dequeue: true) {
+                NSApp.sendEvent(event)
+            }
         }
 
         isDownloadingClipboardFiles = false
