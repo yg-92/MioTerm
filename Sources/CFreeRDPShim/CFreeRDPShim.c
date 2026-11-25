@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 // FreeRDP 3.x ABI offsets (verified on arm64 macOS FreeRDP 3.33.1)
 #define RDP_CONTEXT_SIZE 1024
@@ -321,6 +322,7 @@ struct MioRdpSession {
     bool pending_file_ok;
     uint8_t* pending_file_data;
     uint32_t pending_file_size;
+    bool clip_download_cancelled;
 };
 
 #define MIO_CF_TEXT 1u
@@ -1684,7 +1686,7 @@ static uint8_t* request_remote_file_contents(
     *out_ok = false;
 
     pthread_mutex_lock(&session->clip_lock);
-    if (session->closing || !session->clip_ready || !session->cliprdr ||
+    if (session->closing || session->clip_download_cancelled || !session->clip_ready || !session->cliprdr ||
         session->server_clip_generation != generation) {
         pthread_mutex_unlock(&session->clip_lock);
         return NULL;
@@ -1729,7 +1731,7 @@ static uint8_t* request_remote_file_contents(
 
     bool timed_out = false;
     pthread_mutex_lock(&session->clip_lock);
-    while (!session->pending_file_ready && !session->closing &&
+    while (!session->pending_file_ready && !session->closing && !session->clip_download_cancelled &&
            session->server_clip_generation == generation) {
         int rc = pthread_cond_timedwait(&session->clip_cond, &session->clip_lock, &ts);
         if (rc == ETIMEDOUT) {
@@ -1737,7 +1739,8 @@ static uint8_t* request_remote_file_contents(
             break;
         }
     }
-    bool ready = session->pending_file_ready && session->server_clip_generation == generation;
+    bool ready = session->pending_file_ready && !session->clip_download_cancelled &&
+                 session->server_clip_generation == generation;
     bool ok = ready && session->pending_file_ok;
     uint8_t* data = ok ? session->pending_file_data : NULL;
     uint32_t size = ok ? session->pending_file_size : 0;
@@ -1761,12 +1764,115 @@ static uint8_t* request_remote_file_contents(
     return data;
 }
 
+void mio_rdp_clipboard_cancel_download(MioRdpSession* session) {
+    if (!session) return;
+    pthread_mutex_lock(&session->clip_lock);
+    session->clip_download_cancelled = true;
+    pthread_cond_broadcast(&session->clip_cond);
+    pthread_mutex_unlock(&session->clip_lock);
+}
+
+char* mio_rdp_clipboard_list_remote_files(MioRdpSession* session, uint64_t* out_generation, uint64_t* out_total_bytes) {
+    if (out_generation) *out_generation = 0;
+    if (out_total_bytes) *out_total_bytes = 0;
+    if (!session || !g_fn.cliprdr_parse_file_list) return NULL;
+
+    pthread_mutex_lock(&session->clip_lock);
+    bool has_files = session->server_has_files;
+    uint32_t fgd_fmt = session->server_fgd_format_id;
+    uint64_t generation = session->server_clip_generation;
+    pthread_mutex_unlock(&session->clip_lock);
+    if (!has_files || fgd_fmt == 0) return NULL;
+
+    uint32_t raw_size = 0;
+    uint8_t* raw = request_remote_format_data(session, fgd_fmt, &raw_size);
+    if (!raw || raw_size == 0) {
+        free(raw);
+        return NULL;
+    }
+
+    void* descs_raw = NULL;
+    RdpUInt32 count = 0;
+    RdpUInt32 parse_rc = g_fn.cliprdr_parse_file_list(raw, raw_size, &descs_raw, &count);
+    free(raw);
+    if (parse_rc != 0 || !descs_raw || count == 0) {
+        free(descs_raw);
+        return NULL;
+    }
+
+    const MioFileDescriptorW* descs = (const MioFileDescriptorW*)descs_raw;
+    uint64_t declared_total = 0;
+    size_t out_cap = 512;
+    size_t out_len = 0;
+    char* top_names = (char*)malloc(out_cap);
+    if (!top_names) {
+        free(descs_raw);
+        return NULL;
+    }
+    top_names[0] = '\0';
+
+    for (RdpUInt32 i = 0; i < count; i++) {
+        if ((descs[i].dwFileAttributes & MIO_FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+            (descs[i].dwFlags & MIO_FD_FILESIZE) != 0) {
+            uint64_t sz = ((uint64_t)descs[i].nFileSizeHigh << 32) | (uint64_t)descs[i].nFileSizeLow;
+            if (UINT64_MAX - declared_total >= sz) {
+                declared_total += sz;
+            }
+        }
+        char rel_path[1024];
+        if (!decode_win_relpath(descs[i].cFileName, rel_path, sizeof(rel_path))) continue;
+        const char* first_slash = strchr(rel_path, '/');
+        size_t seg_len = first_slash ? (size_t)(first_slash - rel_path) : strlen(rel_path);
+        char entry[1024];
+        int tn = snprintf(entry, sizeof(entry), "%.*s\n", (int)seg_len, rel_path);
+        if (tn <= 0 || (size_t)tn >= sizeof(entry)) continue;
+
+        bool exists = false;
+        const char* cursor = top_names;
+        while (*cursor) {
+            const char* nl = strchr(cursor, '\n');
+            size_t line_len = nl ? (size_t)(nl - cursor + 1) : strlen(cursor);
+            if (line_len == (size_t)tn && memcmp(cursor, entry, line_len) == 0) {
+                exists = true;
+                break;
+            }
+            if (!nl) break;
+            cursor = nl + 1;
+        }
+        if (!exists) {
+            if (out_len + (size_t)tn + 1 > out_cap) {
+                size_t next_cap = (out_cap + (size_t)tn + 1) * 2;
+                char* grown = (char*)realloc(top_names, next_cap);
+                if (!grown) {
+                    free(top_names);
+                    free(descs_raw);
+                    return NULL;
+                }
+                top_names = grown;
+                out_cap = next_cap;
+            }
+            memcpy(top_names + out_len, entry, (size_t)tn + 1);
+            out_len += (size_t)tn;
+        }
+    }
+
+    free(descs_raw);
+    if (out_len == 0) {
+        free(top_names);
+        return NULL;
+    }
+    if (out_generation) *out_generation = generation;
+    if (out_total_bytes) *out_total_bytes = declared_total;
+    return top_names;
+}
+
 char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char* dest_dir, uint64_t max_total_bytes) {
     if (!session || !dest_dir || !dest_dir[0] || !g_fn.cliprdr_parse_file_list) return NULL;
     // 串行化同会话的文件下载，避免 Windows 短时间连续发两次 ServerFormatList 导致两个下载互相抢占 streamId。
     pthread_mutex_lock(&session->clip_download_lock);
 
     pthread_mutex_lock(&session->clip_lock);
+    session->clip_download_cancelled = false;
     bool has_files = session->server_has_files;
     uint32_t fgd_fmt = session->server_fgd_format_id;
     uint64_t generation = session->server_clip_generation;
@@ -1907,7 +2013,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
 
     for (RdpUInt32 i = 0; i < count; i++) {
         pthread_mutex_lock(&session->clip_lock);
-        bool cancelled = session->closing || session->server_clip_generation != generation;
+        bool cancelled = session->closing || session->clip_download_cancelled || session->server_clip_generation != generation;
         pthread_mutex_unlock(&session->clip_lock);
         if (cancelled) {
             fail_step = "cancelled";
@@ -2022,8 +2128,8 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
         }
 
         uint64_t offset = 0;
-        // 1 MB 分片（原 64 KB 会导致 100 MB 文件产生 1600+ 次串行往返耗时约 30 秒，提至 1 MB 可提速约 10 倍）。
-        const uint32_t chunk_size = 1048576u;
+        // 4 MB 分片减少 RDP 虚拟通道往返次数，显著提升大文件流式传输速率（若服务端单次返回更小分片，offset += got 自动续读）。
+        const uint32_t chunk_size = 4194304u;
         while (offset < file_size) {
             uint64_t remaining = file_size - offset;
             uint32_t to_read = remaining > chunk_size ? chunk_size : (uint32_t)remaining;
@@ -2034,7 +2140,7 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             );
             if (!chunk_ok || !chunk || got == 0) {
                 free(chunk);
-                fail_step = "file_range";
+                fail_step = session->clip_download_cancelled ? "cancelled" : "file_range";
                 all_ok = false;
                 break;
             }
@@ -2059,7 +2165,10 @@ char* mio_rdp_clipboard_download_remote_files(MioRdpSession* session, const char
             }
         }
         fclose(fp);
-        if (!all_ok) break;
+        if (!all_ok) {
+            unlink(full_path);
+            break;
+        }
     }
 
     free(descs_raw);
