@@ -71,6 +71,7 @@ final class RDPController: SessionControlling {
     private static let largeFilePromptThresholdBytes: UInt64 = 50 * 1024 * 1024
     private static var recentClipboardStagingDirs: [URL] = []
     private static var lazyPasteboardChangeCount: Int = -1
+    private static var latestRemoteClipboardSource: RemoteClipboardFileSource?
 
     private var stateObservers: [UUID: (TerminalController.State) -> Void] = [:]
     private var clipboardObserver: NSObjectProtocol?
@@ -84,6 +85,7 @@ final class RDPController: SessionControlling {
     private var pendingRemoteFileSummary: RDPClient.RemoteClipboardFileSummary?
     private var activeLazyPasteboardProvider: LazyRDPFilePasteboardProvider?
     private var isDownloadingClipboardFiles = false
+    private var swallowingRelayPasteKeyUp = false
     private var lastSyncedPasteboardChangeCount: Int = -1
     private var clipboardReady = false
     private var currentRemoteSize: (width: Int, height: Int) = (0, 0)
@@ -325,6 +327,9 @@ final class RDPController: SessionControlling {
         clipboardFetchTask = nil
         pendingRemoteFileSummary = nil
         activeLazyPasteboardProvider = nil
+        if Self.latestRemoteClipboardSource?.controller === self {
+            Self.latestRemoteClipboardSource = nil
+        }
         if isDownloadingClipboardFiles {
             isDownloadingClipboardFiles = false
             client?.cancelRemoteClipboardDownload()
@@ -363,10 +368,12 @@ final class RDPController: SessionControlling {
 
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
            !urls.isEmpty {
+            Self.latestRemoteClipboardSource = nil
             client.sendClipboardFilesAsync(urls)
             return
         }
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            Self.latestRemoteClipboardSource = nil
             client.sendClipboardTextAsync(text)
         }
     }
@@ -386,7 +393,13 @@ final class RDPController: SessionControlling {
                     guard let self, let client, self.client === client, !Task.isCancelled else { return }
                     self.clipboardFetchTask = nil
                     self.pendingRemoteFileSummary = summary
-                    // 如果用户当前就在 MioTerm 窗口内操作（比如在 Windows 里复制/移动文件），
+                    Self.latestRemoteClipboardSource = RemoteClipboardFileSource(
+                        controller: self,
+                        client: client,
+                        hostName: self.title,
+                        summary: summary
+                    )
+                    // 如果用户当前就在 MioTerm 窗口内操作（比如在 Windows 里复制/移动文件，或在两个 RDP 之间导文件），
                     // 绝不立刻写入 Mac 剪贴板，避免触发系统 Universal Clipboard 或剪贴板监听工具提前拉取；
                     // 仅当用户切到访达等其他 Mac 应用（didResignActive）时，才把延迟项挂到 Mac 剪贴板。
                     if !NSApp.isActive {
@@ -397,6 +410,9 @@ final class RDPController: SessionControlling {
             return
         }
         pendingRemoteFileSummary = nil
+        if Self.latestRemoteClipboardSource?.controller === self {
+            Self.latestRemoteClipboardSource = nil
+        }
         if !isDownloadingClipboardFiles {
             onTitleChange?(title)
         }
@@ -417,6 +433,15 @@ final class RDPController: SessionControlling {
     private func publishPendingRemoteFilesIfNeeded() {
         guard let summary = pendingRemoteFileSummary, let client else { return }
         pendingRemoteFileSummary = nil
+        if let source = Self.latestRemoteClipboardSource,
+           source.controller === self,
+           let cached = source.cachedStagedURLs, !cached.isEmpty {
+            let pasteboard = NSPasteboard.general
+            pasteboard.prepareForNewContents(with: .currentHostOnly)
+            pasteboard.writeObjects(cached as [NSURL])
+            lastSyncedPasteboardChangeCount = pasteboard.changeCount
+            return
+        }
         if summary.totalBytes > Self.largeFilePromptThresholdBytes {
             RDPClipboardTransferHUD.shared.showLargeFilePrompt(
                 hostName: title,
@@ -788,11 +813,27 @@ final class RDPController: SessionControlling {
 
     private func handleKeyEvent(_ event: NSEvent, down: Bool) {
         guard let client else { return }
+        if !down && swallowingRelayPasteKeyUp && Int(event.keyCode) == kVK_ANSI_V {
+            swallowingRelayPasteKeyUp = false
+            return
+        }
         if down {
             syncModifiers(event.modifierFlags)
             if Int(event.keyCode) == kVK_ANSI_V,
                event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
                 syncLocalPasteboardToRemote()
+                if let source = Self.latestRemoteClipboardSource,
+                   source.controller !== self,
+                   let sourceController = source.controller,
+                   let sourceClient = source.client {
+                    swallowingRelayPasteKeyUp = true
+                    relayRemoteFilesFromAnotherRDP(
+                        source: source,
+                        sourceController: sourceController,
+                        sourceClient: sourceClient
+                    )
+                    return
+                }
             }
         }
         if let scancode = Self.rdpScancode(for: Int(event.keyCode)) {
@@ -803,6 +844,55 @@ final class RDPController: SessionControlling {
         for scalar in chars.unicodeScalars {
             if scalar.value <= 0xFFFF {
                 client.sendUnicode(UInt16(scalar.value), down: down)
+            }
+        }
+    }
+
+    /// 中间人模式：在 RDP A 复制文件后切到 RDP B 按 Ctrl+V / ⌘V 时，
+    /// 先由 MioTerm 从 RDP A 流式拉取到本地中转目录，再自动推给 RDP B 并触发粘贴。
+    private func relayRemoteFilesFromAnotherRDP(
+        source: RemoteClipboardFileSource,
+        sourceController: RDPController,
+        sourceClient: RDPClient
+    ) {
+        if let cached = source.cachedStagedURLs, !cached.isEmpty {
+            sendFiles(cached)
+            return
+        }
+        guard !sourceController.isDownloadingClipboardFiles else { return }
+
+        let stagingDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MioTermRDPClipboard", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileSummary = Self.formatFileSummary(source.summary.names)
+        let targetName = title
+
+        sourceController.isDownloadingClipboardFiles = true
+        sourceController.onTitleChange?("\(source.hostName) · 正在中转文件至 \(targetName)…")
+        RDPClipboardTransferHUD.shared.show(
+            hostName: "\(source.hostName) → \(targetName)",
+            fileSummary: fileSummary,
+            destinationText: "中转至 \(targetName)",
+            totalBytes: source.summary.totalBytes,
+            onCancel: { sourceClient.cancelRemoteClipboardDownload() }
+        )
+
+        Task.detached(priority: .userInitiated) { [weak self, weak sourceController, weak sourceClient] in
+            guard let sourceClient else { return }
+            let urls = sourceClient.downloadRemoteClipboardFiles(to: stagingDir)
+            await MainActor.run { [weak self, weak sourceController, weak sourceClient] in
+                sourceController?.isDownloadingClipboardFiles = false
+                if let sourceController {
+                    sourceController.onTitleChange?(sourceController.title)
+                }
+                RDPClipboardTransferHUD.shared.dismiss()
+                guard let self, let sourceClient, sourceController?.client === sourceClient, !urls.isEmpty else {
+                    try? FileManager.default.removeItem(at: stagingDir)
+                    return
+                }
+                Self.registerClipboardStagingDir(stagingDir)
+                source.cachedStagedURLs = urls
+                self.sendFiles(urls)
             }
         }
     }
@@ -969,6 +1059,27 @@ final class RDPController: SessionControlling {
     }
 
     func removeContextObserver(_ token: UUID?) {}
+}
+
+@MainActor
+private final class RemoteClipboardFileSource {
+    weak var controller: RDPController?
+    weak var client: RDPClient?
+    let hostName: String
+    let summary: RDPClient.RemoteClipboardFileSummary
+    var cachedStagedURLs: [URL]?
+
+    init(
+        controller: RDPController,
+        client: RDPClient,
+        hostName: String,
+        summary: RDPClient.RemoteClipboardFileSummary
+    ) {
+        self.controller = controller
+        self.client = client
+        self.hostName = hostName
+        self.summary = summary
+    }
 }
 
 private final class SyncDownloadResultBox: @unchecked Sendable {
