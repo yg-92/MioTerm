@@ -218,6 +218,31 @@ public final class RDPClient: @unchecked Sendable {
         }
     }
 
+    /// 零落盘直通流式代理：直接把另一台 RDP 会话的远端剪贴板文件列表通告给当前会话，
+    /// 当目标 Windows 拉取文件内容时由 C 层直接边从源会话下载边回传给目标会话。
+    public func relayClipboardFilesAsync(from source: RDPClient, completion: (@Sendable (Bool) -> Void)? = nil) {
+        clipboardSendQueue.async { [weak self, weak source] in
+            guard let self, let source else {
+                completion?(false)
+                return
+            }
+            self.stateLock.lock()
+            let targetSession = self.session
+            self.stateLock.unlock()
+
+            source.stateLock.lock()
+            let sourceSession = source.session
+            source.stateLock.unlock()
+
+            guard let targetSession, let sourceSession else {
+                completion?(false)
+                return
+            }
+            let ok = mio_rdp_clipboard_relay_files_from(targetSession, sourceSession)
+            completion?(ok)
+        }
+    }
+
     public func fetchRemoteClipboardText() -> String? {
         stateLock.lock()
         let activeSession = session

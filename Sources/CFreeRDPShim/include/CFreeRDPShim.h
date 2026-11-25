@@ -53,6 +53,7 @@ bool mio_rdp_supports_dynamic_resize(MioRdpSession* session);
 
 bool mio_rdp_clipboard_send_text(MioRdpSession* session, const char* utf8_text);
 bool mio_rdp_clipboard_send_files(MioRdpSession* session, const char* uri_list);
+bool mio_rdp_clipboard_relay_files_from(MioRdpSession* target, MioRdpSession* source);
 char* mio_rdp_clipboard_fetch_remote_text(MioRdpSession* session);
 bool mio_rdp_clipboard_publish_remote_files(MioRdpSession* session);
 char* mio_rdp_clipboard_list_remote_files(MioRdpSession* session, uint64_t* out_generation, uint64_t* out_total_bytes);

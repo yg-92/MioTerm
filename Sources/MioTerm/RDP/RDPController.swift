@@ -838,8 +838,9 @@ final class RDPController: SessionControlling {
         }
     }
 
-    /// 中间人模式：在 RDP A 复制文件后切到 RDP B 按 Ctrl+V / ⌘V 时，
-    /// 先由 MioTerm 从 RDP A 流式拉取到本地中转目录，再自动推给 RDP B 并触发粘贴。
+    /// 零落盘直通中间人模式：在 RDP A 复制文件后切到 RDP B 按 Ctrl+V / ⌘V 时，
+    /// 立刻把 A 的文件列表通告给 B 并触发粘贴；B 的资源管理器随即一边向 MioTerm 拉片、
+    /// MioTerm 一边从 A 拉片直接回传给 B，全程零落盘、零等待、B 端直接显示原生复制进度条。
     private func relayRemoteFilesFromAnotherRDP(
         source: RemoteClipboardFileSource,
         sourceController: RDPController,
@@ -849,40 +850,18 @@ final class RDPController: SessionControlling {
             sendFiles(cached)
             return
         }
-        guard !sourceController.isDownloadingClipboardFiles else { return }
-
-        let stagingDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MioTermRDPClipboard", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let fileSummary = Self.formatFileSummary(source.summary.names)
-        let targetName = title
-
-        sourceController.isDownloadingClipboardFiles = true
-        sourceController.onTitleChange?("\(source.hostName) · 正在中转文件至 \(targetName)…")
-        RDPClipboardTransferHUD.shared.show(
-            hostName: "\(source.hostName) → \(targetName)",
-            fileSummary: fileSummary,
-            destinationText: "中转至 \(targetName)",
-            totalBytes: source.summary.totalBytes,
-            onCancel: { sourceClient.cancelRemoteClipboardDownload() }
-        )
-
-        Task.detached(priority: .userInitiated) { [weak self, weak sourceController, weak sourceClient] in
-            guard let sourceClient else { return }
-            let urls = sourceClient.downloadRemoteClipboardFiles(to: stagingDir)
-            await MainActor.run { [weak self, weak sourceController, weak sourceClient] in
-                sourceController?.isDownloadingClipboardFiles = false
-                if let sourceController {
-                    sourceController.onTitleChange?(sourceController.title)
-                }
-                RDPClipboardTransferHUD.shared.dismiss()
-                guard let self, let sourceClient, sourceController?.client === sourceClient, !urls.isEmpty else {
-                    try? FileManager.default.removeItem(at: stagingDir)
-                    return
-                }
-                Self.registerClipboardStagingDir(stagingDir)
-                source.cachedStagedURLs = urls
-                self.sendFiles(urls)
+        guard clipboardReady, let targetClient = client else { return }
+        focus()
+        syncModifiers([])
+        targetClient.relayClipboardFilesAsync(from: sourceClient) { [weak self, weak targetClient] ok in
+            guard ok else { return }
+            Task { @MainActor [weak self, weak targetClient] in
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                guard let self, let targetClient, self.client === targetClient, self.state == .running else { return }
+                targetClient.sendScancode(0x1D, down: true)
+                targetClient.sendScancode(0x2F, down: true)
+                targetClient.sendScancode(0x2F, down: false)
+                targetClient.sendScancode(0x1D, down: false)
             }
         }
     }
