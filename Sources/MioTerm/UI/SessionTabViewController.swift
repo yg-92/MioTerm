@@ -1809,6 +1809,16 @@ final class TerminalTabViewController: NSViewController {
 
     private let banner = ReconnectBannerView()
     private let paneHeader = TerminalPaneHeaderView()
+    private let waitingLabel: NSTextField = {
+        let label = NSTextField(labelWithString: "MioTerm")
+        label.font = .systemFont(ofSize: 34, weight: .semibold)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.wantsLayer = true
+        label.isHidden = true
+        return label
+    }()
+    private var hasConnectedOnce = false
     private var paneActive = false
     private var paneSplit = false
     private var headerHeight: NSLayoutConstraint!
@@ -1837,6 +1847,7 @@ final class TerminalTabViewController: NSViewController {
             self.onClose?(self.controller)
         }
         container.addSubview(controller.sessionView)
+        container.addSubview(waitingLabel)
         container.addSubview(paneHeader)
         headerHeight = paneHeader.heightAnchor.constraint(equalToConstant: 0)
         terminalInsets = [
@@ -1850,6 +1861,8 @@ final class TerminalTabViewController: NSViewController {
             paneHeader.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             paneHeader.topAnchor.constraint(equalTo: container.topAnchor),
             headerHeight,
+            waitingLabel.centerXAnchor.constraint(equalTo: controller.sessionView.centerXAnchor),
+            waitingLabel.centerYAnchor.constraint(equalTo: controller.sessionView.centerYAnchor),
         ])
 
         banner.translatesAutoresizingMaskIntoConstraints = false
@@ -1903,8 +1916,13 @@ final class TerminalTabViewController: NSViewController {
         guard isViewLoaded else { return }
         guard controller.host != nil else {
             banner.isHidden = true
+            stopWaitingAnimation()
             return
         }
+        if controller.state == .running {
+            hasConnectedOnce = true
+        }
+        updateWaitingOverlay()
         switch controller.state {
         case .exited(let code):
             banner.show(title: code == 0 ? L10n.tr(.tabSessionEnded) : L10n.tr(.tabDisconnectTitle),
@@ -1916,6 +1934,44 @@ final class TerminalTabViewController: NSViewController {
         default:
             banner.isHidden = true
         }
+    }
+
+    private func updateWaitingOverlay() {
+        // VNC/RDP 视图内部已有独立的 MioTerm 呼吸效果；这里仅为 SSH/Telnet/串口等终端会话
+        // 在首次建连完成之前（.idle / .starting）显示统一的 MioTerm 呼吸等待动画。
+        let shouldShow = (controller is TerminalController)
+            && controller.host != nil
+            && !hasConnectedOnce
+            && (controller.state == .idle || controller.state == .starting)
+        if shouldShow {
+            startWaitingAnimation()
+        } else {
+            stopWaitingAnimation()
+        }
+    }
+
+    private func startWaitingAnimation() {
+        let dark = Theme.isDark(view.window?.effectiveAppearance)
+        waitingLabel.textColor = Theme.terminalForeground(dark: dark)
+        waitingLabel.isHidden = false
+        waitingLabel.wantsLayer = true
+        guard let labelLayer = waitingLabel.layer else { return }
+        if labelLayer.animation(forKey: "mioTermWaitingPulse") == nil {
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 0.95
+            pulse.toValue = 0.18
+            pulse.duration = 1.25
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pulse.isRemovedOnCompletion = false
+            labelLayer.add(pulse, forKey: "mioTermWaitingPulse")
+        }
+    }
+
+    private func stopWaitingAnimation() {
+        waitingLabel.layer?.removeAnimation(forKey: "mioTermWaitingPulse")
+        waitingLabel.isHidden = true
     }
 
     /// 点下按钮到会话真的进入「连接中」之间还有一段：重新探指纹、读凭据，慢的时候好几秒。
@@ -1949,6 +2005,10 @@ final class TerminalTabViewController: NSViewController {
             : Theme.layerColor(Theme.terminalBackground, for: view)
         banner.refreshAppearance()
         paneHeader.refreshAppearance()
+        if !waitingLabel.isHidden {
+            let dark = Theme.isDark(view.window?.effectiveAppearance)
+            waitingLabel.textColor = Theme.terminalForeground(dark: dark)
+        }
         controller.applyTheme()
     }
 }
