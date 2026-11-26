@@ -25,7 +25,9 @@ Get a Mac and a MioTerm release package that meet the system requirements, then 
 | Private-key login | The login account and its private key file; when using ssh-agent authentication, add the key to the local agent first. |
 | Telnet connections | The target device's address, its Telnet service port, and network access to that port. |
 | Serial terminal | A serial device or USB-to-serial adapter, plus the macOS driver the device requires. Once connected, the system should expose a `/dev/cu.*` or `/dev/tty.*` device. |
-| X11 forwarding | [XQuartz](https://www.xquartz.org/) installed and running on this Mac, `/opt/X11/bin/xauth`, a valid `DISPLAY` environment variable, and a remote SSH server that allows X11 forwarding. |
+| VNC remote desktop | The target host's VNC address, port and password. |
+| RDP remote desktop | FreeRDP installed locally (`brew install freerdp`), plus a Windows host with Remote Desktop enabled and login credentials. |
+| X11 forwarding | [XQuartz](https://www.xquartz.org/) installed and running on this Mac (`brew install --cask xquartz`, providing `/opt/X11/bin/xauth`), and a remote SSH server that allows X11 forwarding. |
 
 ### Installation and first launch
 
@@ -44,14 +46,27 @@ Get a Mac and a MioTerm release package that meet the system requirements, then 
 ### Multiple connection types
 
 - **Local shell**: open a command line on this Mac directly.
-- **SSH**: password, private key and ssh-agent authentication; configurable port, starting directory, connect timeout and keepalive.
+- **SSH**: password, private key, credential-vault reference and ssh-agent authentication; configurable port, starting directory, connect timeout and keepalive, with a centered breathing animation while connecting.
 - **Telnet**: for remote consoles and network equipment.
 - **Serial terminal**: device selection, baud rate, data bits, stop bits, parity, newline handling, local echo and BREAK.
-- **X11 forwarding**: SSH sessions can opt into untrusted or trusted forwarding; requires a local X11 service.
+- **VNC remote desktop**: native VNC desktop view with password authentication, aspect-fit scaling, detached windows and one-click `Ctrl+Alt+Del` / clipboard sync.
+- **RDP remote desktop**: dynamic FreeRDP 3.x integration with shared `IOSurface` GPU rendering, per-host saved resolution & DPI scaling, detached desktop windows, plain-text clipboard sync, dedicated top-right File Transfer menu, zero-disk RDP-to-RDP streaming file relay, horizontal mouse wheel forwarding, per-host audio toggle and automatic TLS/RDP fallback for legacy Windows hosts.
+- **X11 forwarding**: SSH sessions can opt into untrusted or trusted forwarding with automatic local XQuartz detection.
 
-### Host management
+### Remote desktop, file transfer and key mapping
 
-Organize frequently used hosts into groups, with search, favorites, configuration duplication and connection tests. Host passwords and private-key passphrases are stored in the macOS Keychain. First-time SSH connections ask you to confirm the host fingerprint, and you get a warning when a server key changes.
+- **Embedded & detached windows**: run VNC and RDP sessions inside main-window tabs/splits or tear them out into independent windows (with full tab card and live preview while dragging), and cycle between the main window and detached windows with `⌘\``. Duplicate RDP connections to the same IP automatically focus the existing session.
+- **Resolution, scaling and reload**: detached RDP windows include titlebar controls for resolution presets (Fit Window / Match Screen / fixed sizes), DPI scale (100%–200%), one-click refresh and reattach, persisted per host.
+- **Plain-text clipboard & unified file transfer**:
+  - Mac ↔ RDP clipboard syncs plain text only so Windows-internal file moves are never disrupted and no macOS Accessibility permission is required.
+  - Use the top-right **File Transfer** menu in an RDP window to upload files/folders (or drag and drop directly onto the window), stream-download files copied with `Ctrl+C` in Windows (supporting 4 GB+ files with a live progress HUD and cancel button), or open the shared folder (`\\tsclient\Downloads`).
+  - **Zero-disk RDP-to-RDP streaming**: press `Ctrl+C` in RDP A, switch to any folder in RDP B and press `Ctrl+V` / `⌘V` (or use B's File Transfer menu) — MioTerm streams chunks directly from A to B in memory with zero local disk staging and native Windows copy progress.
+- **Global key mapping & peripherals**: customize Mac `Command (⌘)`, `Control (⌃)` and `Option (⌥)` mappings to remote `Ctrl`, `Alt` and `Win` under Settings → Remote Desktop, with full `Esc`, shortcut, horizontal scroll wheel and per-host remote audio support.
+
+### Host management and credential library
+
+- **Groups & hosts**: organize frequently used hosts into groups with search, favorites, configuration duplication, connection tests, group rename, right-click "New Host…" (pre-filled with the group) and persisted expand/collapse state.
+- **Credential library (`⌘⇧K`)**: centrally manage reusable usernames and passwords (stored in the macOS Keychain), bind hosts by reference so credential updates apply everywhere, or save directly from the host form. First-time SSH connections confirm host fingerprints and warn on server key changes.
 
 ### Tabs and side-by-side splits
 
@@ -91,11 +106,11 @@ A native macOS interface that keeps everyday resource usage in mind. New configu
 
 ## Quick start
 
-1. Open the app and create an SSH, Telnet or serial configuration in the host list, or start a local terminal right away.
-2. Once connected, switch sessions with the tabs at the top and drag tabs to reorder them.
+1. Open the app and create an SSH, Telnet, serial, VNC or RDP configuration in the host list, or start a local terminal right away.
+2. Once connected, switch sessions with the tabs at the top, drag tabs to reorder them, or tear a tab out into an independent window.
 3. To pair two sessions, select one terminal, then right-click the other tab and choose "Split side-by-side with the current terminal" (与当前终端左右分屏); the split button also lets you pick a session or a host.
-4. In an SSH session, open the remote file panel to browse directories and transfer files.
-5. Adjust scrollback, fonts and connection defaults in Settings, and customize colors under Page Style.
+4. In an SSH session, open the remote file panel to browse directories and transfer files; in an RDP session, use the clipboard for plain text and the top-right File Transfer menu (or `Ctrl+C` → `Ctrl+V` between two RDP sessions) for files.
+5. Adjust appearance, terminal, connection and remote desktop key mappings in Settings (`⌘,`), manage shared credentials in the Credential Library (`⌘⇧K`), and customize colors under Page Style.
 
 ## Keyboard shortcuts
 
@@ -107,8 +122,10 @@ A native macOS interface that keeps everyday resource usage in mind. New configu
 | `⌘⇧D` | Choose or configure a side-by-side split |
 | `⌘1`–`⌘9` | Jump to the corresponding session tab |
 | `⌘[` / `⌘]` | Previous / next tab |
+| `⌘\`` / `⌘⇧\`` | Cycle between main window and detached windows |
 | `⌘⌥F` | Open the remote file panel |
 | `⌘K` | Open the command library |
+| `⌘⇧K` | Open the credential library |
 | `⌘,` | Open Settings |
 
 ## Feedback
